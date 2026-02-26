@@ -86,7 +86,7 @@ venice chat --no-stream "Quick question"
 
 | Option | Description |
 |--------|-------------|
-| `-m, --model <model>` | Model to use (default: llama-3.3-70b) |
+| `-m, --model <model>` | Model to use (default: kimi-k2-5) |
 | `-s, --system <prompt>` | System prompt |
 | `-c, --character <name>` | Character persona |
 | `-t, --tools <tools>` | Comma-separated list of tools |
@@ -192,7 +192,7 @@ venice config show
 
 # Set values
 venice config set api_key YOUR_KEY
-venice config set default_model llama-3.3-70b
+venice config set default_model kimi-k2-5
 venice config set default_voice af_sky
 
 # Get a value

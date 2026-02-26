@@ -87,7 +87,7 @@ export function requireApiKey(): string {
 
 export function getDefaultModel(): string {
   const config = loadConfig();
-  return config.default_model || 'llama-3.3-70b';
+  return config.default_model || 'kimi-k2-5';
 }
 
 export function getDefaultImageModel(): string {

@@ -107,7 +107,7 @@ Configuration stored in `~/.venice/config.json`:
 ```json
 {
   "api_key": "vn-...",
-  "default_model": "llama-3.3-70b",
+  "default_model": "kimi-k2-5",
   "default_image_model": "fluently-xl",
   "default_voice": "af_sky",
   "output_format": "pretty",
@@ -331,7 +331,7 @@ venice config init
 venice config set api_key vn-xxxxxxxx
 
 # Set default model
-venice config set default_model llama-3.3-70b
+venice config set default_model kimi-k2-5
 
 # View config
 venice config show

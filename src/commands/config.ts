@@ -174,7 +174,7 @@ export function registerConfigCommand(program: Command): void {
           console.log(formatSuccess('API key saved'));
         }
 
-        const model = await question('Default chat model [llama-3.3-70b]: ');
+        const model = await question('Default chat model [kimi-k2-5]: ');
         if (model.trim()) {
           setConfigValue('default_model', model.trim());
         }

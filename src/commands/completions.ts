@@ -48,7 +48,7 @@ _venice_completion() {
     local config_cmds="show set get unset path init"
     local history_cmds="list show clear export"
     local formats="pretty json markdown raw"
-    local models="llama-3.3-70b llama-3.2-3b mistral-31-24b qwen-2.5-coder nous-hermes-3 deepseek-r1 dolphin-2.9.2"
+    local models="kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25"
     local image_models="fluently-xl flux-1-dev flux-1-schnell akash-sdxl"
     local voices="af_sky af_bella af_nicole am_adam am_michael bf_emma bf_isabella bm_george bm_lewis"
     local characters="pirate wizard scientist poet coder teacher comedian philosopher"
@@ -162,7 +162,7 @@ _venice() {
     )
 
     local -a models=(
-        'llama-3.3-70b'
+        'kimi-k2-5' 'zai-org-glm-4.7' 'zai-org-glm-4.6' 'claude-opus-4-6' 'claude-opus-45' 'claude-sonnet-4-6' 'openai-gpt-53-codex' 'minimax-m25'
         'llama-3.2-3b'
         'mistral-31-24b'
         'qwen-2.5-coder'
@@ -337,7 +337,7 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a voices -d "
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a completions -d "Shell completions"
 
 # Models
-set -l models llama-3.3-70b llama-3.2-3b mistral-31-24b qwen-2.5-coder nous-hermes-3 deepseek-r1
+set -l models kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25
 set -l image_models fluently-xl flux-1-dev flux-1-schnell akash-sdxl
 set -l voices af_sky af_bella af_nicole am_adam am_michael bf_emma bm_george
 set -l characters pirate wizard scientist poet coder teacher comedian philosopher
