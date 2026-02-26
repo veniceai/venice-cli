@@ -31,12 +31,29 @@ export function registerImageCommand(program: Command): void {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
+      const width = parseInt(options.width, 10);
+      const height = parseInt(options.height, 10);
+      const count = parseInt(options.count, 10);
+
+      if (isNaN(width) || width < 64 || width > 4096) {
+        console.error(formatError('Width must be a number between 64 and 4096'));
+        process.exit(1);
+      }
+      if (isNaN(height) || height < 64 || height > 4096) {
+        console.error(formatError('Height must be a number between 64 and 4096'));
+        process.exit(1);
+      }
+      if (isNaN(count) || count < 1 || count > 10) {
+        console.error(formatError('Count must be a number between 1 and 10'));
+        process.exit(1);
+      }
+
       try {
         const images = await generateImage(prompt, {
           model,
-          width: parseInt(options.width, 10),
-          height: parseInt(options.height, 10),
-          n: parseInt(options.count, 10),
+          width,
+          height,
+          n: count,
         });
 
         if (format === 'json') {
@@ -88,7 +105,12 @@ export function registerImageCommand(program: Command): void {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
-      // Resolve path
+      const scale = parseInt(options.scale, 10);
+      if (isNaN(scale) || (scale !== 2 && scale !== 4)) {
+        console.error(formatError('Scale must be either 2 or 4'));
+        process.exit(1);
+      }
+
       const resolvedPath = path.resolve(imagePath);
       
       if (!fs.existsSync(resolvedPath)) {
@@ -99,7 +121,7 @@ export function registerImageCommand(program: Command): void {
       try {
         const result = await upscaleImage(resolvedPath, {
           model: options.model,
-          scale: parseInt(options.scale, 10),
+          scale,
         });
 
         if (format === 'json') {

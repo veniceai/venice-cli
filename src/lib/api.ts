@@ -6,11 +6,13 @@
 
 import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
+import { getVersion } from './version.js';
 import type { Message, ToolDefinition, Model, Character } from '../types/index.js';
 
 const VENICE_API = 'https://api.venice.ai/api/v1';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
+const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
 
 export class VeniceApiError extends Error {
   constructor(
@@ -52,7 +54,7 @@ function getHeaders(): Record<string, string> {
   return {
     'Authorization': `Bearer ${requireApiKey()}`,
     'Content-Type': 'application/json',
-    'User-Agent': 'venice-cli/2.0.0',
+    'User-Agent': `venice-cli/${getVersion()}`,
   };
 }
 
@@ -86,6 +88,7 @@ export async function apiRequest<T>(
     retries?: number;
     showSpinner?: boolean;
     spinnerText?: string;
+    timeoutMs?: number;
   } = {}
 ): Promise<T> {
   const {
@@ -95,18 +98,25 @@ export async function apiRequest<T>(
     retries = MAX_RETRIES,
     showSpinner = true,
     spinnerText = 'Processing...',
+    timeoutMs = DEFAULT_TIMEOUT_MS,
   } = options;
 
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
   let lastError: VeniceApiError | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const response = await fetch(`${VENICE_API}${endpoint}`, {
         method,
         headers: getHeaders(),
         body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -124,6 +134,16 @@ export async function apiRequest<T>(
 
       return await response.json() as T;
     } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        if (spinner) stopSpinner(false, 'Request timed out');
+        throw new Error(
+          `Request timed out after ${timeoutMs / 1000} seconds.\n` +
+          'The server may be overloaded. Please try again later.'
+        );
+      }
+
       if (error instanceof VeniceApiError) {
         lastError = error;
 
@@ -147,7 +167,6 @@ export async function apiRequest<T>(
           continue;
         }
       } else if (error instanceof Error) {
-        // Network error
         if (attempt < retries) {
           const online = await checkOnline();
           if (!online) {
@@ -428,23 +447,37 @@ export async function textToSpeech(
     response_format: options.format || 'mp3',
   };
 
-  const response = await fetch(`${VENICE_API}/audio/speech`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw VeniceApiError.fromResponse(response.status, error);
+  try {
+    const response = await fetch(`${VENICE_API}/audio/speech`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw VeniceApiError.fromResponse(response.status, error);
+    }
+
+    trackUsage({
+      command: 'tts',
+      model: options.model || 'tts-kokoro',
+    });
+
+    return response.arrayBuffer();
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Text-to-speech request timed out. Please try with shorter text.');
+    }
+    throw error;
   }
-
-  trackUsage({
-    command: 'tts',
-    model: options.model || 'tts-kokoro',
-  });
-
-  return response.arrayBuffer();
 }
 
 // Transcription

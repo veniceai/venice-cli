@@ -87,7 +87,7 @@ export function requireApiKey(): string {
 
 export function getDefaultModel(): string {
   const config = loadConfig();
-  return config.default_model || 'zai-org-glm-5';
+  return config.default_model || 'llama-3.3-70b';
 }
 
 export function getDefaultImageModel(): string {

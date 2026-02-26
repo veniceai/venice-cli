@@ -22,8 +22,7 @@ import { registerConfigCommand } from './commands/config.js';
 import { registerCharactersCommand } from './commands/characters.js';
 import { registerCompletionsCommand } from './commands/completions.js';
 import { formatError, getChalk } from './lib/output.js';
-
-const VERSION = '2.0.0';
+import { getVersion } from './lib/version.js';
 
 async function main() {
   const program = new Command();
@@ -31,7 +30,7 @@ async function main() {
 
   program
     .name('venice')
-    .version(VERSION)
+    .version(getVersion())
     .description(
       `${c.bold('Venice CLI')} — Privacy-first AI from the command line\n\n` +
       `Chat with AI models, generate images, convert text to speech, and more.\n` +

@@ -152,42 +152,225 @@ export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
   },
 };
 
+// Safe math expression evaluator without eval/Function
+function safeEvaluateMath(expression: string): number {
+  const tokens = tokenize(expression);
+  const rpn = shuntingYard(tokens);
+  return evaluateRPN(rpn);
+}
+
+type Token = { type: 'number'; value: number } | { type: 'operator'; value: string } | { type: 'function'; value: string } | { type: 'lparen' } | { type: 'rparen' } | { type: 'comma' };
+
+const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
+  sqrt: (args) => Math.sqrt(args[0]),
+  sin: (args) => Math.sin(args[0]),
+  cos: (args) => Math.cos(args[0]),
+  tan: (args) => Math.tan(args[0]),
+  log: (args) => Math.log(args[0]),
+  log10: (args) => Math.log10(args[0]),
+  exp: (args) => Math.exp(args[0]),
+  abs: (args) => Math.abs(args[0]),
+  pow: (args) => Math.pow(args[0], args[1]),
+  floor: (args) => Math.floor(args[0]),
+  ceil: (args) => Math.ceil(args[0]),
+  round: (args) => Math.round(args[0]),
+  min: (args) => Math.min(...args),
+  max: (args) => Math.max(...args),
+};
+
+const MATH_CONSTANTS: Record<string, number> = {
+  pi: Math.PI,
+  e: Math.E,
+};
+
+const OPERATORS: Record<string, { precedence: number; assoc: 'left' | 'right' }> = {
+  '+': { precedence: 1, assoc: 'left' },
+  '-': { precedence: 1, assoc: 'left' },
+  '*': { precedence: 2, assoc: 'left' },
+  '/': { precedence: 2, assoc: 'left' },
+  '%': { precedence: 2, assoc: 'left' },
+  '^': { precedence: 3, assoc: 'right' },
+};
+
+function tokenize(expr: string): Token[] {
+  const tokens: Token[] = [];
+  let i = 0;
+  const s = expr.replace(/\s+/g, '');
+
+  while (i < s.length) {
+    const char = s[i];
+
+    if (/[0-9.]/.test(char)) {
+      let num = '';
+      while (i < s.length && /[0-9.]/.test(s[i])) {
+        num += s[i++];
+      }
+      tokens.push({ type: 'number', value: parseFloat(num) });
+      continue;
+    }
+
+    if (/[a-zA-Z_]/.test(char)) {
+      let name = '';
+      while (i < s.length && /[a-zA-Z0-9_]/.test(s[i])) {
+        name += s[i++];
+      }
+      const lower = name.toLowerCase();
+      if (MATH_CONSTANTS[lower] !== undefined) {
+        tokens.push({ type: 'number', value: MATH_CONSTANTS[lower] });
+      } else if (MATH_FUNCTIONS[lower]) {
+        tokens.push({ type: 'function', value: lower });
+      } else {
+        throw new Error(`Unknown identifier: ${name}`);
+      }
+      continue;
+    }
+
+    if (char === '(') {
+      tokens.push({ type: 'lparen' });
+      i++;
+      continue;
+    }
+
+    if (char === ')') {
+      tokens.push({ type: 'rparen' });
+      i++;
+      continue;
+    }
+
+    if (char === ',') {
+      tokens.push({ type: 'comma' });
+      i++;
+      continue;
+    }
+
+    if (OPERATORS[char]) {
+      tokens.push({ type: 'operator', value: char });
+      i++;
+      continue;
+    }
+
+    throw new Error(`Unexpected character: ${char}`);
+  }
+
+  return tokens;
+}
+
+function shuntingYard(tokens: Token[]): (Token | { type: 'function'; value: string; argCount: number })[] {
+  const output: (Token | { type: 'function'; value: string; argCount: number })[] = [];
+  const opStack: (Token | { argCount: number })[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+
+    if (token.type === 'number') {
+      output.push(token);
+    } else if (token.type === 'function') {
+      opStack.push({ ...token, argCount: 1 });
+    } else if (token.type === 'comma') {
+      while (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type !== 'lparen') {
+        output.push(opStack.pop() as Token);
+      }
+      const fnToken = opStack.find((t): t is Token & { argCount: number } => 
+        'argCount' in t && t.type === 'function'
+      );
+      if (fnToken) {
+        fnToken.argCount++;
+      }
+    } else if (token.type === 'operator') {
+      const o1 = OPERATORS[token.value];
+      while (opStack.length > 0) {
+        const top = opStack[opStack.length - 1] as Token;
+        if (top.type !== 'operator') break;
+        const o2 = OPERATORS[top.value];
+        if (o2.precedence > o1.precedence || (o2.precedence === o1.precedence && o1.assoc === 'left')) {
+          output.push(opStack.pop() as Token);
+        } else {
+          break;
+        }
+      }
+      opStack.push(token);
+    } else if (token.type === 'lparen') {
+      opStack.push(token);
+    } else if (token.type === 'rparen') {
+      while (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type !== 'lparen') {
+        output.push(opStack.pop() as Token);
+      }
+      if (opStack.length === 0) throw new Error('Mismatched parentheses');
+      opStack.pop();
+      if (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type === 'function') {
+        output.push(opStack.pop() as Token & { argCount: number });
+      }
+    }
+  }
+
+  while (opStack.length > 0) {
+    const top = opStack.pop() as Token;
+    if (top.type === 'lparen' || top.type === 'rparen') {
+      throw new Error('Mismatched parentheses');
+    }
+    output.push(top);
+  }
+
+  return output;
+}
+
+function evaluateRPN(tokens: (Token | { type: 'function'; value: string; argCount: number })[]): number {
+  const stack: number[] = [];
+
+  for (const token of tokens) {
+    if (token.type === 'number') {
+      stack.push(token.value);
+    } else if (token.type === 'operator') {
+      const b = stack.pop();
+      const a = stack.pop();
+      if (a === undefined || b === undefined) throw new Error('Invalid expression');
+      switch (token.value) {
+        case '+': stack.push(a + b); break;
+        case '-': stack.push(a - b); break;
+        case '*': stack.push(a * b); break;
+        case '/': 
+          if (b === 0) throw new Error('Division by zero');
+          stack.push(a / b); 
+          break;
+        case '%': stack.push(a % b); break;
+        case '^': stack.push(Math.pow(a, b)); break;
+      }
+    } else if (token.type === 'function') {
+      const fn = MATH_FUNCTIONS[token.value];
+      const argCount = 'argCount' in token ? token.argCount : 1;
+      const args: number[] = [];
+      for (let i = 0; i < argCount; i++) {
+        const arg = stack.pop();
+        if (arg === undefined) throw new Error(`Not enough arguments for ${token.value}`);
+        args.unshift(arg);
+      }
+      stack.push(fn(args));
+    }
+  }
+
+  if (stack.length !== 1) throw new Error('Invalid expression');
+  return stack[0];
+}
+
 // Tool execution functions
-const toolExecutors: Record<string, (args: any) => Promise<string>> = {
+const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
   async calculator(args: { expression: string }): Promise<string> {
     try {
-      // Safe math evaluation using Function constructor
-      // Only allow math operations and functions
-      const sanitized = args.expression
-        .replace(/[^0-9+\-*/().%\s]|sqrt|sin|cos|tan|log|exp|abs|pow|floor|ceil|round|PI|E/gi, (match) => {
-          const mathFns: Record<string, string> = {
-            sqrt: 'Math.sqrt',
-            sin: 'Math.sin',
-            cos: 'Math.cos',
-            tan: 'Math.tan',
-            log: 'Math.log',
-            exp: 'Math.exp',
-            abs: 'Math.abs',
-            pow: 'Math.pow',
-            floor: 'Math.floor',
-            ceil: 'Math.ceil',
-            round: 'Math.round',
-            PI: 'Math.PI',
-            E: 'Math.E',
-          };
-          return mathFns[match.toLowerCase()] || match;
-        });
-
-      const result = new Function(`return ${sanitized}`)();
+      const result = safeEvaluateMath(args.expression);
+      if (!Number.isFinite(result)) {
+        return `Error: Result is ${result}`;
+      }
       return `Result: ${result}`;
     } catch (error) {
-      return `Error evaluating expression: ${error}`;
+      return `Error evaluating expression: ${error instanceof Error ? error.message : String(error)}`;
     }
   },
 
-  async weather(args: { location: string; units?: string }): Promise<string> {
-    // Simulated weather data
-    const units = args.units || 'fahrenheit';
+  async weather(args: Record<string, unknown>): Promise<string> {
+    const location = args.location as string;
+    const units = (args.units as string) || 'fahrenheit';
+    
+    // Simulated weather data - clearly marked as demonstration
     const temp = units === 'celsius' 
       ? Math.round(15 + Math.random() * 20)
       : Math.round(60 + Math.random() * 30);
@@ -195,26 +378,29 @@ const toolExecutors: Record<string, (args: any) => Promise<string>> = {
     const condition = conditions[Math.floor(Math.random() * conditions.length)];
     
     return JSON.stringify({
-      location: args.location,
+      location,
       temperature: `${temp}°${units === 'celsius' ? 'C' : 'F'}`,
       conditions: condition,
       humidity: `${Math.round(40 + Math.random() * 40)}%`,
-      note: 'This is simulated data for demonstration purposes',
+      simulated: true,
+      note: 'This is simulated data for demonstration. Integrate a real weather API for production use.',
     }, null, 2);
   },
 
-  async datetime(args: { timezone?: string; format?: string }): Promise<string> {
+  async datetime(args: Record<string, unknown>): Promise<string> {
     const now = new Date();
+    const timezone = args.timezone as string | undefined;
+    const format = args.format as string | undefined;
     
-    if (args.timezone) {
+    if (timezone) {
       try {
-        return now.toLocaleString('en-US', { timeZone: args.timezone });
+        return now.toLocaleString('en-US', { timeZone: timezone });
       } catch {
-        return `Invalid timezone: ${args.timezone}. Using local time: ${now.toLocaleString()}`;
+        return `Invalid timezone: ${timezone}. Using local time: ${now.toLocaleString()}`;
       }
     }
     
-    switch (args.format) {
+    switch (format) {
       case 'date':
         return now.toLocaleDateString();
       case 'time':
@@ -225,19 +411,23 @@ const toolExecutors: Record<string, (args: any) => Promise<string>> = {
     }
   },
 
-  async random(args: { type: string; min?: number; max?: number; choices?: string[] }): Promise<string> {
-    switch (args.type) {
+  async random(args: Record<string, unknown>): Promise<string> {
+    const type = args.type as string;
+    const min = typeof args.min === 'number' ? args.min : 0;
+    const max = typeof args.max === 'number' ? args.max : 100;
+    const choices = args.choices as string[] | undefined;
+
+    switch (type) {
       case 'number': {
-        const min = args.min ?? 0;
-        const max = args.max ?? 100;
+        if (min > max) return 'Error: min cannot be greater than max';
         const result = Math.floor(Math.random() * (max - min + 1)) + min;
         return `Random number between ${min} and ${max}: ${result}`;
       }
       case 'choice': {
-        if (!args.choices?.length) {
+        if (!choices?.length) {
           return 'Error: No choices provided';
         }
-        const choice = args.choices[Math.floor(Math.random() * args.choices.length)];
+        const choice = choices[Math.floor(Math.random() * choices.length)];
         return `Random choice: ${choice}`;
       }
       case 'uuid': {
@@ -249,31 +439,38 @@ const toolExecutors: Record<string, (args: any) => Promise<string>> = {
         return `UUID: ${uuid}`;
       }
       default:
-        return `Unknown random type: ${args.type}`;
+        return `Unknown random type: ${type}`;
     }
   },
 
-  async base64(args: { action: string; text: string }): Promise<string> {
-    if (args.action === 'encode') {
-      return Buffer.from(args.text).toString('base64');
+  async base64(args: Record<string, unknown>): Promise<string> {
+    const action = args.action as string;
+    const text = args.text as string;
+    
+    if (action === 'encode') {
+      return Buffer.from(text).toString('base64');
     } else {
       try {
-        return Buffer.from(args.text, 'base64').toString('utf-8');
+        return Buffer.from(text, 'base64').toString('utf-8');
       } catch {
         return 'Error: Invalid base64 string';
       }
     }
   },
 
-  async hash(args: { algorithm: string; text: string }): Promise<string> {
-    const crypto = await import('crypto');
-    try {
-      const hash = crypto.createHash(args.algorithm);
-      hash.update(args.text);
-      return hash.digest('hex');
-    } catch {
-      return `Error: Invalid hash algorithm "${args.algorithm}"`;
+  async hash(args: Record<string, unknown>): Promise<string> {
+    const algorithm = args.algorithm as string;
+    const text = args.text as string;
+    const validAlgorithms = ['md5', 'sha1', 'sha256', 'sha512'];
+    
+    if (!validAlgorithms.includes(algorithm)) {
+      return `Error: Invalid hash algorithm "${algorithm}". Use one of: ${validAlgorithms.join(', ')}`;
     }
+    
+    const crypto = await import('crypto');
+    const hash = crypto.createHash(algorithm);
+    hash.update(text);
+    return hash.digest('hex');
   },
 };
 
