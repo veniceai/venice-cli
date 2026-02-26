@@ -93,6 +93,9 @@ venice chat --no-stream "Quick question"
 | `--interactive-tools` | Approve each tool call |
 | `--continue` | Continue last conversation |
 | `--no-stream` | Disable streaming output |
+| `--web-search` | Enable web search for current information |
+| `--no-thinking` | Disable reasoning on reasoning models |
+| `--strip-thinking` | Strip thinking blocks from response |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
 ### Web Search
@@ -103,6 +106,12 @@ venice search "Latest developments in fusion energy"
 
 # Limit results
 venice search -n 10 "Best practices for TypeScript"
+
+# Include citations in response
+venice search --citations "Latest AI news"
+
+# Enable deep web scraping
+venice search --scrape "Company research on Anthropic"
 ```
 
 ### Image Generation

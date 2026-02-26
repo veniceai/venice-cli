@@ -49,7 +49,7 @@ _venice_completion() {
     local history_cmds="list show clear export"
     local formats="pretty json markdown raw"
     local models="kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25"
-    local image_models="fluently-xl flux-1-dev flux-1-schnell akash-sdxl"
+    local image_models="flux-2-pro flux-2-max seedream-v5-lite recraft-v4 grok-imagine nano-banana-pro"
     local voices="af_sky af_bella af_nicole am_adam am_michael bf_emma bf_isabella bm_george bm_lewis"
     local characters="pirate wizard scientist poet coder teacher comedian philosopher"
     local tools="calculator weather datetime random base64 hash"
@@ -172,7 +172,7 @@ _venice() {
     )
 
     local -a image_models=(
-        'fluently-xl'
+        'flux-2-pro' 'flux-2-max' 'seedream-v5-lite' 'recraft-v4' 'grok-imagine' 'nano-banana-pro'
         'flux-1-dev'
         'flux-1-schnell'
         'akash-sdxl'
@@ -338,7 +338,7 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a completions
 
 # Models
 set -l models kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25
-set -l image_models fluently-xl flux-1-dev flux-1-schnell akash-sdxl
+set -l image_models flux-2-pro flux-2-max seedream-v5-lite recraft-v4 grok-imagine nano-banana-pro
 set -l voices af_sky af_bella af_nicole am_adam am_michael bf_emma bm_george
 set -l characters pirate wizard scientist poet coder teacher comedian philosopher
 set -l tools calculator weather datetime random base64 hash

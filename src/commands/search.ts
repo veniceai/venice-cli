@@ -18,6 +18,8 @@ export function registerSearchCommand(program: Command): void {
     .description('Web search with AI-powered synthesis')
     .option('-m, --model <model>', 'Model to use')
     .option('-n, --results <number>', 'Number of search results', '5')
+    .option('--citations', 'Include source citations in response')
+    .option('--scrape', 'Enable web scraping for deeper content')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .action(async (queryParts: string[], options) => {
       const query = queryParts.join(' ');
@@ -29,6 +31,8 @@ export function registerSearchCommand(program: Command): void {
         const result = await webSearch(query, {
           model,
           maxResults: parseInt(options.results, 10),
+          enableCitations: options.citations,
+          enableScraping: options.scrape,
         });
 
         if (format === 'json') {

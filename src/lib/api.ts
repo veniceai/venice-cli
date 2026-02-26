@@ -366,7 +366,7 @@ export async function generateImage(
   } = {}
 ): Promise<{ url: string; revised_prompt?: string }[]> {
   const body = {
-    model: options.model || 'fluently-xl',
+    model: options.model || 'flux-2-pro',
     prompt,
     width: options.width || 1024,
     height: options.height || 1024,
@@ -383,7 +383,7 @@ export async function generateImage(
 
   trackUsage({
     command: 'image',
-    model: options.model || 'fluently-xl',
+    model: options.model || 'flux-2-pro',
   });
 
   return response.data;
@@ -588,20 +588,33 @@ export async function webSearch(
   options: {
     model?: string;
     maxResults?: number;
+    enableCitations?: boolean;
+    enableScraping?: boolean;
   } = {}
 ): Promise<{
   content: string;
   citations?: Array<{ title: string; url: string }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
+  const veniceParams: Record<string, unknown> = {
+    enable_web_search: 'on',
+  };
+
+  if (options.maxResults) {
+    veniceParams.web_search_max_results = options.maxResults;
+  }
+  if (options.enableCitations) {
+    veniceParams.enable_web_citations = true;
+  }
+  if (options.enableScraping) {
+    veniceParams.enable_web_scraping = true;
+  }
+
   const response = await chatCompletion(
     [{ role: 'user', content: query }],
     {
       model: options.model,
-      venice_parameters: {
-        enable_web_search: 'always',
-        web_search_max_results: options.maxResults || 5,
-      },
+      venice_parameters: veniceParams,
     }
   );
 

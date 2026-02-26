@@ -92,7 +92,7 @@ export function getDefaultModel(): string {
 
 export function getDefaultImageModel(): string {
   const config = loadConfig();
-  return config.default_image_model || 'fluently-xl';
+  return config.default_image_model || 'flux-2-pro';
 }
 
 export function getDefaultVoice(): string {

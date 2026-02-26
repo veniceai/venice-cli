@@ -40,6 +40,9 @@ export function registerChatCommand(program: Command): void {
     .option('--interactive-tools', 'Require approval for each tool call')
     .option('--continue', 'Continue the last conversation')
     .option('--no-stream', 'Disable streaming output')
+    .option('--web-search', 'Enable web search for current information')
+    .option('--no-thinking', 'Disable reasoning/thinking on reasoning models')
+    .option('--strip-thinking', 'Strip thinking blocks from response')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .option('--list-tools', 'List available tools')
     .action(async (promptParts: string[], options) => {
@@ -102,11 +105,23 @@ export function registerChatCommand(program: Command): void {
       const toolNames = options.tools?.split(',').map((t: string) => t.trim()) || [];
       const tools = getToolDefinitions(toolNames);
 
+      // Build venice_parameters
+      const veniceParams: Record<string, unknown> = {};
+      if (options.webSearch) {
+        veniceParams.enable_web_search = 'on';
+      }
+      if (options.thinking === false) {
+        veniceParams.disable_thinking = true;
+      }
+      if (options.stripThinking) {
+        veniceParams.strip_thinking_response = true;
+      }
+
       try {
         if (shouldStream) {
-          await streamChat(messages, model, tools, options.interactiveTools, format);
+          await streamChat(messages, model, tools, options.interactiveTools, format, veniceParams);
         } else {
-          await nonStreamChat(messages, model, tools, options.interactiveTools, format);
+          await nonStreamChat(messages, model, tools, options.interactiveTools, format, veniceParams);
         }
 
         // Save to history
@@ -129,7 +144,8 @@ async function streamChat(
   model: string,
   tools: ReturnType<typeof getToolDefinitions>,
   interactiveTools: boolean,
-  format: OutputFormat
+  format: OutputFormat,
+  veniceParams?: Record<string, unknown>
 ): Promise<void> {
   const c = getChalk();
   const spinner = startSpinner('Thinking...');
@@ -139,7 +155,11 @@ async function streamChat(
   let usage: any = null;
 
   try {
-    for await (const chunk of chatCompletionStream(messages, { model, tools })) {
+    const streamOptions: { model: string; tools?: typeof tools; venice_parameters?: Record<string, unknown> } = { model, tools };
+    if (veniceParams && Object.keys(veniceParams).length > 0) {
+      streamOptions.venice_parameters = veniceParams;
+    }
+    for await (const chunk of chatCompletionStream(messages, streamOptions)) {
       if (chunk.content) {
         if (spinner) clearSpinner();
         process.stdout.write(chunk.content);
@@ -212,9 +232,14 @@ async function nonStreamChat(
   model: string,
   tools: ReturnType<typeof getToolDefinitions>,
   interactiveTools: boolean,
-  format: OutputFormat
+  format: OutputFormat,
+  veniceParams?: Record<string, unknown>
 ): Promise<void> {
-  const response = await chatCompletion(messages, { model, tools });
+  const chatOptions: { model: string; tools?: typeof tools; venice_parameters?: Record<string, unknown> } = { model, tools };
+  if (veniceParams && Object.keys(veniceParams).length > 0) {
+    chatOptions.venice_parameters = veniceParams;
+  }
+  const response = await chatCompletion(messages, chatOptions);
 
   // Handle tool calls
   if (response.tool_calls?.length) {

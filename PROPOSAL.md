@@ -108,7 +108,7 @@ Configuration stored in `~/.venice/config.json`:
 {
   "api_key": "vn-...",
   "default_model": "kimi-k2-5",
-  "default_image_model": "fluently-xl",
+  "default_image_model": "flux-2-pro",
   "default_voice": "af_sky",
   "output_format": "pretty",
   "show_usage": true

@@ -179,7 +179,7 @@ export function registerConfigCommand(program: Command): void {
           setConfigValue('default_model', model.trim());
         }
 
-        const imageModel = await question('Default image model [fluently-xl]: ');
+        const imageModel = await question('Default image model [flux-2-pro]: ');
         if (imageModel.trim()) {
           setConfigValue('default_image_model', imageModel.trim());
         }
