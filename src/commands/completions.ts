@@ -44,12 +44,15 @@ _venice_completion() {
     local cur prev words cword
     _init_completion || return
 
-    local commands="chat search image tts transcribe models embeddings upscale history usage config characters voices completions"
+    local commands="chat search image tts transcribe models embeddings upscale history usage config characters voices video completions"
     local config_cmds="show set get unset path init"
     local history_cmds="list show clear export"
+    local video_cmds="generate status retrieve models"
     local formats="pretty json markdown raw"
     local models="kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25"
     local image_models="flux-2-pro flux-2-max seedream-v5-lite recraft-v4 grok-imagine nano-banana-pro"
+    local video_models="wan-2.6-text-to-video wan-2.6-image-to-video veo3-fast-text-to-video sora2-text-to-video kling-v3-pro-text-to-video"
+    local asr_models="nvidia/parakeet-tdt-0.6b-v3 openai/whisper-large-v3"
     local voices="af_sky af_bella af_nicole am_adam am_michael bf_emma bf_isabella bm_george bm_lewis"
     local characters="pirate wizard scientist poet coder teacher comedian philosopher"
     local tools="calculator weather datetime random base64 hash"
@@ -65,6 +68,10 @@ _venice_completion() {
             ;;
         history)
             COMPREPLY=( \$(compgen -W "\${history_cmds}" -- "\${cur}") )
+            return 0
+            ;;
+        video)
+            COMPREPLY=( \$(compgen -W "\${video_cmds}" -- "\${cur}") )
             return 0
             ;;
         -m|--model)
@@ -111,7 +118,24 @@ _venice_completion() {
             return 0
             ;;
         transcribe)
-            COMPREPLY=( \$(compgen -W "-m --model -l --language -f --format" -- "\${cur}") )
+            COMPREPLY=( \$(compgen -W "-m --model -l --language -t --timestamps -f --format" -- "\${cur}") )
+            return 0
+            ;;
+        video)
+            case "\${words[2]}" in
+                generate|gen)
+                    COMPREPLY=( \$(compgen -W "-m --model -d --duration -a --aspect-ratio -i --image -f --format" -- "\${cur}") )
+                    ;;
+                status)
+                    COMPREPLY=( \$(compgen -W "-w --wait -f --format" -- "\${cur}") )
+                    ;;
+                retrieve|download)
+                    COMPREPLY=( \$(compgen -W "-o --output -f --format" -- "\${cur}") )
+                    ;;
+                *)
+                    COMPREPLY=( \$(compgen -W "\${video_cmds}" -- "\${cur}") )
+                    ;;
+            esac
             return 0
             ;;
         models)
@@ -151,6 +175,7 @@ _venice() {
         'upscale:Upscale an image'
         'tts:Convert text to speech'
         'transcribe:Transcribe audio to text'
+        'video:AI video generation'
         'models:List available models'
         'embeddings:Generate text embeddings'
         'history:View conversation history'
@@ -176,6 +201,20 @@ _venice() {
         'flux-1-dev'
         'flux-1-schnell'
         'akash-sdxl'
+    )
+
+    local -a video_models=(
+        'wan-2.6-text-to-video' 'wan-2.6-image-to-video' 'wan-2.6-flash-image-to-video'
+        'veo3-fast-text-to-video' 'veo3-fast-image-to-video' 'veo3.1-fast-text-to-video'
+        'sora2-text-to-video' 'sora2-image-to-video'
+        'kling-v3-pro-text-to-video' 'kling-v3-pro-image-to-video'
+        'grok-imagine-text-to-video' 'grok-imagine-image-to-video'
+        'ltx2-fast-text-to-video' 'ltx2-fast-image-to-video'
+    )
+
+    local -a asr_models=(
+        'nvidia/parakeet-tdt-0.6b-v3:Parakeet ASR (fast, default)'
+        'openai/whisper-large-v3:Whisper Large V3'
     )
 
     local -a voices=(
@@ -268,10 +307,21 @@ _venice() {
                     ;;
                 transcribe)
                     _arguments \\
-                        '-m[Model to use]:model:(whisper-large)' \\
+                        '-m[Model to use]:model:((\$asr_models))' \\
                         '-l[Language]:lang:' \\
+                        '-t[Include timestamps]' \\
+                        '--timestamps[Include timestamps]' \\
                         '-f[Output format]:format:((\$formats))' \\
                         '1:audio file:_files'
+                    ;;
+                video)
+                    local -a video_cmds=(
+                        'generate:Queue video generation'
+                        'status:Check generation status'
+                        'retrieve:Download completed video'
+                        'models:List video models'
+                    )
+                    _describe -t video_cmds 'video commands' video_cmds
                     ;;
                 models)
                     _arguments \\
@@ -315,7 +365,7 @@ function generateFishCompletion(): string {
   return `# Venice CLI fish completion
 
 # Main commands
-set -l commands chat search image upscale tts transcribe models embeddings history usage config characters voices completions
+set -l commands chat search image upscale tts transcribe video models embeddings history usage config characters voices completions
 
 # Disable file completions by default
 complete -c venice -f
@@ -327,6 +377,7 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a image -d "G
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a upscale -d "Upscale an image"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a tts -d "Convert text to speech"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a transcribe -d "Transcribe audio"
+complete -c venice -n "not __fish_seen_subcommand_from $commands" -a video -d "AI video generation"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a models -d "List models"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a embeddings -d "Generate embeddings"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a history -d "View history"
@@ -339,6 +390,8 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a completions
 # Models
 set -l models kimi-k2-5 zai-org-glm-4.7 zai-org-glm-4.6 claude-opus-4-6 claude-opus-45 claude-sonnet-4-6 openai-gpt-53-codex minimax-m25
 set -l image_models flux-2-pro flux-2-max seedream-v5-lite recraft-v4 grok-imagine nano-banana-pro
+set -l video_models wan-2.6-text-to-video wan-2.6-image-to-video veo3-fast-text-to-video sora2-text-to-video kling-v3-pro-text-to-video
+set -l asr_models nvidia/parakeet-tdt-0.6b-v3 openai/whisper-large-v3
 set -l voices af_sky af_bella af_nicole am_adam am_michael bf_emma bm_george
 set -l characters pirate wizard scientist poet coder teacher comedian philosopher
 set -l tools calculator weather datetime random base64 hash
@@ -365,8 +418,21 @@ complete -c venice -n "__fish_seen_subcommand_from tts" -s v -l voice -d "Voice"
 complete -c venice -n "__fish_seen_subcommand_from tts" -s o -l output -d "Output file" -r
 
 # Transcribe options
-complete -c venice -n "__fish_seen_subcommand_from transcribe" -s m -l model -d "Model" -xa "whisper-large"
+complete -c venice -n "__fish_seen_subcommand_from transcribe" -s m -l model -d "Model" -xa "$asr_models"
+complete -c venice -n "__fish_seen_subcommand_from transcribe" -s t -l timestamps -d "Include timestamps"
 complete -c venice -n "__fish_seen_subcommand_from transcribe" -r
+
+# Video subcommands
+complete -c venice -n "__fish_seen_subcommand_from video" -a generate -d "Queue video generation"
+complete -c venice -n "__fish_seen_subcommand_from video" -a status -d "Check status"
+complete -c venice -n "__fish_seen_subcommand_from video" -a retrieve -d "Download video"
+complete -c venice -n "__fish_seen_subcommand_from video" -a models -d "List video models"
+
+# Video generate options
+complete -c venice -n "__fish_seen_subcommand_from video; and __fish_seen_subcommand_from generate" -s m -l model -d "Model" -xa "$video_models"
+complete -c venice -n "__fish_seen_subcommand_from video; and __fish_seen_subcommand_from generate" -s d -l duration -d "Duration"
+complete -c venice -n "__fish_seen_subcommand_from video; and __fish_seen_subcommand_from generate" -s a -l aspect-ratio -d "Aspect ratio" -xa "16:9 9:16 1:1"
+complete -c venice -n "__fish_seen_subcommand_from video; and __fish_seen_subcommand_from generate" -s i -l image -d "Reference image" -r
 
 # Config subcommands
 complete -c venice -n "__fish_seen_subcommand_from config" -a show -d "Show config"

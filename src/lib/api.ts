@@ -480,14 +480,22 @@ export async function textToSpeech(
   }
 }
 
-// Transcription
+// Transcription (STT)
 export async function transcribe(
   audioPath: string,
   options: {
     model?: string;
     language?: string;
+    timestamps?: boolean;
   } = {}
-): Promise<{ text: string; segments?: any[] }> {
+): Promise<{
+  text: string;
+  duration?: number;
+  timestamps?: {
+    word?: Array<{ word: string; start: number; end: number }>;
+    segment?: Array<{ text: string; start: number; end: number }>;
+  };
+}> {
   const fs = await import('fs');
   const path = await import('path');
 
@@ -500,17 +508,26 @@ export async function transcribe(
   const ext = path.extname(audioPath).slice(1) || 'mp3';
 
   const body: Record<string, unknown> = {
-    model: options.model || 'whisper-large',
+    model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
     file: `data:audio/${ext};base64,${base64}`,
+    response_format: 'json',
   };
 
   if (options.language) {
     body.language = options.language;
   }
 
+  if (options.timestamps) {
+    body.timestamps = true;
+  }
+
   const response = await apiRequest<{
     text: string;
-    segments?: any[];
+    duration?: number;
+    timestamps?: {
+      word?: Array<{ word: string; start: number; end: number }>;
+      segment?: Array<{ text: string; start: number; end: number }>;
+    };
   }>('/audio/transcriptions', {
     method: 'POST',
     body,
@@ -519,7 +536,7 @@ export async function transcribe(
 
   trackUsage({
     command: 'transcribe',
-    model: options.model || 'whisper-large',
+    model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
   });
 
   return response;
@@ -580,6 +597,77 @@ export async function listCharacters(): Promise<Character[]> {
     // Characters endpoint might not exist
     return [];
   }
+}
+
+// Video generation - queue job
+export async function queueVideoGeneration(
+  prompt: string,
+  options: {
+    model?: string;
+    duration?: string;
+    aspectRatio?: string;
+    imageUrl?: string;
+  } = {}
+): Promise<{ queue_id: string; model: string }> {
+  const body: Record<string, unknown> = {
+    model: options.model || 'wan-2.6-image-to-video',
+    prompt,
+  };
+
+  if (options.duration) {
+    body.duration = options.duration;
+  }
+  if (options.aspectRatio) {
+    body.aspect_ratio = options.aspectRatio;
+  }
+  if (options.imageUrl) {
+    body.image_url = options.imageUrl;
+  }
+
+  const response = await apiRequest<{
+    queue_id: string;
+    model: string;
+  }>('/video/generate', {
+    method: 'POST',
+    body,
+    spinnerText: 'Queueing video generation...',
+  });
+
+  trackUsage({
+    command: 'video',
+    model: options.model || 'wan-2.6-image-to-video',
+  });
+
+  return response;
+}
+
+// Video generation - check status
+export async function getVideoStatus(
+  queueId: string
+): Promise<{
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  video_url?: string;
+  error?: string;
+  progress?: number;
+}> {
+  return apiRequest(`/video/status/${queueId}`, {
+    method: 'GET',
+    spinnerText: 'Checking video status...',
+  });
+}
+
+// Video generation - retrieve video
+export async function retrieveVideo(
+  queueId: string
+): Promise<{
+  video_url: string;
+  model: string;
+  duration?: number;
+}> {
+  return apiRequest(`/video/retrieve/${queueId}`, {
+    method: 'GET',
+    spinnerText: 'Retrieving video...',
+  });
 }
 
 // Web search via chat

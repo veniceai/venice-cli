@@ -64,12 +64,14 @@ export function registerAudioCommands(program: Command): void {
   // Transcription
   program
     .command('transcribe <audio>')
-    .description('Transcribe audio to text')
-    .option('-m, --model <model>', 'Model to use', 'whisper-large')
-    .option('-l, --language <lang>', 'Audio language (ISO code)')
+    .description('Transcribe audio to text (STT)')
+    .option('-m, --model <model>', 'Model: nvidia/parakeet-tdt-0.6b-v3, openai/whisper-large-v3', 'nvidia/parakeet-tdt-0.6b-v3')
+    .option('-l, --language <lang>', 'Audio language ISO code (e.g., en, es, fr)')
+    .option('-t, --timestamps', 'Include word/segment timestamps in output')
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
     .action(async (audioPath: string, options) => {
       const format = detectOutputFormat(options.format);
+      const c = getChalk();
 
       // Resolve path
       const resolvedPath = path.resolve(audioPath);
@@ -83,12 +85,25 @@ export function registerAudioCommands(program: Command): void {
         const result = await transcribe(resolvedPath, {
           model: options.model,
           language: options.language,
+          timestamps: options.timestamps,
         });
 
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(result.text);
+          if (options.timestamps && result.timestamps) {
+            console.log(`\n${c.dim('─'.repeat(50))}`);
+            if (result.timestamps.segment) {
+              console.log(c.bold('\nSegments:'));
+              for (const seg of result.timestamps.segment) {
+                console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${seg.text}`);
+              }
+            }
+          }
+          if (result.duration) {
+            console.log(`\n${c.dim(`Duration: ${result.duration.toFixed(2)}s`)}`);
+          }
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));

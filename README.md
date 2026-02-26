@@ -43,8 +43,9 @@ npx venice-cli chat "Hello, world!"
 - 🤖 **Chat** with state-of-the-art AI models
 - 🔍 **Web Search** with AI-powered synthesis
 - 🖼️ **Image Generation** from text prompts
-- 🔊 **Text-to-Speech** with multiple voices
-- 🎤 **Speech-to-Text** transcription
+- 🔊 **Text-to-Speech** with 35+ voices across languages
+- 🎤 **Speech-to-Text** transcription with timestamps
+- 🎬 **Video Generation** (text-to-video, image-to-video)
 - 📐 **Embeddings** generation
 - 🔧 **Function Calling** with built-in tools
 - 🎭 **Character Personas** for fun interactions
@@ -96,6 +97,8 @@ venice chat --no-stream "Quick question"
 | `--web-search` | Enable web search for current information |
 | `--no-thinking` | Disable reasoning on reasoning models |
 | `--strip-thinking` | Strip thinking blocks from response |
+| `--no-venice-prompt` | Disable Venice system prompts |
+| `--search-results-in-stream` | Include search results in stream |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
 ### Web Search
@@ -153,15 +156,66 @@ venice tts -v bf_emma -o greeting.mp3 "Good morning, everyone!"
 echo "Text to speak" | venice tts -o output.mp3
 ```
 
-### Transcription
+### Transcription (Speech-to-Text)
 
 ```bash
 # Transcribe audio
 venice transcribe recording.mp3
 
-# JSON output with segments
+# With word/segment timestamps
+venice transcribe -t recording.mp3
+
+# Use a specific model (Whisper or Parakeet)
+venice transcribe -m openai/whisper-large-v3 interview.wav
+
+# With language hint
+venice transcribe -l es spanish_audio.mp3
+
+# JSON output
 venice transcribe -f json interview.wav
 ```
+
+**Available STT Models:**
+- `nvidia/parakeet-tdt-0.6b-v3` (default, fast)
+- `openai/whisper-large-v3`
+
+### Video Generation
+
+Venice supports AI video generation using state-of-the-art models. Video generation is asynchronous (queue-based).
+
+```bash
+# Queue a text-to-video generation
+venice video generate "A cat playing with a ball in slow motion"
+
+# Use a specific model
+venice video generate -m veo3-fast-text-to-video "Cinematic sunset over mountains"
+
+# Image-to-video with reference image
+venice video generate -m wan-2.6-image-to-video -i photo.jpg "The scene comes alive"
+
+# Set duration and aspect ratio
+venice video generate -d 10s -a 16:9 "A peaceful forest scene"
+
+# Check status of a video job
+venice video status <queue_id>
+
+# Wait for completion (polls every 5s)
+venice video status -w <queue_id>
+
+# Download completed video
+venice video retrieve <queue_id> -o my_video.mp4
+
+# List available video models
+venice video models
+```
+
+**Available Video Models:**
+- **Wan 2.6**: `wan-2.6-text-to-video`, `wan-2.6-image-to-video`
+- **Veo3**: `veo3-fast-text-to-video`, `veo3-fast-image-to-video`
+- **Sora2**: `sora2-text-to-video`, `sora2-image-to-video`
+- **Kling V3**: `kling-v3-pro-text-to-video`, `kling-v3-pro-image-to-video`
+- **Grok Imagine**: `grok-imagine-text-to-video`, `grok-imagine-image-to-video`
+- **LTX2**: `ltx2-fast-text-to-video`, `ltx2-fast-image-to-video`
 
 ### Models
 

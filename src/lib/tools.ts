@@ -257,7 +257,7 @@ function tokenize(expr: string): Token[] {
 
 function shuntingYard(tokens: Token[]): (Token | { type: 'function'; value: string; argCount: number })[] {
   const output: (Token | { type: 'function'; value: string; argCount: number })[] = [];
-  const opStack: (Token | { argCount: number })[] = [];
+  const opStack: (Token | (Token & { argCount: number }))[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -354,9 +354,10 @@ function evaluateRPN(tokens: (Token | { type: 'function'; value: string; argCoun
 
 // Tool execution functions
 const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
-  async calculator(args: { expression: string }): Promise<string> {
+  async calculator(args: Record<string, unknown>): Promise<string> {
     try {
-      const result = safeEvaluateMath(args.expression);
+      const expression = args.expression as string;
+      const result = safeEvaluateMath(expression);
       if (!Number.isFinite(result)) {
         return `Error: Result is ${result}`;
       }
@@ -503,7 +504,7 @@ export async function executeTool(
   }
 
   try {
-    return await executor(args);
+    return await executor(args as Record<string, unknown>);
   } catch (error) {
     return `Tool error: ${error}`;
   }

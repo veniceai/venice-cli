@@ -43,6 +43,8 @@ export function registerChatCommand(program: Command): void {
     .option('--web-search', 'Enable web search for current information')
     .option('--no-thinking', 'Disable reasoning/thinking on reasoning models')
     .option('--strip-thinking', 'Strip thinking blocks from response')
+    .option('--no-venice-prompt', 'Disable Venice system prompts')
+    .option('--search-results-in-stream', 'Include search results in stream (when web-search enabled)')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .option('--list-tools', 'List available tools')
     .action(async (promptParts: string[], options) => {
@@ -115,6 +117,12 @@ export function registerChatCommand(program: Command): void {
       }
       if (options.stripThinking) {
         veniceParams.strip_thinking_response = true;
+      }
+      if (options.venicePrompt === false) {
+        veniceParams.include_venice_system_prompt = false;
+      }
+      if (options.searchResultsInStream) {
+        veniceParams.include_search_results_in_stream = true;
       }
 
       try {
