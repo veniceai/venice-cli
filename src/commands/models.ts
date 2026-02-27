@@ -15,7 +15,7 @@ export function registerModelsCommand(program: Command): void {
   program
     .command('models')
     .description('List available models')
-    .option('-t, --type <type>', 'Filter by type (text|image|audio|embedding|code)')
+    .option('-t, --type <type>', 'Filter by type (all|text|image|tts|asr|embedding|video|upscale|inpaint)')
     .option('-s, --search <query>', 'Search models by name')
     .option('--privacy', 'Show only privacy-preserving models')
     .option('-f, --format <format>', 'Output format (pretty|json)')
@@ -26,22 +26,15 @@ export function registerModelsCommand(program: Command): void {
       try {
         let models = await listModels();
 
-        // Filter by type
+        // Filter by type (API-aligned)
         if (options.type) {
-          const typeMap: Record<string, string[]> = {
-            text: ['text', 'chat', 'llm'],
-            image: ['image', 'diffusion', 'flux', 'sdxl'],
-            audio: ['audio', 'tts', 'stt', 'whisper', 'speech'],
-            embedding: ['embedding', 'embed'],
-            code: ['code', 'codestral', 'deepseek-coder'],
-          };
-          const searchTerms = typeMap[options.type.toLowerCase()] || [options.type];
-          models = models.filter((m: Model) =>
-            searchTerms.some(term =>
-              m.id?.toLowerCase().includes(term) ||
-              m.type?.toLowerCase().includes(term)
-            )
-          );
+          const requestedType = String(options.type).toLowerCase().trim();
+
+          if (requestedType !== 'all') {
+            models = models.filter((m: Model) =>
+              m.type?.toLowerCase() === requestedType
+            );
+          }
         }
 
         // Filter by search query
@@ -55,9 +48,7 @@ export function registerModelsCommand(program: Command): void {
 
         // Filter by privacy
         if (options.privacy) {
-          models = models.filter((m: Model) =>
-            m.model_spec?.capabilities?.privacy
-          );
+          models = models.filter((m: Model) => isPrivacyPreserving(m));
         }
 
         // Sort by id
@@ -83,7 +74,7 @@ export function registerModelsCommand(program: Command): void {
           console.log(c.dim('─'.repeat(50)));
 
           for (const model of typeModels) {
-            const privacy = model.model_spec?.capabilities?.privacy ? c.green('🔒') : c.dim('📊');
+            const privacy = isPrivacyPreserving(model) ? c.green('🔒') : c.dim('📊');
             console.log(`  ${privacy} ${c.cyan(model.id)}`);
             
             if (model.model_spec?.description) {
@@ -108,21 +99,23 @@ function groupModelsByType(models: Model[]): Record<string, Model[]> {
 
   for (const model of models) {
     let type = 'other';
-    const id = (model.id || '').toLowerCase();
+    const apiType = (model.type || '').toLowerCase();
 
-    if (id.includes('llama') || id.includes('mistral') || id.includes('qwen') || 
-        id.includes('dolphin') || id.includes('nous') || id.includes('deepseek') && !id.includes('coder')) {
+    // Group strictly by API type families from docs
+    if (apiType === 'text') {
       type = 'text';
-    } else if (id.includes('flux') || id.includes('sdxl') || id.includes('fluently') ||
-               id.includes('stable-diffusion') || id.includes('image')) {
+    } else if (apiType === 'image') {
       type = 'image';
-    } else if (id.includes('whisper') || id.includes('tts') || id.includes('kokoro') ||
-               id.includes('speech') || id.includes('audio')) {
+    } else if (apiType === 'inpaint') {
+      type = 'inpaint';
+    } else if (apiType === 'upscale') {
+      type = 'upscale';
+    } else if (apiType === 'tts' || apiType === 'asr') {
       type = 'audio';
-    } else if (id.includes('embed') || id.includes('bge')) {
+    } else if (apiType === 'embedding') {
       type = 'embedding';
-    } else if (id.includes('coder') || id.includes('codestral')) {
-      type = 'code';
+    } else if (apiType === 'video') {
+      type = 'video';
     }
 
     if (!groups[type]) {
@@ -138,12 +131,25 @@ function getTypeEmoji(type: string): string {
   const emojis: Record<string, string> = {
     text: '💬',
     image: '🖼️',
+    inpaint: '🖼️',
+    upscale: '🖼️',
     audio: '🎵',
     embedding: '📐',
-    code: '💻',
+    video: '🎬',
     other: '📦',
   };
   return emojis[type] || '📦';
+}
+
+function isPrivacyPreserving(model: Model): boolean {
+  // Current API shape exposes privacy at model_spec.privacy
+  // Legacy compatibility: older payloads may have capabilities.privacy
+  const privacy = (model.model_spec as { privacy?: string } | undefined)?.privacy;
+  if (typeof privacy === 'string') {
+    return privacy.toLowerCase() === 'private';
+  }
+
+  return Boolean((model.model_spec?.capabilities as { privacy?: boolean } | undefined)?.privacy);
 }
 
 function capitalizeFirst(str: string): string {

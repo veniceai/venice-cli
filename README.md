@@ -16,7 +16,7 @@ npm install -g venice-cli
 Or use without installing:
 
 ```bash
-npx venice-cli chat "Hello, world!"
+npx venice-cli chat 'Hello, world!'
 ```
 
 ## Quick Start

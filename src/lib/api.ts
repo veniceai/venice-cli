@@ -572,14 +572,62 @@ export async function generateEmbeddings(
 
 // List models
 export async function listModels(): Promise<Model[]> {
-  const response = await apiRequest<{
-    data: Model[];
-  }>('/models', {
-    method: 'GET',
-    spinnerText: 'Fetching models...',
-  });
+  const modelTypes = ['text', 'asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video'];
+  const merged = new Map<string, Model>();
 
-  return response.data || [];
+  // API defaults to text-only when no type is provided, so iterate known types
+  const requests: Array<{ endpoint: string; requestedType?: string; showSpinner: boolean }> = [
+    { endpoint: '/models', showSpinner: true },
+    ...modelTypes.map((type) => ({
+      endpoint: `/models?type=${encodeURIComponent(type)}`,
+      requestedType: type,
+      showSpinner: false,
+    })),
+  ];
+
+  for (const request of requests) {
+    try {
+      const response = await apiRequest<{ data: Model[] }>(request.endpoint, {
+        method: 'GET',
+        spinnerText: 'Fetching models...',
+        showSpinner: request.showSpinner,
+      });
+
+      for (const model of response.data || []) {
+        const normalized: Model = { ...model };
+
+        // Some API responses still label type as text; preserve requested typed endpoint info
+        if (
+          request.requestedType &&
+          (!normalized.type || normalized.type.toLowerCase() === 'text')
+        ) {
+          normalized.type = request.requestedType;
+        }
+
+        const key = normalized.id || JSON.stringify(normalized);
+        const existing = merged.get(key);
+
+        if (!existing) {
+          merged.set(key, normalized);
+          continue;
+        }
+
+        // Prefer non-text type metadata when deduplicating
+        const existingType = (existing.type || '').toLowerCase();
+        const normalizedType = (normalized.type || '').toLowerCase();
+        if (existingType === 'text' && normalizedType && normalizedType !== 'text') {
+          merged.set(key, normalized);
+        }
+      }
+    } catch (error) {
+      // Keep typed fallback resilient. If the base endpoint fails, surface the error.
+      if (!request.requestedType) {
+        throw error;
+      }
+    }
+  }
+
+  return Array.from(merged.values());
 }
 
 // List characters (if Venice supports this endpoint)
