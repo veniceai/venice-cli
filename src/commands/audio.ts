@@ -17,7 +17,7 @@ import {
 export function registerAudioCommands(program: Command): void {
   // Text to speech
   program
-    .command('tts <text...>')
+    .command('tts [text...]')
     .alias('speak')
     .description('Convert text to speech')
     .option('-v, --voice <voice>', 'Voice to use (default: af_sky)')
