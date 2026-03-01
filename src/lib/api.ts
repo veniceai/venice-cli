@@ -355,7 +355,7 @@ export async function* chatCompletionStream(
   yield { done: true, usage: totalUsage };
 }
 
-// Image generation
+// Image generation (Venice-native endpoint)
 export async function generateImage(
   prompt: string,
   options: {
@@ -363,19 +363,25 @@ export async function generateImage(
     width?: number;
     height?: number;
     n?: number;
+    format?: 'png' | 'jpeg' | 'webp';
   } = {}
-): Promise<{ url: string; revised_prompt?: string }[]> {
-  const body = {
+): Promise<string[]> {
+  const body: Record<string, unknown> = {
     model: options.model || 'flux-2-pro',
     prompt,
     width: options.width || 1024,
     height: options.height || 1024,
-    n: options.n || 1,
+    format: options.format || 'png',
   };
 
+  if (options.n && options.n > 1) {
+    body.variants = options.n;
+  }
+
   const response = await apiRequest<{
-    data: Array<{ url: string; revised_prompt?: string }>;
-  }>('/images/generations', {
+    id: string;
+    images: string[];
+  }>('/image/generate', {
     method: 'POST',
     body,
     spinnerText: 'Generating image...',
@@ -386,7 +392,7 @@ export async function generateImage(
     model: options.model || 'flux-2-pro',
   });
 
-  return response.data;
+  return response.images;
 }
 
 // Image upscale
@@ -480,7 +486,7 @@ export async function textToSpeech(
   }
 }
 
-// Transcription (STT)
+// Transcription (STT) -- requires multipart/form-data upload
 export async function transcribe(
   audioPath: string,
   options: {
@@ -504,42 +510,68 @@ export async function transcribe(
   }
 
   const audioData = fs.readFileSync(audioPath);
-  const base64 = audioData.toString('base64');
-  const ext = path.extname(audioPath).slice(1) || 'mp3';
+  const filename = path.basename(audioPath);
 
-  const body: Record<string, unknown> = {
-    model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
-    file: `data:audio/${ext};base64,${base64}`,
-    response_format: 'json',
-  };
+  const formData = new FormData();
+  formData.append('file', new Blob([audioData]), filename);
+  formData.append('model', options.model || 'nvidia/parakeet-tdt-0.6b-v3');
+  formData.append('response_format', 'json');
 
   if (options.language) {
-    body.language = options.language;
+    formData.append('language', options.language);
   }
-
   if (options.timestamps) {
-    body.timestamps = true;
+    formData.append('timestamp_granularities[]', 'word');
+    formData.append('timestamp_granularities[]', 'segment');
   }
 
-  const response = await apiRequest<{
-    text: string;
-    duration?: number;
-    timestamps?: {
-      word?: Array<{ word: string; start: number; end: number }>;
-      segment?: Array<{ text: string; start: number; end: number }>;
+  const spinner = startSpinner('Transcribing...');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${requireApiKey()}`,
+        'User-Agent': `venice-cli/${getVersion()}`,
+      },
+      body: formData,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw VeniceApiError.fromResponse(res.status, errorBody);
+    }
+
+    if (spinner) stopSpinner(true);
+
+    const response = await res.json() as {
+      text: string;
+      duration?: number;
+      timestamps?: {
+        word?: Array<{ word: string; start: number; end: number }>;
+        segment?: Array<{ text: string; start: number; end: number }>;
+      };
     };
-  }>('/audio/transcriptions', {
-    method: 'POST',
-    body,
-    spinnerText: 'Transcribing...',
-  });
 
-  trackUsage({
-    command: 'transcribe',
-    model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
-  });
+    trackUsage({
+      command: 'transcribe',
+      model: options.model || 'nvidia/parakeet-tdt-0.6b-v3',
+    });
 
-  return response;
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (spinner) stopSpinner(false);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Transcription request timed out. Try a shorter audio file.');
+    }
+    throw error;
+  }
 }
 
 // Embeddings

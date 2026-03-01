@@ -34,3 +34,6 @@ yarn-error.log*
 # Coverage
 coverage/
 .nyc_output/
+
+# Local temporary artifacts
+tmp/

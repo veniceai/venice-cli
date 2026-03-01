@@ -29,7 +29,6 @@ export function registerImageCommand(program: Command): void {
       const prompt = promptParts.join(' ');
       const model = options.model || getDefaultImageModel();
       const format = detectOutputFormat(options.format);
-      const c = getChalk();
 
       const width = parseInt(options.width, 10);
       const height = parseInt(options.height, 10);
@@ -57,35 +56,23 @@ export function registerImageCommand(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify({ images }, null, 2));
+          console.log(JSON.stringify({ images: images.map(b64 => ({ b64_json: b64 })) }, null, 2));
           return;
         }
 
         for (let i = 0; i < images.length; i++) {
-          const img = images[i];
-          
-          if (options.output) {
-            // Download and save
-            const response = await fetch(img.url);
-            const buffer = await response.arrayBuffer();
-            
-            let outputPath = options.output;
-            if (images.length > 1) {
-              const ext = path.extname(outputPath);
-              const base = path.basename(outputPath, ext);
-              const dir = path.dirname(outputPath);
-              outputPath = path.join(dir, `${base}_${i + 1}${ext}`);
-            }
-            
-            fs.writeFileSync(outputPath, Buffer.from(buffer));
-            console.log(formatSuccess(`Saved to ${outputPath}`));
-          } else {
-            console.log(`${c.cyan('🖼️  Image URL:')} ${img.url}`);
+          const imageData = Buffer.from(images[i], 'base64');
+
+          let outputPath = options.output || `image_${Date.now()}.png`;
+          if (images.length > 1) {
+            const ext = path.extname(outputPath);
+            const base = path.basename(outputPath, ext);
+            const dir = path.dirname(outputPath);
+            outputPath = path.join(dir, `${base}_${i + 1}${ext}`);
           }
 
-          if (img.revised_prompt) {
-            console.log(`${c.dim('Revised prompt:')} ${img.revised_prompt}`);
-          }
+          fs.writeFileSync(outputPath, imageData);
+          console.log(formatSuccess(`Saved to ${outputPath}`));
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
