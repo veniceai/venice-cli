@@ -690,13 +690,11 @@ export async function queueVideoGeneration(
   } = {}
 ): Promise<{ queue_id: string; model: string }> {
   const body: Record<string, unknown> = {
-    model: options.model || 'wan-2.6-image-to-video',
+    model: options.model || 'wan-2.6-text-to-video',
     prompt,
+    duration: options.duration || '5s',
   };
 
-  if (options.duration) {
-    body.duration = options.duration;
-  }
   if (options.aspectRatio) {
     body.aspect_ratio = options.aspectRatio;
   }
@@ -707,7 +705,7 @@ export async function queueVideoGeneration(
   const response = await apiRequest<{
     queue_id: string;
     model: string;
-  }>('/video/generate', {
+  }>('/video/queue', {
     method: 'POST',
     body,
     spinnerText: 'Queueing video generation...',
@@ -715,13 +713,13 @@ export async function queueVideoGeneration(
 
   trackUsage({
     command: 'video',
-    model: options.model || 'wan-2.6-image-to-video',
+    model: options.model || 'wan-2.6-text-to-video',
   });
 
   return response;
 }
 
-// Video generation - check status
+// Video generation - check status / retrieve result
 export async function getVideoStatus(
   queueId: string
 ): Promise<{
@@ -730,7 +728,7 @@ export async function getVideoStatus(
   error?: string;
   progress?: number;
 }> {
-  return apiRequest(`/video/status/${queueId}`, {
+  return apiRequest(`/video/retrieve?queue_id=${encodeURIComponent(queueId)}`, {
     method: 'GET',
     spinnerText: 'Checking video status...',
   });
@@ -744,7 +742,7 @@ export async function retrieveVideo(
   model: string;
   duration?: number;
 }> {
-  return apiRequest(`/video/retrieve/${queueId}`, {
+  return apiRequest(`/video/retrieve?queue_id=${encodeURIComponent(queueId)}`, {
     method: 'GET',
     spinnerText: 'Retrieving video...',
   });
