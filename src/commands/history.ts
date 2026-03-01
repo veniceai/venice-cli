@@ -3,6 +3,7 @@
  */
 
 import { Command } from 'commander';
+import * as fs from 'fs';
 import {
   loadHistory,
   clearHistory,
@@ -194,7 +195,6 @@ export function registerHistoryCommand(program: Command): void {
     .command('export <file>')
     .description('Export history to a JSON file')
     .action((file: string) => {
-      const fs = require('fs');
       const conversations = loadHistory();
 
       fs.writeFileSync(file, JSON.stringify(conversations, null, 2));
