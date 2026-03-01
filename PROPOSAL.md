@@ -277,7 +277,7 @@ Every README, help text, and marketing material should reinforce:
 venice chat "Explain quantum computing"
 
 # With model selection
-venice chat -m deepseek-r1 "Solve this math problem"
+venice chat -m deepseek-v3.2 "Solve this math problem"
 
 # With character persona
 venice chat -c pirate "Tell me about the weather"
