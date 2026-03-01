@@ -62,7 +62,7 @@ npx venice-cli chat 'Hello, world!'
 venice chat "Explain quantum computing in simple terms"
 
 # Use a specific model
-venice chat -m deepseek-r1 "Solve this step by step: 15% of 340"
+venice chat -m deepseek-v3.2 "Solve this step by step: 15% of 340"
 
 # With a system prompt
 venice chat -s "You are a helpful coding assistant" "Write a fizzbuzz in Python"

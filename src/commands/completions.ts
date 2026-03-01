@@ -192,7 +192,7 @@ _venice() {
         'mistral-31-24b'
         'qwen-2.5-coder'
         'nous-hermes-3'
-        'deepseek-r1'
+        'deepseek-v3.2'
         'dolphin-2.9.2'
     )
 
