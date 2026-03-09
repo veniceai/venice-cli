@@ -27,7 +27,7 @@ import {
   detectOutputFormat,
   isPiped,
 } from '../lib/output.js';
-import type { Message, OutputFormat } from '../types/index.js';
+import type { Message, OutputFormat, ToolCall } from '../types/index.js';
 
 export function registerChatCommand(program: Command): void {
   program
@@ -159,7 +159,7 @@ async function streamChat(
   const spinner = startSpinner('Thinking...');
 
   let fullContent = '';
-  let collectedToolCalls: any[] = [];
+  let collectedToolCalls: StreamToolCallDelta[] = [];
   let usage: any = null;
 
   try {
@@ -175,7 +175,7 @@ async function streamChat(
       }
 
       if (chunk.tool_calls) {
-        collectedToolCalls.push(...chunk.tool_calls);
+        collectedToolCalls.push(...(chunk.tool_calls as StreamToolCallDelta[]));
       }
 
       if (chunk.usage) {
@@ -190,9 +190,14 @@ async function streamChat(
     // Handle tool calls
     if (collectedToolCalls.length > 0) {
       console.log('\n');
-      
-      for (const toolCall of collectedToolCalls) {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
+      const toolCalls = reconstructStreamToolCalls(collectedToolCalls);
+
+      for (const toolCall of toolCalls) {
+        if (!toolCall.function.name) {
+          throw new Error(`Incomplete tool call received for id "${toolCall.id}"`);
+        }
+
+        const args = parseToolCallArguments(toolCall);
         const result = await executeTool(toolCall.function.name, args, { interactive: interactiveTools });
 
         console.log(c.dim(`\n[Tool: ${toolCall.function.name}]`));
@@ -232,6 +237,112 @@ async function streamChat(
   } catch (error) {
     clearSpinner();
     throw error;
+  }
+}
+
+interface StreamToolCallDelta {
+  index?: number;
+  id?: string;
+  type?: 'function';
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+interface AccumulatedStreamToolCall {
+  order: number;
+  index?: number;
+  id?: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+function reconstructStreamToolCalls(toolCallDeltas: StreamToolCallDelta[]): ToolCall[] {
+  const callsByIndex = new Map<number, AccumulatedStreamToolCall>();
+  const callsById = new Map<string, AccumulatedStreamToolCall>();
+  const orderedCalls: AccumulatedStreamToolCall[] = [];
+
+  for (const [position, delta] of toolCallDeltas.entries()) {
+    const index = typeof delta.index === 'number' ? delta.index : undefined;
+    const id = typeof delta.id === 'string' && delta.id.length > 0 ? delta.id : undefined;
+
+    let accumulated: AccumulatedStreamToolCall | undefined;
+    if (index !== undefined) {
+      accumulated = callsByIndex.get(index);
+    }
+    if (!accumulated && id) {
+      accumulated = callsById.get(id);
+    }
+    if (!accumulated && index !== undefined && orderedCalls[index] && orderedCalls[index].index === undefined) {
+      accumulated = orderedCalls[index];
+    }
+
+    if (!accumulated) {
+      accumulated = {
+        order: position,
+        index,
+        id,
+        function: {
+          name: '',
+          arguments: '',
+        },
+      };
+      orderedCalls.push(accumulated);
+    }
+
+    if (index !== undefined) {
+      accumulated.index = index;
+      callsByIndex.set(index, accumulated);
+    }
+
+    if (id) {
+      accumulated.id = id;
+      callsById.set(id, accumulated);
+    }
+
+    if (delta.function?.name) {
+      accumulated.function.name = delta.function.name;
+    }
+    if (delta.function?.arguments) {
+      accumulated.function.arguments += delta.function.arguments;
+    }
+  }
+
+  return orderedCalls
+    .sort((a, b) => {
+      if (a.index !== undefined && b.index !== undefined) {
+        return a.index - b.index;
+      }
+      if (a.index !== undefined) return -1;
+      if (b.index !== undefined) return 1;
+      return a.order - b.order;
+    })
+    .map((toolCall, position): ToolCall => ({
+      id: toolCall.id || `stream_tool_call_${toolCall.index ?? position}`,
+      type: 'function',
+      function: {
+        name: toolCall.function.name,
+        arguments: toolCall.function.arguments,
+      },
+    }));
+}
+
+function parseToolCallArguments(toolCall: ToolCall): Record<string, unknown> {
+  const rawArgs = toolCall.function.arguments?.trim();
+  if (!rawArgs) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(rawArgs) as Record<string, unknown>;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Invalid JSON arguments for tool "${toolCall.function.name}" (id: ${toolCall.id}): ${reason}`
+    );
   }
 }
 
