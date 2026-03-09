@@ -55,7 +55,11 @@ export function registerConfigCommand(program: Command): void {
       const c = getChalk();
       
       if (options.format === 'json') {
-        console.log(JSON.stringify(cfg, null, 2));
+        const maskedCfg: VeniceConfig = { ...cfg };
+        if (typeof maskedCfg.api_key === 'string' && maskedCfg.api_key.length > 0) {
+          maskedCfg.api_key = maskApiKey(maskedCfg.api_key);
+        }
+        console.log(JSON.stringify(maskedCfg, null, 2));
         return;
       }
 
