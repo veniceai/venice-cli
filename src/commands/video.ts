@@ -7,6 +7,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { queueVideoGeneration, getVideoStatus, retrieveVideo } from '../lib/api.js';
 import {
+  downloadToFile,
+  assertFileSizeWithinLimit,
+  mimeTypeFromPath,
+  MAX_VIDEO_DOWNLOAD_BYTES,
+  MAX_VIDEO_REFERENCE_IMAGE_BYTES,
+} from '../lib/media.js';
+import {
   formatSuccess,
   formatError,
   getChalk,
@@ -65,9 +72,15 @@ export function registerVideoCommands(program: Command): void {
           console.error(formatError(`Image file not found: ${options.image}`));
           process.exit(1);
         }
-        const imageData = fs.readFileSync(imagePath);
-        const ext = path.extname(imagePath).slice(1) || 'png';
-        const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+
+        assertFileSizeWithinLimit(
+          imagePath,
+          MAX_VIDEO_REFERENCE_IMAGE_BYTES,
+          'Reference image for video generation'
+        );
+
+        const imageData = await fs.promises.readFile(imagePath);
+        const mimeType = mimeTypeFromPath(imagePath, 'image/png');
         imageUrl = `data:${mimeType};base64,${imageData.toString('base64')}`;
       }
 
@@ -192,13 +205,10 @@ export function registerVideoCommands(program: Command): void {
 
         // Download the video
         console.log(`${c.dim('Downloading video...')}`);
-        const response = await fetch(result.video_url);
-        if (!response.ok) {
-          throw new Error(`Failed to download video: ${response.statusText}`);
-        }
-
-        const buffer = await response.arrayBuffer();
-        fs.writeFileSync(options.output, Buffer.from(buffer));
+        await downloadToFile(result.video_url, options.output, {
+          maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+          expectedContentTypePrefixes: ['video/'],
+        });
 
         console.log(formatSuccess(`Video saved to ${options.output}`));
         console.log(`${c.dim('Model:')} ${result.model}`);
