@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import { generateImage, upscaleImage } from '../lib/api.js';
+import { downloadToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
 import { getDefaultImageModel } from '../lib/config.js';
 import {
   formatSuccess,
@@ -117,9 +118,10 @@ export function registerImageCommand(program: Command): void {
         }
 
         if (options.output) {
-          const response = await fetch(result.url);
-          const buffer = await response.arrayBuffer();
-          fs.writeFileSync(options.output, Buffer.from(buffer));
+          await downloadToFile(result.url, options.output, {
+            maxBytes: MAX_IMAGE_DOWNLOAD_BYTES,
+            expectedContentTypePrefixes: ['image/'],
+          });
           console.log(formatSuccess(`Saved upscaled image to ${options.output}`));
         } else {
           console.log(`${c.cyan('🖼️  Upscaled URL:')} ${result.url}`);

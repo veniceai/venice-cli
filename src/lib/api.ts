@@ -7,7 +7,14 @@
 import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { getVersion } from './version.js';
+import { Readable } from 'stream';
 import type { Message, ToolDefinition, Model, Character } from '../types/index.js';
+import {
+  MAX_UPSCALE_IMAGE_BYTES,
+  MAX_TRANSCRIPTION_AUDIO_BYTES,
+  assertFileSizeWithinLimit,
+  mimeTypeFromPath,
+} from './media.js';
 
 const VENICE_API = 'https://api.venice.ai/api/v1';
 const MAX_RETRIES = 3;
@@ -404,16 +411,16 @@ export async function upscaleImage(
   } = {}
 ): Promise<{ url: string }> {
   const fs = await import('fs');
-  const path = await import('path');
 
   if (!fs.existsSync(imagePath)) {
     throw new Error(`File not found: ${imagePath}`);
   }
 
-  const imageData = fs.readFileSync(imagePath);
+  assertFileSizeWithinLimit(imagePath, MAX_UPSCALE_IMAGE_BYTES, 'Image file for upscaling');
+
+  const imageData = await fs.promises.readFile(imagePath);
   const base64 = imageData.toString('base64');
-  const ext = path.extname(imagePath).slice(1) || 'png';
-  const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+  const mimeType = mimeTypeFromPath(imagePath, 'image/png');
 
   const body = {
     model: options.model || 'upscaler',
@@ -504,40 +511,81 @@ export async function transcribe(
 }> {
   const fs = await import('fs');
   const path = await import('path');
+  const crypto = await import('crypto');
 
   if (!fs.existsSync(audioPath)) {
     throw new Error(`File not found: ${audioPath}`);
   }
 
-  const audioData = fs.readFileSync(audioPath);
+  const fileSize = assertFileSizeWithinLimit(
+    audioPath,
+    MAX_TRANSCRIPTION_AUDIO_BYTES,
+    'Audio file for transcription'
+  );
   const filename = path.basename(audioPath);
+  const mimeType = mimeTypeFromPath(audioPath, 'application/octet-stream');
 
-  const formData = new FormData();
-  formData.append('file', new Blob([audioData]), filename);
-  formData.append('model', options.model || 'nvidia/parakeet-tdt-0.6b-v3');
-  formData.append('response_format', 'json');
+  const boundary = `----venice-cli-${crypto.randomUUID()}`;
+  const CRLF = '\r\n';
+  const escapeField = (value: string): string => value.replace(/"/g, '\\"');
 
+  const formFields: Array<[string, string]> = [
+    ['model', options.model || 'nvidia/parakeet-tdt-0.6b-v3'],
+    ['response_format', 'json'],
+  ];
   if (options.language) {
-    formData.append('language', options.language);
+    formFields.push(['language', options.language]);
   }
   if (options.timestamps) {
-    formData.append('timestamp_granularities[]', 'word');
-    formData.append('timestamp_granularities[]', 'segment');
+    formFields.push(['timestamp_granularities[]', 'word']);
+    formFields.push(['timestamp_granularities[]', 'segment']);
   }
+
+  const fieldsPrefix = formFields
+    .map(([name, value]) =>
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="${escapeField(name)}"${CRLF}${CRLF}` +
+      `${value}${CRLF}`
+    )
+    .join('');
+  const fileHeader =
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="file"; filename="${escapeField(filename)}"${CRLF}` +
+    `Content-Type: ${mimeType}${CRLF}${CRLF}`;
+  const closingBoundary = `${CRLF}--${boundary}--${CRLF}`;
+
+  const headerBuffer = Buffer.from(fieldsPrefix + fileHeader, 'utf-8');
+  const footerBuffer = Buffer.from(closingBoundary, 'utf-8');
+  const contentLength = headerBuffer.length + fileSize + footerBuffer.length;
+
+  const multipartBody = Readable.from((async function* () {
+    yield headerBuffer;
+    for await (const chunk of fs.createReadStream(audioPath)) {
+      yield chunk;
+    }
+    yield footerBuffer;
+  })());
 
   const spinner = startSpinner('Transcribing...');
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
+    const requestInit: RequestInit & { duplex: 'half' } = {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${requireApiKey()}`,
         'User-Agent': `venice-cli/${getVersion()}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(contentLength),
       },
-      body: formData,
+      body: multipartBody as unknown as RequestInit['body'],
+      duplex: 'half',
       signal: controller.signal,
+    };
+
+    const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
+      ...requestInit,
     });
 
     clearTimeout(timeoutId);
