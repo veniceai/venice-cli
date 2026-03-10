@@ -2,7 +2,7 @@
 
 > Privacy-first AI from the command line. No browser. No tracking. Just you and the model.
 
-[![npm version](https://badge.fury.io/js/venice-cli.svg)](https://www.npmjs.com/package/venice-cli)
+[![npm version](https://badge.fury.io/js/veniceai-cli.svg)](https://www.npmjs.com/package/veniceai-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 The official command-line interface for [Venice AI](https://venice.ai). Chat with AI models, generate images, convert text to speech, transcribe audio, and more—all from your terminal.
@@ -10,13 +10,13 @@ The official command-line interface for [Venice AI](https://venice.ai). Chat wit
 ## Installation
 
 ```bash
-npm install -g venice-cli
+npm install -g veniceai-cli
 ```
 
 Or use without installing:
 
 ```bash
-npx venice-cli chat 'Hello, world!'
+npx veniceai-cli chat 'Hello, world!'
 ```
 
 ## Quick Start

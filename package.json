@@ -1,5 +1,5 @@
 {
-  "name": "venice-cli",
+  "name": "veniceai-cli",
   "version": "2.0.0",
   "description": "Privacy-first command line interface for Venice AI",
   "type": "module",
