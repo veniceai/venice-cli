@@ -86,6 +86,11 @@ export type TeeE2EEPolicyEvaluation = {
   failures: string[]
 }
 
+export type TeePolicyEvaluation = {
+  passed: boolean
+  failures: string[]
+}
+
 const TDX_TEE_TYPE = 0x81
 const TDX_BODY_OFFSET = 48
 const TDX_MIN_QUOTE_BYTES = 632
@@ -222,6 +227,65 @@ export const evaluateE2EEAttestationPolicy = (
       failures.push(
         'Reported signing address does not match the address derived from the attested signing public key.',
       )
+    }
+  }
+
+  return {
+    failures,
+    passed: failures.length === 0,
+  }
+}
+
+export const evaluateTEEAttestationPolicy = (
+  attestation: TeeVerificationResult,
+  expectedModelId: string,
+): TeePolicyEvaluation => {
+  const failures: string[] = []
+  const { parsedTdxQuote, serverVerification } = attestation
+
+  if (!attestation.evidencePresent) {
+    failures.push('No attestation evidence was returned for this model.')
+  }
+
+  if (attestation.attestedModel !== expectedModelId) {
+    failures.push(`Attested model ${attestation.attestedModel} does not match requested model ${expectedModelId}.`)
+  }
+
+  if (!attestation.intelQuote) {
+    failures.push('Attestation did not include an Intel TDX quote.')
+  }
+
+  if (!parsedTdxQuote) {
+    failures.push('Intel TDX quote could not be parsed client-side.')
+  } else {
+    if (parsedTdxQuote.teeType !== TDX_TEE_TYPE) {
+      failures.push(
+        `Unexpected TEE type in attestation quote: expected 0x${TDX_TEE_TYPE.toString(16)}, got 0x${parsedTdxQuote.teeType.toString(16)}.`,
+      )
+    }
+
+    if (isTdDebugMode(parsedTdxQuote.tdAttributes)) {
+      failures.push('TDX attestation indicates debug mode, which provides no confidentiality guarantees.')
+    }
+  }
+
+  if (!serverVerification) {
+    failures.push('Server verification details were not returned with the attestation evidence.')
+  } else {
+    if (serverVerification.nonceBinding?.bound !== true) {
+      failures.push(serverVerification.nonceBinding?.error ?? 'Client nonce was not bound to the attestation evidence.')
+    }
+
+    if (attestation.intelQuote && serverVerification.tdx?.valid !== true) {
+      failures.push(serverVerification.tdx?.error ?? 'Intel TDX attestation verification did not pass.')
+    }
+
+    if (attestation.nvidiaPayload && serverVerification.nvidia?.valid !== true) {
+      failures.push(serverVerification.nvidia?.error ?? 'NVIDIA GPU attestation verification did not pass.')
+    }
+
+    if (!serverVerification.tdx && !serverVerification.nvidia) {
+      failures.push('No hardware attestation verification results were returned by the server.')
     }
   }
 

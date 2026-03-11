@@ -40,6 +40,7 @@ import {
   parseTdxQuote,
   isTdDebugMode,
   evaluateE2EEAttestationPolicy,
+  evaluateTEEAttestationPolicy,
   type TeeVerificationResult,
 } from '../lib/tee.js';
 import type { Message, OutputFormat, ToolCall } from '../types/index.js';
@@ -189,8 +190,7 @@ async function verifyTEEAttestation(
     attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
   };
 
-  // Evaluate policy (reuse E2EE policy which checks TEE requirements)
-  const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
+  const policy = evaluateTEEAttestationPolicy(attestation, modelId);
   if (!policy.passed) {
     throw new Error(`TEE attestation policy failed: ${policy.failures.join('; ')}`);
   }
