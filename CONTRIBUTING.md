@@ -10,8 +10,8 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
 
 ### Prerequisites
 
-- Node.js 18.0.0 or higher
-- npm or yarn
+- Node.js 18.0.0 or higher (or Bun 1.3.0+)
+- npm, yarn, or Bun
 - A Venice AI API key for testing
 
 ### Development Setup
@@ -27,14 +27,29 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
    npm install
    ```
 
+   Or:
+   ```bash
+   bun install
+   ```
+
 3. Build the project:
    ```bash
    npm run build
    ```
 
+   Or:
+   ```bash
+   bun run build
+   ```
+
 4. Test your changes:
    ```bash
    npm run dev -- chat "Test message"
+   ```
+
+   Or:
+   ```bash
+   bun run dev:bun -- chat "Test message"
    ```
 
 ## Project Structure

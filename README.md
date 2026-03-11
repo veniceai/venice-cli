@@ -13,10 +13,22 @@ The official command-line interface for [Venice AI](https://venice.ai). Chat wit
 npm install -g veniceai-cli
 ```
 
+Or with Bun:
+
+```bash
+bun add -g veniceai-cli
+```
+
 Or use without installing:
 
 ```bash
 npx veniceai-cli chat 'Hello, world!'
+```
+
+Or with Bun:
+
+```bash
+bunx veniceai-cli chat 'Hello, world!'
 ```
 
 ## Quick Start
@@ -404,7 +416,7 @@ Venice CLI is designed with privacy in mind:
 
 ## Requirements
 
-- Node.js 18.0.0 or higher
+- Node.js 18.0.0 or higher (or Bun 1.3.0+)
 - A Venice AI API key
 
 ## Development
@@ -414,7 +426,7 @@ Venice CLI is designed with privacy in mind:
 git clone https://github.com/veniceai/venice-cli.git
 cd venice-cli
 
-# Install dependencies
+# Install dependencies (npm)
 npm install
 
 # Build
@@ -422,6 +434,22 @@ npm run build
 
 # Run locally
 npm run dev -- chat "Hello"
+```
+
+Using Bun:
+
+```bash
+# Install dependencies
+bun install
+
+# Build
+bun run build
+
+# Run locally (TypeScript source)
+bun run dev:bun -- chat "Hello"
+
+# Run compiled CLI
+bun run start:bun -- --help
 ```
 
 ## Contributing
