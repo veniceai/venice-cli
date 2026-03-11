@@ -420,16 +420,17 @@ async function readStdin(): Promise<string> {
 }
 
 export function buildChatUserMessages(prompt: string, pipedInput?: string): Message[] {
-  const userMessages: Message[] = [];
-
+  if (pipedInput && prompt) {
+    return [{ role: 'user', content: `${pipedInput}\n\n${prompt}` }];
+  }
   if (pipedInput) {
-    userMessages.push({ role: 'user', content: pipedInput });
+    return [{ role: 'user', content: pipedInput }];
   }
   if (prompt) {
-    userMessages.push({ role: 'user', content: prompt });
+    return [{ role: 'user', content: prompt }];
   }
 
-  return userMessages;
+  return [];
 }
 
 // Character prompts

@@ -12,12 +12,9 @@ test('buildChatUserMessages uses stdin when prompt is empty', () => {
   assert.deepEqual(messages, [{ role: 'user', content: 'error line 1\nerror line 2' }]);
 });
 
-test('buildChatUserMessages merges stdin and prompt in order', () => {
+test('buildChatUserMessages merges stdin and prompt into one message', () => {
   const messages = buildChatUserMessages('find the root cause', 'stack trace...');
-  assert.deepEqual(messages, [
-    { role: 'user', content: 'stack trace...' },
-    { role: 'user', content: 'find the root cause' },
-  ]);
+  assert.deepEqual(messages, [{ role: 'user', content: 'stack trace...\n\nfind the root cause' }]);
 });
 
 test('buildChatUserMessages returns empty array when both inputs are empty', () => {
