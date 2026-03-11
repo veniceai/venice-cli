@@ -10,6 +10,7 @@ import {
   detectOutputFormat,
 } from '../lib/output.js';
 import type { Model } from '../types/index.js';
+import { isE2EEModel, isTEEModel } from '../types/index.js';
 
 export function registerModelsCommand(program: Command): void {
   program
@@ -18,6 +19,8 @@ export function registerModelsCommand(program: Command): void {
     .option('-t, --type <type>', 'Filter by type (all|text|image|tts|asr|embedding|video|upscale|inpaint)')
     .option('-s, --search <query>', 'Search models by name')
     .option('--privacy', 'Show only privacy-preserving models')
+    .option('--tee', 'Show only TEE-attestable models')
+    .option('--e2ee', 'Show only E2EE-capable models')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
       const format = detectOutputFormat(options.format);
@@ -51,6 +54,16 @@ export function registerModelsCommand(program: Command): void {
           models = models.filter((m: Model) => isPrivacyPreserving(m));
         }
 
+        // Filter by TEE
+        if (options.tee) {
+          models = models.filter((m: Model) => isTEEModel(m));
+        }
+
+        // Filter by E2EE
+        if (options.e2ee) {
+          models = models.filter((m: Model) => isE2EEModel(m));
+        }
+
         // Sort by id
         models.sort((a: Model, b: Model) => (a.id || '').localeCompare(b.id || ''));
 
@@ -74,8 +87,21 @@ export function registerModelsCommand(program: Command): void {
           console.log(c.dim('─'.repeat(50)));
 
           for (const model of typeModels) {
-            const privacy = isPrivacyPreserving(model) ? c.green('🔒') : c.dim('📊');
-            console.log(`  ${privacy} ${c.cyan(model.id)}`);
+            const badges: string[] = [];
+            
+            if (isPrivacyPreserving(model)) {
+              badges.push(c.green('🔒'));
+            }
+            if (isE2EEModel(model)) {
+              badges.push(c.magenta('🔐'));
+            } else if (isTEEModel(model)) {
+              badges.push(c.blue('🛡️'));
+            }
+            if (badges.length === 0) {
+              badges.push(c.dim('📊'));
+            }
+            
+            console.log(`  ${badges.join(' ')} ${c.cyan(model.id)}`);
             
             if (model.model_spec?.description) {
               const desc = model.model_spec.description;
@@ -85,7 +111,7 @@ export function registerModelsCommand(program: Command): void {
           }
         }
 
-        console.log(`\n${c.dim('🔒 = Privacy-preserving (no data retention)')}`);
+        console.log(`\n${c.dim('🔒 = Privacy-preserving    🛡️ = TEE attestation    🔐 = E2EE encrypted')}`);
         console.log(c.dim('📊 = Standard model'));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));

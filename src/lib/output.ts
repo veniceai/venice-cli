@@ -42,6 +42,7 @@ export function startSpinner(text: string): Ora | null {
     text,
     color: 'cyan',
     spinner: 'dots',
+    interval: 120, // Slower animation to reduce flashing
   }).start();
   
   return currentSpinner;

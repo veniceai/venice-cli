@@ -7,6 +7,8 @@ import { randomUUID } from 'crypto';
 import {
   chatCompletion,
   chatCompletionStream,
+  listModels,
+  fetchTeeAttestation,
 } from '../lib/api.js';
 import {
   getDefaultModel,
@@ -27,7 +29,212 @@ import {
   detectOutputFormat,
   isPiped,
 } from '../lib/output.js';
+import {
+  generateEphemeralKeyPair,
+  encryptMessage,
+  decryptChunk,
+  isHexEncrypted,
+  zeroFill,
+} from '../lib/e2ee.js';
+import {
+  parseTdxQuote,
+  isTdDebugMode,
+  evaluateE2EEAttestationPolicy,
+  type TeeVerificationResult,
+} from '../lib/tee.js';
 import type { Message, OutputFormat, ToolCall } from '../types/index.js';
+import { isE2EEModel } from '../types/index.js';
+
+interface E2EEContext {
+  privateKey: Uint8Array;
+  publicKeyHex: string;
+  modelPublicKey: string;
+  signingAddress?: string;
+  attestation: TeeVerificationResult;
+}
+
+async function setupE2EE(
+  modelId: string,
+  showDetails: boolean,
+  format: OutputFormat,
+  quiet = false
+): Promise<E2EEContext> {
+  const c = getChalk();
+
+  try {
+    // Generate ephemeral key pair
+    const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
+
+    // Fetch attestation (spinner controlled by quiet flag)
+    const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
+
+    // Validate attestation
+    if (response.verified !== true) {
+      throw new Error('TEE attestation verification failed on server');
+    }
+
+    if (response.nonce !== clientNonce) {
+      throw new Error('Attestation nonce mismatch - possible replay attack');
+    }
+
+    // Parse TDX quote
+    const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
+
+    // Check for debug mode
+    if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
+      throw new Error('TDX debug mode detected - cannot trust enclave for E2EE');
+    }
+
+    // Get signing key
+    const signingKey = response.signing_key || response.signing_public_key;
+    if (!signingKey) {
+      throw new Error('No signing key in attestation response');
+    }
+
+    // Build verification result for policy evaluation
+    const attestation: TeeVerificationResult = {
+      report: response as Record<string, unknown>,
+      nonce: response.nonce,
+      attestedModel: response.model,
+      evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
+      signingAddress: response.signing_address,
+      signingKey,
+      intelQuote: response.intel_quote,
+      parsedTdxQuote,
+      nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
+      serverVerification: response.server_verification,
+      teeProvider: response.tee_provider,
+      fetchedAt: Date.now(),
+      attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
+    };
+
+    // Evaluate policy
+    const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
+    if (!policy.passed) {
+      throw new Error(`E2EE attestation policy failed: ${policy.failures.join('; ')}`);
+    }
+
+    // Show success after attestation verified (unless quiet mode)
+    if (!quiet) {
+      console.log(c.green('✓') + ' TEE attestation verified');
+
+      if (showDetails && format === 'pretty') {
+        console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
+        console.log(c.dim(`Model: ${response.model}`));
+        console.log(c.dim(`Signing Address: ${response.signing_address || 'N/A'}`));
+        if (parsedTdxQuote) {
+          console.log(c.dim(`TDX Version: ${parsedTdxQuote.version}`));
+          console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
+        }
+        console.log('');
+      }
+    }
+
+    return {
+      privateKey,
+      publicKeyHex,
+      modelPublicKey: signingKey,
+      signingAddress: response.signing_address,
+      attestation,
+    };
+  } catch (error) {
+    // apiRequest handles its own spinner cleanup on errors
+    throw error;
+  }
+}
+
+// Verify TEE attestation for TEE models (without E2EE encryption setup)
+async function verifyTEEAttestation(
+  modelId: string,
+  showDetails: boolean,
+  format: OutputFormat,
+  quiet = false
+): Promise<void> {
+  const c = getChalk();
+
+  // Fetch and verify attestation
+  const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
+
+  // Validate attestation
+  if (response.verified !== true) {
+    throw new Error('TEE attestation verification failed on server');
+  }
+
+  if (response.nonce !== clientNonce) {
+    throw new Error('Attestation nonce mismatch - possible replay attack');
+  }
+
+  // Parse TDX quote if present
+  const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
+
+  // Check for debug mode
+  if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
+    throw new Error('TDX debug mode detected - cannot trust enclave');
+  }
+
+  // Build verification result for policy evaluation
+  const attestation: TeeVerificationResult = {
+    report: response as Record<string, unknown>,
+    nonce: response.nonce,
+    attestedModel: response.model,
+    evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
+    signingAddress: response.signing_address,
+    signingKey: response.signing_key || response.signing_public_key,
+    intelQuote: response.intel_quote,
+    parsedTdxQuote,
+    nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
+    serverVerification: response.server_verification,
+    teeProvider: response.tee_provider,
+    fetchedAt: Date.now(),
+    attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
+  };
+
+  // Evaluate policy (reuse E2EE policy which checks TEE requirements)
+  const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
+  if (!policy.passed) {
+    throw new Error(`TEE attestation policy failed: ${policy.failures.join('; ')}`);
+  }
+
+  // Show success message
+  if (!quiet) {
+    console.log(c.cyan('🛡️  TEE model - running in Trusted Execution Environment'));
+    console.log(c.green('✓') + ' TEE attestation verified');
+
+    if (showDetails && format === 'pretty') {
+      console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
+      console.log(c.dim(`Model: ${response.model}`));
+      console.log(c.dim(`Signing Address: ${response.signing_address || 'N/A'}`));
+      if (parsedTdxQuote) {
+        console.log(c.dim(`TDX Version: ${parsedTdxQuote.version}`));
+        console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
+      }
+    }
+    console.log('');
+  }
+}
+
+function buildE2EEHeaders(context: E2EEContext): Record<string, string> {
+  return {
+    'X-Venice-TEE-Client-Pub-Key': context.publicKeyHex,
+    'X-Venice-TEE-Signing-Algo': 'ecdsa',
+    'X-Venice-TEE-Model-Pub-Key': context.modelPublicKey,
+  };
+}
+
+function encryptMessagesForE2EE(
+  messages: Message[],
+  modelPublicKey: string
+): Message[] {
+  return messages.map((msg) => {
+    if (msg.role === 'user' || msg.role === 'system') {
+      return {
+        ...msg,
+        content: encryptMessage(msg.content, modelPublicKey),
+      };
+    }
+    return msg;
+  });
+}
 
 export function registerChatCommand(program: Command): void {
   program
@@ -45,6 +252,10 @@ export function registerChatCommand(program: Command): void {
     .option('--strip-thinking', 'Strip thinking blocks from response')
     .option('--no-venice-prompt', 'Disable Venice system prompts')
     .option('--search-results-in-stream', 'Include search results in stream (when web-search enabled)')
+    .option('--e2ee', 'Enable E2EE encryption (auto-enabled for E2EE models)')
+    .option('--no-e2ee', 'Disable E2EE even for E2EE models')
+    .option('--tee-verify', 'Show TEE attestation details')
+    .option('-q, --quiet', 'Hide E2EE/TEE status messages (show only response)')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .option('--list-tools', 'List available tools')
     .action(async (promptParts: string[], options) => {
@@ -72,6 +283,56 @@ export function registerChatCommand(program: Command): void {
       const model = options.model || getDefaultModel();
       const format = detectOutputFormat(options.format);
       const shouldStream = options.stream !== false && !isPiped() && format === 'pretty';
+
+      // Check if model is TEE or E2EE
+      const looksLikeE2EEModel = model.toLowerCase().startsWith('e2ee-');
+      const looksLikeTEEModel = model.toLowerCase().startsWith('tee-');
+      let useE2EE = false;
+      let e2eeContext: E2EEContext | undefined;
+
+      // Verify TEE attestation for TEE models (but not E2EE, they do full E2EE setup)
+      if (looksLikeTEEModel && !looksLikeE2EEModel) {
+        try {
+          await verifyTEEAttestation(model, options.teeVerify, format, options.quiet);
+        } catch (error) {
+          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          process.exit(1);
+        }
+      }
+
+      // Check E2EE support - only fetch model list if needed
+      if (options.e2ee === true || (options.e2ee !== false && looksLikeE2EEModel)) {
+        // Verify E2EE support via API only when needed
+        try {
+          const models = await listModels({ showSpinner: !options.quiet });
+          const modelInfo = models.find((m) => m.id === model);
+
+          if (modelInfo && isE2EEModel(modelInfo)) {
+            useE2EE = true;
+            if (format === 'pretty' && !options.quiet) {
+              console.log(c.magenta('🔐 E2EE model detected - enabling end-to-end encryption\n'));
+            }
+          } else if (options.e2ee === true) {
+            console.error(formatError(`Model "${model}" does not support E2EE encryption.`));
+            process.exit(1);
+          }
+        } catch {
+          if (options.e2ee === true) {
+            console.error(formatError('Failed to verify E2EE model support.'));
+            process.exit(1);
+          }
+        }
+      }
+
+      // Set up E2EE context if needed
+      if (useE2EE) {
+        try {
+          e2eeContext = await setupE2EE(model, options.teeVerify, format, options.quiet);
+        } catch (error) {
+          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          process.exit(1);
+        }
+      }
 
       // Build messages array
       const messages: Message[] = [];
@@ -127,12 +388,12 @@ export function registerChatCommand(program: Command): void {
 
       try {
         if (shouldStream) {
-          await streamChat(messages, model, tools, options.interactiveTools, format, veniceParams);
+          await streamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet, options.stripThinking);
         } else {
-          await nonStreamChat(messages, model, tools, options.interactiveTools, format, veniceParams);
+          await nonStreamChat(messages, model, tools, options.interactiveTools, format, veniceParams, e2eeContext, options.quiet);
         }
 
-        // Save to history
+        // Save to history (don't save encrypted content)
         addConversation({
           id: randomUUID(),
           timestamp: new Date().toISOString(),
@@ -143,8 +404,115 @@ export function registerChatCommand(program: Command): void {
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
+      } finally {
+        // Securely clear E2EE private key from memory
+        if (e2eeContext?.privateKey) {
+          zeroFill(e2eeContext.privateKey);
+        }
       }
     });
+}
+
+// State machine for processing thinking blocks in streaming content
+interface ThinkingState {
+  inThinkingBlock: boolean;
+  thinkingBuffer: string; // Buffer content inside <think> until we see </think>
+  tagBuffer: string; // Buffer for partial tags
+}
+
+function processThinkingContent(
+  content: string,
+  state: ThinkingState,
+  options: { strip: boolean; format: OutputFormat },
+  chalk: ReturnType<typeof getChalk>
+): { output: string; state: ThinkingState } {
+  let output = '';
+  let text = state.tagBuffer + content;
+  let { inThinkingBlock, thinkingBuffer } = state;
+  let tagBuffer = '';
+
+  while (text.length > 0) {
+    if (!inThinkingBlock) {
+      // Look for opening <think> tag
+      const openIdx = text.indexOf('<think>');
+      if (openIdx === -1) {
+        // Check for partial <think tag at end
+        const partialIdx = text.lastIndexOf('<');
+        if (partialIdx !== -1 && partialIdx > text.length - 7) {
+          output += text.slice(0, partialIdx);
+          tagBuffer = text.slice(partialIdx);
+          text = '';
+        } else {
+          output += text;
+          text = '';
+        }
+      } else {
+        // Found opening tag
+        output += text.slice(0, openIdx);
+        text = text.slice(openIdx + 7); // Skip <think>
+        inThinkingBlock = true;
+        thinkingBuffer = '';
+      }
+    } else {
+      // Inside thinking block - look for closing </think> tag
+      const closeIdx = text.indexOf('</think>');
+      if (closeIdx === -1) {
+        // No closing tag yet - buffer the content
+        // Check for partial </think tag at end
+        const partialIdx = text.lastIndexOf('<');
+        if (partialIdx !== -1 && partialIdx > text.length - 8) {
+          thinkingBuffer += text.slice(0, partialIdx);
+          tagBuffer = text.slice(partialIdx);
+          text = '';
+        } else {
+          thinkingBuffer += text;
+          text = '';
+        }
+      } else {
+        // Found closing tag - we have a complete thinking block
+        thinkingBuffer += text.slice(0, closeIdx);
+        text = text.slice(closeIdx + 8); // Skip </think>
+        inThinkingBlock = false;
+        
+        // Output thinking content (formatted or stripped)
+        if (!options.strip && thinkingBuffer.trim()) {
+          if (options.format === 'pretty') {
+            output += chalk.dim('💭 ' + thinkingBuffer.trim()) + '\n';
+          } else {
+            output += thinkingBuffer;
+          }
+        }
+        thinkingBuffer = '';
+      }
+    }
+  }
+
+  return {
+    output,
+    state: { inThinkingBlock, thinkingBuffer, tagBuffer },
+  };
+}
+
+// Flush any remaining thinking buffer at end of stream
+// If <think> was opened but never closed, just output the content normally
+function flushThinkingState(
+  state: ThinkingState,
+  _options: { strip: boolean; format: OutputFormat },
+  _chalk: ReturnType<typeof getChalk>
+): string {
+  let output = '';
+  
+  // If we're still in a thinking block without closing tag, output content normally
+  if (state.inThinkingBlock && state.thinkingBuffer) {
+    output += state.thinkingBuffer;
+  }
+  
+  // Output any buffered partial tags
+  if (state.tagBuffer) {
+    output += state.tagBuffer;
+  }
+  
+  return output;
 }
 
 async function streamChat(
@@ -153,25 +521,79 @@ async function streamChat(
   tools: ReturnType<typeof getToolDefinitions>,
   interactiveTools: boolean,
   format: OutputFormat,
-  veniceParams?: Record<string, unknown>
+  veniceParams?: Record<string, unknown>,
+  e2eeContext?: E2EEContext,
+  quiet = false,
+  stripThinking = false
 ): Promise<void> {
   const c = getChalk();
-  const spinner = startSpinner('Thinking...');
 
   let fullContent = '';
   let collectedToolCalls: StreamToolCallDelta[] = [];
   let usage: any = null;
+  let thinkingState: ThinkingState = { inThinkingBlock: false, thinkingBuffer: '', tagBuffer: '' };
+
+  // E2EE: Encrypt messages if context provided (do this before starting spinner)
+  const messagesToSend = e2eeContext
+    ? encryptMessagesForE2EE(messages, e2eeContext.modelPublicKey)
+    : messages;
+
+  // Start spinner after encryption is done (skip E2EE-specific spinner in quiet mode)
+  const spinnerText = e2eeContext && !quiet ? 'Waiting for encrypted response...' : 'Thinking...';
+  const spinner = startSpinner(spinnerText);
+
+  // E2EE: Build headers
+  const additionalHeaders = e2eeContext ? buildE2EEHeaders(e2eeContext) : undefined;
+
+  // E2EE: Disable tools, web search, and Venice system prompt for E2EE models
+  // The Venice system prompt would be added server-side unencrypted, breaking E2EE
+  const effectiveTools = e2eeContext ? undefined : tools;
+  const effectiveVeniceParams = e2eeContext
+    ? { ...veniceParams, enable_web_search: undefined, include_venice_system_prompt: false }
+    : veniceParams;
 
   try {
-    const streamOptions: { model: string; tools?: typeof tools; venice_parameters?: Record<string, unknown> } = { model, tools };
-    if (veniceParams && Object.keys(veniceParams).length > 0) {
-      streamOptions.venice_parameters = veniceParams;
+    const streamOptions: {
+      model: string;
+      tools?: typeof tools;
+      venice_parameters?: Record<string, unknown>;
+      additionalHeaders?: Record<string, string>;
+    } = {
+      model,
+      tools: effectiveTools,
+      additionalHeaders,
+    };
+    if (effectiveVeniceParams && Object.keys(effectiveVeniceParams).length > 0) {
+      streamOptions.venice_parameters = effectiveVeniceParams;
     }
-    for await (const chunk of chatCompletionStream(messages, streamOptions)) {
+    for await (const chunk of chatCompletionStream(messagesToSend, streamOptions)) {
       if (chunk.content) {
         if (spinner) clearSpinner();
-        process.stdout.write(chunk.content);
-        fullContent += chunk.content;
+
+        // E2EE: Decrypt content if encrypted
+        let displayContent = chunk.content;
+        if (e2eeContext && isHexEncrypted(chunk.content)) {
+          try {
+            displayContent = decryptChunk(chunk.content, e2eeContext.privateKey);
+          } catch (decryptError) {
+            console.error(c.red('\n[E2EE Decryption Error]'));
+            throw decryptError;
+          }
+        }
+
+        // Process thinking blocks (format or strip)
+        const { output, state: newState } = processThinkingContent(
+          displayContent,
+          thinkingState,
+          { strip: stripThinking, format },
+          c
+        );
+        thinkingState = newState;
+
+        if (output) {
+          process.stdout.write(output);
+        }
+        fullContent += displayContent;
       }
 
       if (chunk.tool_calls) {
@@ -187,8 +609,14 @@ async function streamChat(
       }
     }
 
-    // Handle tool calls
-    if (collectedToolCalls.length > 0) {
+    // Flush any remaining buffered content (handles unclosed <think> tags)
+    const remaining = flushThinkingState(thinkingState, { strip: stripThinking, format }, c);
+    if (remaining) {
+      process.stdout.write(remaining);
+    }
+
+    // Handle tool calls (not supported with E2EE)
+    if (collectedToolCalls.length > 0 && !e2eeContext) {
       console.log('\n');
       const toolCalls = reconstructStreamToolCalls(collectedToolCalls);
 
@@ -233,6 +661,11 @@ async function streamChat(
     // Show usage
     if (usage && format === 'pretty') {
       console.log(formatUsage(usage));
+    }
+
+    // E2EE indicator (skip in quiet mode)
+    if (e2eeContext && format === 'pretty' && !quiet) {
+      console.log(c.magenta('🔐 Response decrypted end-to-end'));
     }
   } catch (error) {
     clearSpinner();
@@ -352,8 +785,15 @@ async function nonStreamChat(
   tools: ReturnType<typeof getToolDefinitions>,
   interactiveTools: boolean,
   format: OutputFormat,
-  veniceParams?: Record<string, unknown>
+  veniceParams?: Record<string, unknown>,
+  e2eeContext?: E2EEContext,
+  _quiet = false
 ): Promise<void> {
+  // E2EE requires streaming for response decryption
+  if (e2eeContext) {
+    throw new Error('E2EE requires streaming mode. Remove --no-stream flag when using E2EE models.');
+  }
+
   const chatOptions: { model: string; tools?: typeof tools; venice_parameters?: Record<string, unknown> } = { model, tools };
   if (veniceParams && Object.keys(veniceParams).length > 0) {
     chatOptions.venice_parameters = veniceParams;

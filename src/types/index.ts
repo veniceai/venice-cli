@@ -97,16 +97,26 @@ export interface UsageRecord {
   total_tokens?: number;
 }
 
+export interface ModelCapabilities {
+  privacy?: boolean;
+  supportsTeeAttestation?: boolean;
+  supportsE2EE?: boolean;
+}
+
 export interface Model {
   id: string;
   type?: string;
   model_spec?: {
     description?: string;
-    capabilities?: {
-      privacy?: boolean;
-    };
+    capabilities?: ModelCapabilities;
   };
 }
+
+export const isE2EEModel = (model: Model): boolean =>
+  model.type === 'text' && model.model_spec?.capabilities?.supportsE2EE === true;
+
+export const isTEEModel = (model: Model): boolean =>
+  model.model_spec?.capabilities?.supportsTeeAttestation === true;
 
 export interface Character {
   id: string;

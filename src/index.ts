@@ -22,6 +22,7 @@ import { registerConfigCommand } from './commands/config.js';
 import { registerCharactersCommand } from './commands/characters.js';
 import { registerCompletionsCommand } from './commands/completions.js';
 import { registerVideoCommands } from './commands/video.js';
+import { registerTeeCommand } from './commands/tee.js';
 import { formatError, getChalk } from './lib/output.js';
 import { getVersion } from './lib/version.js';
 
@@ -58,6 +59,7 @@ async function main() {
   registerCharactersCommand(program);
   registerCompletionsCommand(program);
   registerVideoCommands(program);
+  registerTeeCommand(program);
 
   // Handle errors gracefully
   program.exitOverride();
