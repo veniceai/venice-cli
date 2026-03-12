@@ -16,8 +16,7 @@ import {
   mimeTypeFromPath,
 } from './media.js';
 
-// TODO: Remove VENICE_API_BASE_URL override before release - only for local dev testing
-const VENICE_API = process.env.VENICE_API_BASE_URL || 'https://api.venice.ai/api/v1';
+const VENICE_API = 'https://api.venice.ai/api/v1';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
@@ -97,7 +96,6 @@ export async function apiRequest<T>(
     showSpinner?: boolean;
     spinnerText?: string;
     timeoutMs?: number;
-    additionalHeaders?: Record<string, string>;
   } = {}
 ): Promise<T> {
   const {
@@ -108,7 +106,6 @@ export async function apiRequest<T>(
     showSpinner = true,
     spinnerText = 'Processing...',
     timeoutMs = DEFAULT_TIMEOUT_MS,
-    additionalHeaders = {},
   } = options;
 
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
@@ -121,7 +118,7 @@ export async function apiRequest<T>(
     try {
       const response = await fetch(`${VENICE_API}${endpoint}`, {
         method,
-        headers: { ...getHeaders(), ...additionalHeaders },
+        headers: getHeaders(),
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -276,13 +273,11 @@ export async function* chatCompletionStream(
     tools?: ToolDefinition[];
     tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
     venice_parameters?: Record<string, unknown>;
-    additionalHeaders?: Record<string, string>;
   } = {}
 ): AsyncGenerator<{
   content?: string;
   tool_calls?: any[];
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-  completionId?: string;
   done: boolean;
 }> {
   const body: Record<string, unknown> = {
@@ -306,7 +301,6 @@ export async function* chatCompletionStream(
     body,
     stream: true,
     showSpinner: false,
-    additionalHeaders: options.additionalHeaders,
   });
 
   const reader = response.body?.getReader();
@@ -315,7 +309,6 @@ export async function* chatCompletionStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let totalUsage: any = null;
-  let completionId: string | undefined;
 
   try {
     while (true) {
@@ -337,7 +330,7 @@ export async function* chatCompletionStream(
                 ...totalUsage,
               });
             }
-            yield { done: true, usage: totalUsage, completionId };
+            yield { done: true, usage: totalUsage };
             return;
           }
 
@@ -345,21 +338,16 @@ export async function* chatCompletionStream(
             const json = JSON.parse(data);
             const delta = json.choices?.[0]?.delta;
             
-            // Capture completion ID for E2EE signature verification
-            if (json.id && !completionId) {
-              completionId = json.id;
-            }
-
             if (json.usage) {
               totalUsage = json.usage;
             }
 
             if (delta?.content) {
-              yield { content: delta.content, done: false, completionId };
+              yield { content: delta.content, done: false };
             }
 
             if (delta?.tool_calls) {
-              yield { tool_calls: delta.tool_calls, done: false, completionId };
+              yield { tool_calls: delta.tool_calls, done: false };
             }
           } catch {
             // Skip malformed JSON
@@ -371,7 +359,7 @@ export async function* chatCompletionStream(
     reader.releaseLock();
   }
 
-  yield { done: true, usage: totalUsage, completionId };
+  yield { done: true, usage: totalUsage };
 }
 
 // Image generation (Venice-native endpoint)
@@ -663,16 +651,13 @@ export async function generateEmbeddings(
 }
 
 // List models
-export async function listModels(
-  options: { showSpinner?: boolean } = {}
-): Promise<Model[]> {
-  const { showSpinner: showSpinnerOption = true } = options;
+export async function listModels(): Promise<Model[]> {
   const modelTypes = ['text', 'asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video'];
   const merged = new Map<string, Model>();
 
   // API defaults to text-only when no type is provided, so iterate known types
   const requests: Array<{ endpoint: string; requestedType?: string; showSpinner: boolean }> = [
-    { endpoint: '/models', showSpinner: showSpinnerOption },
+    { endpoint: '/models', showSpinner: true },
     ...modelTypes.map((type) => ({
       endpoint: `/models?type=${encodeURIComponent(type)}`,
       requestedType: type,
@@ -854,81 +839,4 @@ export async function webSearch(
     content: response.content,
     usage: response.usage,
   };
-}
-
-// TEE Attestation types
-export type TeeAttestationResponse = {
-  verified?: boolean;
-  nonce: string;
-  model: string;
-  intel_quote?: string;
-  signing_address?: string;
-  signing_key?: string;
-  signing_public_key?: string;
-  nvidia_payload?: string;
-  server_verification?: {
-    tdx?: { valid: boolean; error?: string };
-    nvidia?: { valid: boolean; error?: string };
-    signingAddressBinding?: { bound: boolean; error?: string };
-    nonceBinding?: { bound: boolean; method?: 'sha256' | 'raw'; error?: string };
-    verifiedAt: string;
-    verificationDurationMs: number;
-  };
-  tee_provider?: string;
-};
-
-export type TeeSignatureResponse = {
-  text?: string;
-  signature?: string | { algorithm?: string; value?: string; public_key?: string };
-  signing_address?: string;
-  payload?: { request_hash?: string; response_hash?: string; timestamp?: string };
-  model?: string;
-  request_id?: string;
-  requested_request_id?: string;
-  tee_provider?: string;
-  tee_hardware?: string;
-};
-
-function generateClientNonce(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-// Fetch TEE attestation for a model
-export async function fetchTeeAttestation(
-  modelId: string,
-  options: { showSpinner?: boolean } = {}
-): Promise<{
-  response: TeeAttestationResponse;
-  clientNonce: string;
-}> {
-  const { showSpinner = true } = options;
-  const clientNonce = generateClientNonce();
-  const endpoint = `/tee/attestation?model=${encodeURIComponent(modelId)}&nonce=${clientNonce}`;
-
-  const response = await apiRequest<TeeAttestationResponse>(endpoint, {
-    method: 'GET',
-    showSpinner,
-    spinnerText: 'Fetching TEE attestation...',
-    retries: 1,
-  });
-
-  return { response, clientNonce };
-}
-
-// Fetch TEE signature for a completed request
-export async function fetchTeeSignature(
-  modelId: string,
-  completionId: string
-): Promise<TeeSignatureResponse> {
-  const endpoint = `/tee/signature?request_id=${encodeURIComponent(completionId)}&model=${encodeURIComponent(modelId)}`;
-
-  return apiRequest<TeeSignatureResponse>(endpoint, {
-    method: 'GET',
-    spinnerText: 'Fetching TEE signature...',
-    retries: 1,
-  });
 }

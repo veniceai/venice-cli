@@ -41,8 +41,6 @@ npx veniceai-cli chat 'Hello, world!'
 ## Features
 
 - 🤖 **Chat** with state-of-the-art AI models
-- 🔐 **End-to-End Encryption (E2EE)** for maximum privacy
-- 🛡️ **TEE Attestation** verification for trusted execution
 - 🔍 **Web Search** with AI-powered synthesis
 - 🖼️ **Image Generation** from text prompts
 - 🔊 **Text-to-Speech** with 35+ voices across languages
@@ -83,15 +81,6 @@ venice chat -f json "List 3 colors" | jq '.content'
 
 # Disable streaming
 venice chat --no-stream "Quick question"
-
-# E2EE encrypted chat (auto-enabled for E2EE models)
-venice chat -m e2ee-qwen3-30b-a3b "This message is end-to-end encrypted"
-
-# Show TEE attestation details
-venice chat -m e2ee-qwen3-30b-a3b --tee-verify "Verify the secure enclave"
-
-# Quiet mode - E2EE without status messages (looks like normal chat)
-venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal chat"
 ```
 
 **Options:**
@@ -110,10 +99,6 @@ venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal ch
 | `--strip-thinking` | Strip thinking blocks from response |
 | `--no-venice-prompt` | Disable Venice system prompts |
 | `--search-results-in-stream` | Include search results in stream |
-| `--e2ee` | Enable E2EE encryption (auto-enabled for E2EE models) |
-| `--no-e2ee` | Disable E2EE even for E2EE models |
-| `--tee-verify` | Show TEE attestation details |
-| `-q, --quiet` | Hide E2EE/TEE status messages (show only response) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
 ### Web Search
@@ -232,35 +217,6 @@ venice video models
 - **Grok Imagine**: `grok-imagine-text-to-video`, `grok-imagine-image-to-video`
 - **LTX2**: `ltx2-fast-text-to-video`, `ltx2-fast-image-to-video`
 
-### TEE Attestation
-
-Venice supports Trusted Execution Environment (TEE) attestation for models running in secure enclaves. This provides cryptographic proof that your data is processed in a trusted environment.
-
-```bash
-# Fetch and display TEE attestation for a model
-venice tee attestation e2ee-qwen3-30b-a3b
-
-# With verbose TDX quote details
-venice tee attestation --verbose e2ee-qwen3-30b-a3b
-
-# Run full E2EE policy verification
-venice tee verify e2ee-qwen3-30b-a3b
-
-# Verify a response signature (requires completion ID from a previous request)
-venice tee signature e2ee-qwen3-30b-a3b <completion-id>
-
-# Verify signature matches expected signer address
-venice tee signature e2ee-qwen3-30b-a3b <completion-id> --verify-signer 0x123...
-```
-
-**TEE Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `attestation <model>` | Fetch and display TEE attestation report |
-| `verify <model>` | Run full E2EE attestation policy verification |
-| `signature <model> <id>` | Fetch and verify TEE response signature |
-
 ### Models
 
 ```bash
@@ -273,12 +229,6 @@ venice models -t audio
 
 # Show only privacy-preserving models
 venice models --privacy
-
-# Show TEE-attestable models
-venice models --tee
-
-# Show E2EE-capable models
-venice models --e2ee
 
 # Search models
 venice models -s llama
@@ -439,33 +389,11 @@ venice chat "Generate code" | pbcopy
 
 Venice CLI is designed with privacy in mind:
 
-- **End-to-End Encryption (E2EE)**: Messages encrypted client-side, decrypted only in the TEE—Venice cannot read your data
-- **TEE Attestation**: Cryptographically verify that models run in secure enclaves before sending data
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI doesn't collect or send usage data
 - **Local configuration**: API key stored locally with restricted permissions
 - **Transparent**: You can see exactly what's being sent to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
-
-### E2EE Models
-
-E2EE models provide the highest level of privacy. When using an E2EE model:
-
-1. The CLI fetches and verifies TEE attestation
-2. An ephemeral key pair is generated for the session
-3. All messages are encrypted client-side using ECDH + AES-GCM
-4. Only the TEE enclave can decrypt and process your data
-5. Responses are encrypted and decrypted client-side
-
-```bash
-# List E2EE-capable models
-venice models --e2ee
-
-# Chat with E2EE (auto-enabled for E2EE models)
-venice chat -m e2ee-qwen3-30b-a3b "Your private message here"
-```
-
-**Note:** E2EE mode disables tools and web search to maintain end-to-end encryption.
 
 ## Environment Variables
 
