@@ -56,15 +56,16 @@ export function registerChatCommand(program: Command): void {
         return;
       }
 
-      // Get prompt from args or stdin
+      // Get prompt from args and optionally stdin
       let prompt = promptParts.join(' ');
-      
-      if (!prompt && !process.stdin.isTTY) {
-        // Read from stdin
-        prompt = await readStdin();
+      let pipedInput = '';
+
+      if (!process.stdin.isTTY) {
+        pipedInput = await readStdin();
       }
 
-      if (!prompt) {
+      const userMessage = buildChatUserMessage(prompt, pipedInput);
+      if (!userMessage) {
         console.error(formatError('No prompt provided. Usage: venice chat "Your message"'));
         process.exit(1);
       }
@@ -100,8 +101,8 @@ export function registerChatCommand(program: Command): void {
         }
       }
 
-      // Add user message
-      messages.push({ role: 'user', content: prompt });
+      // Add user message from stdin/args
+      messages.push(userMessage);
 
       // Get tool definitions
       const toolNames = options.tools?.split(',').map((t: string) => t.trim()) || [];
@@ -416,6 +417,20 @@ async function readStdin(): Promise<string> {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf-8').trim();
+}
+
+export function buildChatUserMessage(prompt: string, pipedInput?: string): Message | null {
+  if (pipedInput && prompt) {
+    return { role: 'user', content: `${pipedInput}\n\n${prompt}` };
+  }
+  if (pipedInput) {
+    return { role: 'user', content: pipedInput };
+  }
+  if (prompt) {
+    return { role: 'user', content: prompt };
+  }
+
+  return null;
 }
 
 // Character prompts
