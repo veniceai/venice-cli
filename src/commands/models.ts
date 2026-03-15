@@ -105,8 +105,12 @@ export function registerModelsCommand(program: Command): void {
             
             if (model.model_spec?.description) {
               const desc = model.model_spec.description;
-              const truncated = desc.length > 60 ? desc.slice(0, 60) + '...' : desc;
-              console.log(`     ${c.dim(truncated)}`);
+              const indent = '     ';
+              const maxWidth = Math.max(60, (process.stdout.columns || 80) - indent.length - 2);
+              const wrapped = wrapText(desc, maxWidth);
+              for (const line of wrapped) {
+                console.log(`${indent}${c.dim(line)}`);
+              }
             }
           }
         }
@@ -180,4 +184,27 @@ function isPrivacyPreserving(model: Model): boolean {
 
 function capitalizeFirst(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function wrapText(text: string, maxWidth: number): string[] {
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    if (currentLine.length === 0) {
+      currentLine = word;
+    } else if (currentLine.length + 1 + word.length <= maxWidth) {
+      currentLine += ' ' + word;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines;
 }

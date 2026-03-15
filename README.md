@@ -85,16 +85,16 @@ venice chat -f json "List 3 colors" | jq '.content'
 venice chat --no-stream "Quick question"
 
 # E2EE encrypted chat (auto-enabled based on model capabilities)
-venice chat -m e2ee-qwen3-30b-a3b-p "This message is end-to-end encrypted"
+venice chat -m e2ee-qwen3-30b-a3b "This message is end-to-end encrypted"
 
 # TEE-only mode (attestation verified, no encryption)
-venice chat -m e2ee-qwen3-30b-a3b-p --no-e2ee "Verified but not encrypted"
+venice chat -m e2ee-qwen3-30b-a3b --no-e2ee "Verified but not encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-qwen3-30b-a3b-p --tee-verify "Verify the secure enclave"
+venice chat -m e2ee-qwen3-30b-a3b --tee-verify "Verify the secure enclave"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
-venice chat -m e2ee-qwen3-30b-a3b-p -q "This is encrypted but looks like normal chat"
+venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal chat"
 ```
 
 **Options:**
@@ -250,10 +250,10 @@ venice tee attestation --verbose tee-qwen3-30b-a3b
 venice tee verify tee-qwen3-30b-a3b
 
 # Verify a response signature (requires completion ID from a previous request)
-venice tee signature e2ee-qwen3-30b-a3b-p <completion-id>
+venice tee signature e2ee-qwen3-30b-a3b <completion-id>
 
 # Verify signature matches expected signer address
-venice tee signature e2ee-qwen3-30b-a3b-p <completion-id> --verify-signer 0x123...
+venice tee signature e2ee-qwen3-30b-a3b <completion-id> --verify-signer 0x123...
 ```
 
 **TEE Commands:**
