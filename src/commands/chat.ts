@@ -43,8 +43,8 @@ import {
   evaluateTEEAttestationPolicy,
   type TeeVerificationResult,
 } from '../lib/tee.js';
-import type { Message, OutputFormat, ToolCall } from '../types/index.js';
-import { isE2EEModel } from '../types/index.js';
+import type { Message, Model, OutputFormat, ToolCall } from '../types/index.js';
+import { isE2EEModel, isTEEModel } from '../types/index.js';
 
 interface E2EEContext {
   privateKey: Uint8Array;
@@ -284,14 +284,52 @@ export function registerChatCommand(program: Command): void {
       const format = detectOutputFormat(options.format);
       const shouldStream = options.stream !== false && !isPiped() && format === 'pretty';
 
-      // Check if model is TEE or E2EE
-      const looksLikeE2EEModel = model.toLowerCase().startsWith('e2ee-');
-      const looksLikeTEEModel = model.toLowerCase().startsWith('tee-');
       let useE2EE = false;
+      let useTEE = false;
       let e2eeContext: E2EEContext | undefined;
+      let modelInfo: Model | undefined;
 
-      // Verify TEE attestation for TEE models (but not E2EE, they do full E2EE setup)
-      if (looksLikeTEEModel && !looksLikeE2EEModel) {
+      // Fetch model capabilities from API
+      try {
+        const models = await listModels({ showSpinner: !options.quiet });
+        modelInfo = models.find((m) => m.id === model);
+      } catch {
+        // If we can't fetch models and user explicitly requested E2EE, fail
+        if (options.e2ee === true) {
+          console.error(formatError('Failed to fetch model capabilities.'));
+          process.exit(1);
+        }
+      }
+
+      // Determine mode based on model capabilities and flags
+      if (modelInfo) {
+        const supportsE2EE = isE2EEModel(modelInfo);
+        const supportsTEE = isTEEModel(modelInfo);
+
+        if (options.e2ee === true) {
+          // User explicitly requested E2EE
+          if (!supportsE2EE) {
+            console.error(formatError(`Model "${model}" does not support E2EE encryption.`));
+            process.exit(1);
+          }
+          useE2EE = true;
+        } else if (options.e2ee === false) {
+          // User explicitly disabled E2EE - use TEE-only if supported
+          if (supportsTEE || supportsE2EE) {
+            useTEE = true;
+          }
+        } else {
+          // Auto-detect: use E2EE if supported, otherwise TEE if supported
+          if (supportsE2EE) {
+            useE2EE = true;
+          } else if (supportsTEE) {
+            useTEE = true;
+          }
+        }
+      }
+
+      // TEE-only mode: verify attestation without encryption
+      if (useTEE && !useE2EE) {
         try {
           await verifyTEEAttestation(model, options.teeVerify, format, options.quiet);
         } catch (error) {
@@ -300,32 +338,11 @@ export function registerChatCommand(program: Command): void {
         }
       }
 
-      // Check E2EE support - only fetch model list if needed
-      if (options.e2ee === true || (options.e2ee !== false && looksLikeE2EEModel)) {
-        // Verify E2EE support via API only when needed
-        try {
-          const models = await listModels({ showSpinner: !options.quiet });
-          const modelInfo = models.find((m) => m.id === model);
-
-          if (modelInfo && isE2EEModel(modelInfo)) {
-            useE2EE = true;
-            if (format === 'pretty' && !options.quiet) {
-              console.log(c.magenta('🔐 E2EE model detected - enabling end-to-end encryption\n'));
-            }
-          } else if (options.e2ee === true) {
-            console.error(formatError(`Model "${model}" does not support E2EE encryption.`));
-            process.exit(1);
-          }
-        } catch {
-          if (options.e2ee === true) {
-            console.error(formatError('Failed to verify E2EE model support.'));
-            process.exit(1);
-          }
-        }
-      }
-
-      // Set up E2EE context if needed
+      // E2EE mode: full attestation + encryption setup
       if (useE2EE) {
+        if (format === 'pretty' && !options.quiet) {
+          console.log(c.magenta('🔐 E2EE model detected - enabling end-to-end encryption\n'));
+        }
         try {
           e2eeContext = await setupE2EE(model, options.teeVerify, format, options.quiet);
         } catch (error) {
@@ -384,6 +401,10 @@ export function registerChatCommand(program: Command): void {
       }
       if (options.searchResultsInStream) {
         veniceParams.include_search_results_in_stream = true;
+      }
+      // Explicitly disable E2EE when --no-e2ee is specified
+      if (options.e2ee === false) {
+        veniceParams.enable_e2ee = false;
       }
 
       try {

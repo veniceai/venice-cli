@@ -913,7 +913,7 @@ export async function fetchTeeAttestation(
     method: 'GET',
     showSpinner,
     spinnerText: 'Fetching TEE attestation...',
-    retries: 1,
+    retries: 5,
   });
 
   return { response, clientNonce };

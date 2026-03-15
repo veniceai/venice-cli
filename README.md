@@ -84,14 +84,17 @@ venice chat -f json "List 3 colors" | jq '.content'
 # Disable streaming
 venice chat --no-stream "Quick question"
 
-# E2EE encrypted chat (auto-enabled for E2EE models)
-venice chat -m e2ee-qwen3-30b-a3b "This message is end-to-end encrypted"
+# E2EE encrypted chat (auto-enabled based on model capabilities)
+venice chat -m e2ee-qwen3-30b-a3b-p "This message is end-to-end encrypted"
+
+# TEE-only mode (attestation verified, no encryption)
+venice chat -m e2ee-qwen3-30b-a3b-p --no-e2ee "Verified but not encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-qwen3-30b-a3b --tee-verify "Verify the secure enclave"
+venice chat -m e2ee-qwen3-30b-a3b-p --tee-verify "Verify the secure enclave"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
-venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal chat"
+venice chat -m e2ee-qwen3-30b-a3b-p -q "This is encrypted but looks like normal chat"
 ```
 
 **Options:**
@@ -110,8 +113,8 @@ venice chat -m e2ee-qwen3-30b-a3b -q "This is encrypted but looks like normal ch
 | `--strip-thinking` | Strip thinking blocks from response |
 | `--no-venice-prompt` | Disable Venice system prompts |
 | `--search-results-in-stream` | Include search results in stream |
-| `--e2ee` | Enable E2EE encryption (auto-enabled for E2EE models) |
-| `--no-e2ee` | Disable E2EE even for E2EE models |
+| `--e2ee` | Enable E2EE encryption (auto-enabled for models with E2EE capability) |
+| `--no-e2ee` | Disable E2EE, use TEE-only mode (verifies attestation without encryption) |
 | `--tee-verify` | Show TEE attestation details |
 | `-q, --quiet` | Hide E2EE/TEE status messages (show only response) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
@@ -238,19 +241,19 @@ Venice supports Trusted Execution Environment (TEE) attestation for models runni
 
 ```bash
 # Fetch and display TEE attestation for a model
-venice tee attestation e2ee-qwen3-30b-a3b
+venice tee attestation tee-qwen3-30b-a3b
 
 # With verbose TDX quote details
-venice tee attestation --verbose e2ee-qwen3-30b-a3b
+venice tee attestation --verbose tee-qwen3-30b-a3b
 
-# Run full E2EE policy verification
-venice tee verify e2ee-qwen3-30b-a3b
+# Run TEE attestation policy verification
+venice tee verify tee-qwen3-30b-a3b
 
 # Verify a response signature (requires completion ID from a previous request)
-venice tee signature e2ee-qwen3-30b-a3b <completion-id>
+venice tee signature e2ee-qwen3-30b-a3b-p <completion-id>
 
 # Verify signature matches expected signer address
-venice tee signature e2ee-qwen3-30b-a3b <completion-id> --verify-signer 0x123...
+venice tee signature e2ee-qwen3-30b-a3b-p <completion-id> --verify-signer 0x123...
 ```
 
 **TEE Commands:**
@@ -258,7 +261,7 @@ venice tee signature e2ee-qwen3-30b-a3b <completion-id> --verify-signer 0x123...
 | Command | Description |
 |---------|-------------|
 | `attestation <model>` | Fetch and display TEE attestation report |
-| `verify <model>` | Run full E2EE attestation policy verification |
+| `verify <model>` | Run TEE attestation policy verification |
 | `signature <model> <id>` | Fetch and verify TEE response signature |
 
 ### Models
@@ -449,7 +452,7 @@ Venice CLI is designed with privacy in mind:
 
 ### E2EE Models
 
-E2EE models provide the highest level of privacy. When using an E2EE model:
+E2EE models provide the highest level of privacy. The CLI automatically detects E2EE support via model capabilities (not model names). When using an E2EE-capable model:
 
 1. The CLI fetches and verifies TEE attestation
 2. An ephemeral key pair is generated for the session
@@ -461,11 +464,26 @@ E2EE models provide the highest level of privacy. When using an E2EE model:
 # List E2EE-capable models
 venice models --e2ee
 
-# Chat with E2EE (auto-enabled for E2EE models)
-venice chat -m e2ee-qwen3-30b-a3b "Your private message here"
+# Chat with E2EE (auto-enabled based on model capabilities)
+venice chat -m <e2ee-capable-model> "Your private message here"
+
+# TEE-only mode: verify attestation without encryption
+venice chat -m <e2ee-capable-model> --no-e2ee "TEE verified, not encrypted"
 ```
 
 **Note:** E2EE mode disables tools and web search to maintain end-to-end encryption.
+
+### TEE Models
+
+TEE (Trusted Execution Environment) models run in secure enclaves with cryptographic attestation. The CLI automatically verifies attestation for models with TEE support.
+
+```bash
+# List TEE-capable models
+venice models --tee
+
+# Chat with TEE attestation verification
+venice chat -m <tee-capable-model> "Verified secure execution"
+```
 
 ## Environment Variables
 
