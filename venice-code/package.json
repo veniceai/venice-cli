@@ -1,0 +1,44 @@
+{
+  "name": "venice-code",
+  "version": "1.0.0",
+  "description": "AI-powered coding assistant CLI built on Venice AI",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "venice-code": "bin/venice-code.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "ai",
+    "coding",
+    "assistant",
+    "cli",
+    "venice",
+    "llm",
+    "code-generation",
+    "refactoring"
+  ],
+  "author": "Venice AI",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "ora": "^8.0.1",
+    "micromatch": "^4.0.5"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.6",
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
