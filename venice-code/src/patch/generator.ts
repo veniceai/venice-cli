@@ -80,6 +80,17 @@ function buildHunk(
 
   const hunkChanges = changes.filter(c => c.oldLine >= start && c.oldLine <= end);
 
+  // Calculate the offset for new lines based on changes before this hunk
+  const changesBefore = changes.filter(c => c.oldLine < start);
+  let newLineOffset = 0;
+  for (const change of changesBefore) {
+    if (change.type === 'add') {
+      newLineOffset++;
+    } else if (change.type === 'remove') {
+      newLineOffset--;
+    }
+  }
+
   for (let i = start; i <= end; i++) {
     const change = hunkChanges.find(c => c.oldLine === i);
 
@@ -121,7 +132,7 @@ function buildHunk(
   return {
     oldStart: start + 1,
     oldLines: oldCount,
-    newStart: start + 1,
+    newStart: start + 1 + newLineOffset,
     newLines: newCount,
     lines,
   };

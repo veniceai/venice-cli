@@ -4,8 +4,10 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { execFile } from 'child_process';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Get git status
@@ -31,7 +33,7 @@ export async function getGitDiff(options: {
   const { staged = false, files = [] } = options;
 
   try {
-    const args = ['git', 'diff'];
+    const args = ['diff'];
     
     if (staged) {
       args.push('--staged');
@@ -41,7 +43,8 @@ export async function getGitDiff(options: {
       args.push('--', ...files);
     }
 
-    const { stdout } = await execAsync(args.join(' '), {
+    // Use execFile instead of exec to avoid shell injection
+    const { stdout } = await execFileAsync('git', args, {
       cwd: process.cwd(),
       maxBuffer: 1024 * 1024 * 10, // 10MB
     });

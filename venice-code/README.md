@@ -341,13 +341,18 @@ Fixing issues in: src/api.ts
 Applying fix:
 --- src/api.ts
 +++ src/api.ts
-@@ -15,6 +15,7 @@
+@@ -15,10 +15,17 @@
++  const controller = new AbortController();
++  const timeoutId = setTimeout(() => controller.abort(), 30000);
++
    const response = await fetch(url, {
      method: 'POST',
      headers: { 'Content-Type': 'application/json' },
-+    timeout: 30000,
-     body: JSON.stringify(data)
+     body: JSON.stringify(data),
++    signal: controller.signal
    });
++
++  clearTimeout(timeoutId);
 
 ✓ Applied patch successfully
 ✓ Created backup: ~/.config/venice-code/backups/src_api.ts.2026-03-30T19-00-00.backup

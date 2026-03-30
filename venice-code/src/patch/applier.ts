@@ -2,7 +2,7 @@
  * Patch applier - safely apply patches to files
  */
 
-import type { Patch, PatchResult } from '../types/index.js';
+import type { Patch, PatchResult, PatchHunk } from '../types/index.js';
 import { readFileContent, writeFileContent, backupFile, fileExists } from '../utils/fs-helpers.js';
 import { BACKUP_DIR } from '../config/defaults.js';
 import { validatePatch } from './parser.js';
@@ -116,8 +116,8 @@ function applyHunks(lines: string[], patch: Patch): string[] {
 /**
  * Find the position where a hunk should be applied
  */
-function findHunkPosition(lines: string[], hunk: any): number {
-  const contextLines = hunk.lines.filter((l: any) => l.type === 'context');
+function findHunkPosition(lines: string[], hunk: PatchHunk): number {
+  const contextLines = hunk.lines.filter(l => l.type === 'context');
   
   if (contextLines.length === 0) {
     // No context, use hunk position directly (adjusted for 0-indexing)

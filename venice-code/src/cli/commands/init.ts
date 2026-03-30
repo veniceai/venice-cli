@@ -24,25 +24,37 @@ export function registerInitCommand(program: Command): void {
           console.log('You need a Venice AI API key to use venice-code.');
           console.log('Get your API key from: https://venice.ai/settings/api\n');
 
-          const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          });
-
-          const apiKey = await new Promise<string>((resolve) => {
-            rl.question('Enter your Venice API key: ', (answer) => {
-              rl.close();
-              resolve(answer.trim());
-            });
-          });
-
-          if (apiKey) {
-            config.api_key = apiKey;
+          // Check if VENICE_API_KEY env var is set
+          const envApiKey = process.env.VENICE_API_KEY;
+          if (envApiKey && envApiKey.trim()) {
+            config.api_key = envApiKey.trim();
             await saveConfig(config);
-            logSuccess('API key saved\n');
+            logSuccess('API key loaded from VENICE_API_KEY environment variable\n');
           } else {
-            logError('No API key provided');
-            process.exit(1);
+            // Warn about security
+            console.log(chalk.yellow('⚠ Warning: ') + 'API key input will be echoed to your terminal.');
+            console.log('For better security, set the VENICE_API_KEY environment variable instead.\n');
+
+            const rl = readline.createInterface({
+              input: process.stdin,
+              output: process.stdout,
+            });
+
+            const apiKey = await new Promise<string>((resolve) => {
+              rl.question('Enter your Venice API key: ', (answer) => {
+                rl.close();
+                resolve(answer.trim());
+              });
+            });
+
+            if (apiKey) {
+              config.api_key = apiKey;
+              await saveConfig(config);
+              logSuccess('API key saved\n');
+            } else {
+              logError('No API key provided');
+              process.exit(1);
+            }
           }
         }
 

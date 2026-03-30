@@ -12,7 +12,8 @@
 ### 1. Navigate to Project Directory
 
 ```bash
-cd /home/xmrfk/venice-code
+# After cloning or downloading the repository
+cd venice-code
 ```
 
 ### 2. Install Dependencies
@@ -249,7 +250,7 @@ npm run build
 After installation, you'll have:
 
 ```
-/home/xmrfk/venice-code/
+venice-code/
 ├── src/              # TypeScript source files
 ├── dist/             # Compiled JavaScript (after build)
 ├── bin/              # Executable script

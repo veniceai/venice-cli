@@ -102,8 +102,8 @@ export async function listFiles(
         });
         results.push(...subFiles);
       } else if (entry.isFile()) {
-        // Check if file matches pattern
-        if (!pattern || micromatch.isMatch(relativePath, pattern, { dot: true })) {
+        // Check if file matches pattern (using matchBase for patterns like "*.ts")
+        if (!pattern || micromatch.isMatch(relativePath, pattern, { dot: true, matchBase: true })) {
           results.push(fullPath);
         }
       }
@@ -171,7 +171,7 @@ export async function backupFile(path: string, backupDir: string): Promise<strin
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = relative(process.cwd(), path).replace(/\//g, '_');
+  const filename = relative(process.cwd(), path).replace(/[/\\]/g, '_');
   const backupPath = join(backupDir, `${filename}.${timestamp}.backup`);
 
   await mkdir(dirname(backupPath), { recursive: true });
@@ -181,10 +181,22 @@ export async function backupFile(path: string, backupDir: string): Promise<strin
 }
 
 /**
- * Normalize path to absolute
+ * Normalize path to absolute and validate it's within project directory
  */
-export function normalizePath(path: string): string {
-  return resolve(path);
+export function normalizePath(path: string, allowOutside = false): string {
+  const absolutePath = resolve(path);
+  
+  // Security: Ensure path is within project directory unless explicitly allowed
+  if (!allowOutside) {
+    const projectRoot = process.cwd();
+    const relativePath = relative(projectRoot, absolutePath);
+    
+    if (relativePath.startsWith('..') || resolve(relativePath) !== absolutePath) {
+      throw new Error(`Path outside project directory not allowed: ${path}`);
+    }
+  }
+  
+  return absolutePath;
 }
 
 /**

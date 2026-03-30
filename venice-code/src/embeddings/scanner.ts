@@ -4,6 +4,7 @@
 
 import { listFiles, readFileContent } from '../utils/fs-helpers.js';
 import { chunkFile, getOptimalChunkSize } from './chunker.js';
+import micromatch from 'micromatch';
 import type { FileChunk } from '../types/index.js';
 
 /**
@@ -30,11 +31,10 @@ export async function scanProject(
     ignorePatterns,
   });
 
-  // Filter by file patterns
+  // Filter by file patterns using micromatch
   const matchedFiles = files.filter(file => {
     return filePatterns.some(pattern => {
-      const regex = new RegExp(pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*'));
-      return regex.test(file);
+      return micromatch.isMatch(file, pattern, { dot: true, matchBase: true });
     });
   });
 

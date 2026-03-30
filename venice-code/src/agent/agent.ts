@@ -85,9 +85,11 @@ export async function runAgent(
                   },
                 };
               } else {
-                if (toolCall.function?.name) {
-                  currentToolCalls[index].function.name += toolCall.function.name;
+                // Update ID if it arrives in a later delta
+                if (toolCall.id && !currentToolCalls[index].id) {
+                  currentToolCalls[index].id = toolCall.id;
                 }
+                // Only concatenate arguments (name should be set once)
                 if (toolCall.function?.arguments) {
                   currentToolCalls[index].function.arguments += toolCall.function.arguments;
                 }
