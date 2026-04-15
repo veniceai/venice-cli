@@ -1,0 +1,170 @@
+project: venice-cli-codex
+description: Transform venice-cli into a full Codex CLI experience with feature parity
+updated: 2026-04-13
+
+phases:
+  - name: Phase 1 - Core Tool Infrastructure
+    status: complete
+    items:
+      - id: tool-interface
+        title: Tool interface and registry
+        status: complete
+        files: [src/lib/tools.ts, src/types/index.ts, src/tools/index.ts]
+
+      - id: file-read
+        title: File read tool with line numbers, offset/limit, binary detection
+        status: complete
+        files: [src/tools/file-read.ts]
+
+      - id: file-write
+        title: File write tool with diff preview and undo backup
+        status: complete
+        files: [src/tools/file-write.ts]
+
+      - id: file-edit
+        title: File edit tool with unique string replacement
+        status: complete
+        files: [src/tools/file-edit.ts]
+
+      - id: bash-tool
+        title: Shell execution with timeout, output cap, sandbox support
+        status: complete
+        files: [src/tools/bash.ts]
+
+      - id: glob-tool
+        title: File pattern search with ** support
+        status: complete
+        files: [src/tools/glob.ts]
+
+      - id: grep-tool
+        title: Content search with ripgrep + Node fallback
+        status: complete
+        files: [src/tools/grep.ts]
+
+      - id: web-search
+        title: Web search via Venice API
+        status: complete
+        files: [src/tools/web-search.ts]
+
+      - id: web-fetch
+        title: URL content fetch with HTML stripping
+        status: complete
+        files: [src/tools/web-fetch.ts]
+
+      - id: git-tool
+        title: Native git operations with read/write separation
+        status: complete
+        files: [src/tools/git.ts]
+
+      - id: undo-tool
+        title: Undo/rollback for file edits with session history
+        status: complete
+        files: [src/tools/undo.ts, src/lib/undo.ts]
+
+  - name: Phase 2 - Agentic Loop & Permissions
+    status: complete
+    items:
+      - id: agent-loop
+        title: Multi-pass agentic loop with streaming
+        status: complete
+        files: [src/lib/agent-loop.ts]
+
+      - id: permissions
+        title: Permission system (prompt/auto/read-only)
+        status: complete
+        files: [src/lib/permissions.ts]
+
+      - id: system-prompt
+        title: Dynamic system prompt with tool docs and project context
+        status: complete
+        files: [src/lib/system-prompt.ts]
+
+      - id: code-command
+        title: venice code command with single-shot and REPL modes
+        status: complete
+        files: [src/commands/code.ts]
+
+  - name: Phase 3 - Context & Intelligence
+    status: complete
+    items:
+      - id: thinking-blocks
+        title: Thinking block parser for reasoning models
+        status: complete
+        files: [src/lib/thinking.ts]
+
+      - id: context-management
+        title: Context window management with token estimation
+        status: complete
+        files: [src/lib/context-manager.ts]
+
+      - id: token-budget
+        title: Token budget controls per session
+        status: complete
+        files: [src/lib/agent-loop.ts]
+
+      - id: project-init
+        title: Project init with .venice/context.md
+        status: complete
+        files: [src/commands/code.ts]
+
+      - id: repl-mode
+        title: Interactive REPL with /exit, /clear, /history, /undo
+        status: complete
+        files: [src/commands/code.ts]
+
+  - name: Phase 4 - Codex Parity
+    status: complete
+    items:
+      - id: sandbox
+        title: Sandboxed execution for bash tool
+        status: complete
+        description: Supports firejail, Docker, or bare execution with warnings
+        files: [src/tools/bash.ts, src/lib/sandbox.ts]
+
+      - id: multi-file-apply
+        title: Multi-file atomic apply/patch
+        status: complete
+        description: Atomic multi-file changes with rollback on failure
+        files: [src/tools/apply.ts]
+
+      - id: smart-context
+        title: Smart context retrieval with codebase indexing
+        status: complete
+        description: Auto-retrieves files matching prompt keywords and file references
+        files: [src/lib/context-retrieval.ts]
+
+      - id: test-runner
+        title: Auto-detect test frameworks and run tests
+        status: complete
+        description: Detects jest, vitest, pytest, go test, cargo test, npm test
+        files: [src/tools/test-runner.ts]
+
+      - id: session-persistence
+        title: Persistent session state across invocations
+        status: complete
+        description: Saves/restores full session to .venice/session.json, --resume flag
+        files: [src/lib/session.ts]
+
+      - id: github-tool
+        title: GitHub PR/issue integration via gh CLI
+        status: complete
+        description: Issues, PRs, CI checks, releases via gh CLI wrapper
+        files: [src/tools/github.ts]
+
+      - id: parallel-tools
+        title: Parallel execution for read-only tools
+        status: complete
+        description: Read-only tool_calls run concurrently via Promise.all
+        files: [src/lib/agent-loop.ts]
+
+      - id: diff-display
+        title: Streaming colored diff display
+        status: complete
+        description: Colored unified diffs for file changes (red/green/cyan)
+        files: [src/lib/diff-display.ts]
+
+      - id: model-routing
+        title: Model routing for simple vs complex tasks
+        status: complete
+        description: --fast-model flag routes follow-up iterations to faster model
+        files: [src/lib/agent-loop.ts, src/commands/code.ts]
