@@ -4,9 +4,24 @@
  * These tools can be used with --tools flag in chat command.
  */
 
-import type { ToolDefinition } from '../types/index.js';
+import type { ToolDefinition, CodingTool } from '../types/index.js';
 import * as readline from 'readline';
 import { getChalk } from './output.js';
+
+/**
+ * Convert a CodingTool to the OpenAI-compatible ToolDefinition format
+ * used by the Venice API.
+ */
+export function toolToDefinition(tool: CodingTool): ToolDefinition {
+  return {
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  };
+}
 
 // Built-in tool definitions
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {

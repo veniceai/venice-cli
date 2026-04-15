@@ -43,8 +43,13 @@ import {
   evaluateTEEAttestationPolicy,
   type TeeVerificationResult,
 } from '../lib/tee.js';
-import type { Message, Model, OutputFormat, ToolCall } from '../types/index.js';
+import type { Message, Model, OutputFormat } from '../types/index.js';
 import { isE2EEModel, isTEEModel } from '../types/index.js';
+import {
+  reconstructStreamToolCalls,
+  parseToolCallArguments,
+  type StreamToolCallDelta,
+} from '../lib/agent-loop.js';
 
 interface E2EEContext {
   privateKey: Uint8Array;
@@ -694,111 +699,8 @@ async function streamChat(
   }
 }
 
-interface StreamToolCallDelta {
-  index?: number;
-  id?: string;
-  type?: 'function';
-  function?: {
-    name?: string;
-    arguments?: string;
-  };
-}
-
-interface AccumulatedStreamToolCall {
-  order: number;
-  index?: number;
-  id?: string;
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-function reconstructStreamToolCalls(toolCallDeltas: StreamToolCallDelta[]): ToolCall[] {
-  const callsByIndex = new Map<number, AccumulatedStreamToolCall>();
-  const callsById = new Map<string, AccumulatedStreamToolCall>();
-  const orderedCalls: AccumulatedStreamToolCall[] = [];
-
-  for (const [position, delta] of toolCallDeltas.entries()) {
-    const index = typeof delta.index === 'number' ? delta.index : undefined;
-    const id = typeof delta.id === 'string' && delta.id.length > 0 ? delta.id : undefined;
-
-    let accumulated: AccumulatedStreamToolCall | undefined;
-    if (index !== undefined) {
-      accumulated = callsByIndex.get(index);
-    }
-    if (!accumulated && id) {
-      accumulated = callsById.get(id);
-    }
-    if (!accumulated && index !== undefined && orderedCalls[index] && orderedCalls[index].index === undefined) {
-      accumulated = orderedCalls[index];
-    }
-
-    if (!accumulated) {
-      accumulated = {
-        order: position,
-        index,
-        id,
-        function: {
-          name: '',
-          arguments: '',
-        },
-      };
-      orderedCalls.push(accumulated);
-    }
-
-    if (index !== undefined) {
-      accumulated.index = index;
-      callsByIndex.set(index, accumulated);
-    }
-
-    if (id) {
-      accumulated.id = id;
-      callsById.set(id, accumulated);
-    }
-
-    if (delta.function?.name) {
-      accumulated.function.name = delta.function.name;
-    }
-    if (delta.function?.arguments) {
-      accumulated.function.arguments += delta.function.arguments;
-    }
-  }
-
-  return orderedCalls
-    .sort((a, b) => {
-      if (a.index !== undefined && b.index !== undefined) {
-        return a.index - b.index;
-      }
-      if (a.index !== undefined) return -1;
-      if (b.index !== undefined) return 1;
-      return a.order - b.order;
-    })
-    .map((toolCall, position): ToolCall => ({
-      id: toolCall.id || `stream_tool_call_${toolCall.index ?? position}`,
-      type: 'function',
-      function: {
-        name: toolCall.function.name,
-        arguments: toolCall.function.arguments,
-      },
-    }));
-}
-
-function parseToolCallArguments(toolCall: ToolCall): Record<string, unknown> {
-  const rawArgs = toolCall.function.arguments?.trim();
-  if (!rawArgs) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(rawArgs) as Record<string, unknown>;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Invalid JSON arguments for tool "${toolCall.function.name}" (id: ${toolCall.id}): ${reason}`
-    );
-  }
-}
+// StreamToolCallDelta, reconstructStreamToolCalls, and parseToolCallArguments
+// are now imported from ../lib/agent-loop.js
 
 async function nonStreamChat(
   messages: Message[],

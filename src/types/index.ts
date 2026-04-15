@@ -132,3 +132,40 @@ export interface ApiResponse<T = unknown> {
     code?: string;
   };
 }
+
+// --- Codex Tool System ---
+
+export type PermissionMode = 'prompt' | 'auto' | 'read-only';
+
+export interface ToolContext {
+  cwd: string;
+  approve: (toolName: string, summary: string) => Promise<boolean>;
+}
+
+export interface ToolResult {
+  output: string;
+  error?: boolean;
+}
+
+export interface CodingTool {
+  name: string;
+  description: string;
+  parameters: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+  isReadOnly: boolean;
+  execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
+}
+
+export interface AgentEvent {
+  type: 'content' | 'tool_call' | 'tool_result' | 'thinking' | 'usage' | 'done' | 'error' | 'max_iterations';
+  text?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  result?: ToolResult;
+  data?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  message?: string;
+  count?: number;
+}
