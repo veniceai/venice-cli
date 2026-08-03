@@ -14,28 +14,38 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const HISTORY_FILE = path.join(CONFIG_DIR, 'history.json');
 const USAGE_FILE = path.join(CONFIG_DIR, 'usage.json');
 
+let _configDirEnsured = false;
+
 export function ensureConfigDir(): void {
+  if (_configDirEnsured) return;
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
+  _configDirEnsured = true;
 }
 
+let _configCache: VeniceConfig | null = null;
+
 export function loadConfig(): VeniceConfig {
+  if (_configCache !== null) return _configCache;
   ensureConfigDir();
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      return JSON.parse(content);
+      _configCache = JSON.parse(content);
+      return _configCache!;
     }
   } catch {
     // Return empty config on error
   }
-  return {};
+  _configCache = {};
+  return _configCache;
 }
 
 export function saveConfig(config: VeniceConfig): void {
   ensureConfigDir();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  _configCache = config; // keep cache in sync
 }
 
 export function getConfigValue(key: keyof VeniceConfig): unknown {
