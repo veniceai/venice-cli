@@ -9,6 +9,7 @@ import {
   chatCompletionStream,
   listModels,
   fetchTeeAttestation,
+  fetchTeeSignature,
 } from '../lib/api.js';
 import {
   getDefaultModel,
@@ -34,6 +35,7 @@ import {
   encryptMessage,
   decryptChunk,
   isHexEncrypted,
+  verifySignature,
   zeroFill,
 } from '../lib/e2ee.js';
 import {
@@ -537,6 +539,57 @@ function flushThinkingState(
   return output;
 }
 
+/**
+ * Verify a TEE-signed response against the attested signing address before
+ * the decrypted content is shown to or trusted by the user.
+ *
+ * Without this, a malicious or compromised server can stream arbitrary
+ * content (or, via the isHexEncrypted gate, plaintext) and the CLI would
+ * present it under the "decrypted end-to-end" banner. The attestation only
+ * proves which key signs; this closes the loop by proving the *content* was
+ * signed by that key.
+ */
+async function assertTeeResponseSignature(
+  model: string,
+  completionId: string | undefined,
+  e2eeContext: E2EEContext,
+  responseContent: string
+): Promise<void> {
+  const expectedSigningAddress = e2eeContext.signingAddress;
+  if (!expectedSigningAddress) {
+    throw new Error(
+      'E2EE integrity check failed: attestation did not include a signing address to verify the response against.'
+    );
+  }
+  if (!completionId) {
+    throw new Error(
+      'E2EE integrity check failed: server did not return a completion id, so the response signature cannot be fetched.'
+    );
+  }
+
+  const sig = await fetchTeeSignature(model, completionId);
+  const signatureHex = typeof sig.signature === 'string' ? sig.signature : sig.signature?.value;
+  if (!sig.text || !signatureHex) {
+    throw new Error(
+      'E2EE integrity check failed: server did not return a verifiable signature for this response.'
+    );
+  }
+
+  const result = verifySignature({
+    signedText: sig.text,
+    signatureHex,
+    expectedSigningAddress,
+    expectedContent: responseContent,
+  });
+
+  if (!result.verified) {
+    throw new Error(
+      `E2EE integrity check failed: the response was NOT signed by the attested enclave key ` +
+      `(${result.error ?? 'signature/content mismatch'}). The displayed content cannot be trusted.`
+    );
+  }
+}
+
 async function streamChat(
   messages: Message[],
   model: string,
@@ -588,34 +641,51 @@ async function streamChat(
     if (effectiveVeniceParams && Object.keys(effectiveVeniceParams).length > 0) {
       streamOptions.venice_parameters = effectiveVeniceParams;
     }
+    let completionId: string | undefined;
+    let e2eeCiphertextSeen = false;
     for await (const chunk of chatCompletionStream(messagesToSend, streamOptions)) {
+      if (chunk.completionId && !completionId) {
+        completionId = chunk.completionId;
+      }
       if (chunk.content) {
         if (spinner) clearSpinner();
 
-        // E2EE: Decrypt content if encrypted
         let displayContent = chunk.content;
-        if (e2eeContext && isHexEncrypted(chunk.content)) {
+        if (e2eeContext) {
+          // In E2EE mode every content chunk MUST be ciphertext. A server
+          // that returns plaintext here is not honoring the protocol and
+          // must not have its output shown under the "encrypted" banner.
+          if (!isHexEncrypted(chunk.content)) {
+            throw new Error(
+              'E2EE protocol violation: server returned unencrypted content for an E2EE model. ' +
+              'Refusing to display it as end-to-end encrypted.'
+            );
+          }
           try {
             displayContent = decryptChunk(chunk.content, e2eeContext.privateKey);
           } catch (decryptError) {
             console.error(c.red('\n[E2EE Decryption Error]'));
             throw decryptError;
           }
-        }
+          e2eeCiphertextSeen = true;
+          // Buffer only: do not display unverified E2EE content. It is
+          // rendered after the response signature is verified below.
+          fullContent += displayContent;
+        } else {
+          // Process thinking blocks (format or strip)
+          const { output, state: newState } = processThinkingContent(
+            displayContent,
+            thinkingState,
+            { strip: stripThinking, format },
+            c
+          );
+          thinkingState = newState;
 
-        // Process thinking blocks (format or strip)
-        const { output, state: newState } = processThinkingContent(
-          displayContent,
-          thinkingState,
-          { strip: stripThinking, format },
-          c
-        );
-        thinkingState = newState;
-
-        if (output) {
-          process.stdout.write(output);
+          if (output) {
+            process.stdout.write(output);
+          }
+          fullContent += displayContent;
         }
-        fullContent += displayContent;
       }
 
       if (chunk.tool_calls) {
@@ -628,6 +698,28 @@ async function streamChat(
 
       if (chunk.done) {
         break;
+      }
+    }
+
+    // E2EE: verify the response was signed by the attested enclave key
+    // BEFORE any of it is shown to the user, then render it.
+    if (e2eeContext) {
+      if (!e2eeCiphertextSeen) {
+        throw new Error(
+          'E2EE integrity check failed: server returned no encrypted content for an E2EE model.'
+        );
+      }
+      await assertTeeResponseSignature(model, completionId, e2eeContext, fullContent);
+
+      const { output, state: verifiedState } = processThinkingContent(
+        fullContent,
+        thinkingState,
+        { strip: stripThinking, format },
+        c
+      );
+      thinkingState = verifiedState;
+      if (output) {
+        process.stdout.write(output);
       }
     }
 
