@@ -28,12 +28,18 @@ import { registerTeeCommand } from './commands/tee.js';
 import { formatError, getChalk } from './lib/output.js';
 import { getVersion } from './lib/version.js';
 
-// Check for updates in the background (non-blocking, checks once per day)
-const pkg = { name: 'veniceai-cli', version: getVersion() };
-updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({
-  isGlobal: true,
-  message: 'Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update',
-});
+// Check for updates in the background (non-blocking, checks once per day).
+// Defer this until the event loop is idle so a short CLI invocation doesn't pay
+// the cost of an external update check before doing the user's actual work.
+if (process.env.VENICE_SKIP_UPDATE_CHECK !== '1') {
+  setTimeout(() => {
+    const pkg = { name: 'veniceai-cli', version: getVersion() };
+    updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({
+      isGlobal: true,
+      message: 'Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update',
+    });
+  }, 0);
+}
 
 async function main() {
   const program = new Command();
