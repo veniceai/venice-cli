@@ -168,7 +168,7 @@ _venice_completion() {
             return 0
             ;;
         models)
-            COMPREPLY=( \$(compgen -W "-t --type -s --search --privacy -f --format" -- "\${cur}") )
+            COMPREPLY=( \$(compgen -W "-t --type -s --search --privacy --tee --e2ee -f --format" -- "\${cur}") )
             return 0
             ;;
         embeddings|embed)
@@ -369,6 +369,8 @@ _venice() {
                         '-t[Filter by type]:type:(all text image tts asr music embedding video upscale inpaint)' \\
                         '-s[Search query]:query:' \\
                         '--privacy[Privacy models only]' \\
+                        '--tee[TEE-attestable models only]' \\
+                        '--e2ee[E2EE-capable models only]' \\
                         '-f[Output format]:format:((pretty json))'
                     ;;
                 config)
@@ -402,8 +404,25 @@ _venice() {
 _venice`;
 }
 
-function generateFishCompletion(): string {
+export function generateFishCompletion(): string {
   return `# Venice CLI fish completion
+
+# Test whether the first non-option token is the requested top-level command.
+function __venice_using_command
+    set -l tokens (commandline -xpc)
+    set -a tokens (commandline -ct)
+
+    for token in $tokens[2..-1]
+        if string match -q -- '-*' "$token"
+            continue
+        end
+
+        test "$token" = "$argv[1]"
+        return
+    end
+
+    return 1
+end
 
 # Main commands
 set -l commands chat search image upscale tts transcribe video music models embeddings history usage config characters voices completions
@@ -421,6 +440,9 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a transcribe 
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a video -d "AI video generation"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a music -d "Generate music and sound effects"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a models -d "List models"
+complete -c venice -n "__venice_using_command models" -l privacy -d "Privacy-preserving models only"
+complete -c venice -n "__venice_using_command models" -l tee -d "TEE-attestable models only"
+complete -c venice -n "__venice_using_command models" -l e2ee -d "E2EE-capable models only"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a embeddings -d "Generate embeddings"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a history -d "View history"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a usage -d "Show usage stats"
