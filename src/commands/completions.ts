@@ -620,6 +620,23 @@ _venice`;
 export function generateFishCompletion(): string {
   return `# Venice CLI fish completion
 
+# Test whether the first non-option token is the requested top-level command.
+function __venice_using_command
+    set -l tokens (commandline -xpc)
+    set -a tokens (commandline -ct)
+
+    for token in $tokens[2..-1]
+        if string match -q -- '-*' "$token"
+            continue
+        end
+
+        test "$token" = "$argv[1]"
+        return
+    end
+
+    return 1
+end
+
 # Main commands
 set -l commands chat search scrape parse image image-edit image-multi-edit image-bg-remove image-styles upscale tts transcribe video music models embeddings history usage billing keys config characters voices voice rpc completions
 
@@ -642,9 +659,9 @@ complete -c venice -n "not __fish_seen_subcommand_from $commands" -a transcribe 
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a video -d "AI video generation"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a music -d "Generate music and sound effects"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a models -d "List models"
-complete -c venice -n "__fish_seen_subcommand_from models; and not __fish_seen_subcommand_from video" -l privacy -d "Privacy-preserving models only"
-complete -c venice -n "__fish_seen_subcommand_from models; and not __fish_seen_subcommand_from video" -l tee -d "TEE-attestable models only"
-complete -c venice -n "__fish_seen_subcommand_from models; and not __fish_seen_subcommand_from video" -l e2ee -d "E2EE-capable models only"
+complete -c venice -n "__venice_using_command models" -l privacy -d "Privacy-preserving models only"
+complete -c venice -n "__venice_using_command models" -l tee -d "TEE-attestable models only"
+complete -c venice -n "__venice_using_command models" -l e2ee -d "E2EE-capable models only"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a embeddings -d "Generate embeddings"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a history -d "View history"
 complete -c venice -n "not __fish_seen_subcommand_from $commands" -a usage -d "Show usage stats"
