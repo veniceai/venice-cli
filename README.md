@@ -74,6 +74,9 @@ npx veniceai-cli chat 'Hello, world!'
 # Basic chat
 venice chat "Explain quantum computing in simple terms"
 
+# Interactive REPL (TTY, no prompt). Type exit, quit, or Ctrl-C to leave.
+venice chat
+
 # Use a specific model
 venice chat -m deepseek-v3.2 "Solve this step by step: 15% of 340"
 

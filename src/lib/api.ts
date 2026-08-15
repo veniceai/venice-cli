@@ -100,8 +100,31 @@ function getHeaders(
   return headers;
 }
 
-async function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+  if (signal.aborted) {
+    throw new RequestCancelledError();
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new RequestCancelledError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export class RequestCancelledError extends Error {
+  constructor() {
+    super('Request cancelled.');
+    this.name = 'RequestCancelledError';
+  }
 }
 
 async function checkOnline(): Promise<boolean> {
@@ -131,6 +154,7 @@ type ApiRequestOptions = {
   additionalHeaders?: Record<string, string>;
   authenticated?: boolean;
   onHeaders?: (headers: Headers) => void;
+  signal?: AbortSignal;
 } & (
   | {
       responseType?: 'json';
@@ -155,6 +179,51 @@ class BinaryResponseValidationError extends Error {
   }
 }
 
+function wrapStreamingResponse(
+  response: Response,
+  cleanup: () => void,
+  classifyError: (error: unknown) => unknown
+): Response {
+  if (!response.body) {
+    cleanup();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          cleanup();
+          reader.releaseLock();
+          controller.close();
+          return;
+        }
+        controller.enqueue(result.value);
+      } catch (error) {
+        cleanup();
+        reader.releaseLock();
+        controller.error(classifyError(error));
+      }
+    },
+    async cancel(reason) {
+      cleanup();
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function apiRequest<T>(
   endpoint: string,
   options: ApiRequestOptions = {}
@@ -170,6 +239,7 @@ export async function apiRequest<T>(
     additionalHeaders = {},
     onHeaders,
     authenticated = true,
+    signal,
   } = options;
 
   const binaryOptions = options.responseType === 'arrayBuffer' ? options : undefined;
@@ -189,10 +259,55 @@ export async function apiRequest<T>(
 
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
   let lastError: VeniceApiError | null = null;
+  const waitBeforeRetry = async (delayMs: number): Promise<void> => {
+    try {
+      await sleep(delayMs, signal);
+    } catch (error) {
+      if (spinner) stopSpinner(false, 'Request cancelled');
+      throw error;
+    }
+  };
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (signal?.aborted) {
+      if (spinner) stopSpinner(false);
+      throw new RequestCancelledError();
+    }
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    let timeoutActive = true;
+    let externalAbortListenerActive = signal !== undefined;
+    const onExternalAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', onExternalAbort, { once: true });
+    const timeoutId = setTimeout(() => {
+      timeoutActive = false;
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    const clearRequestTimeout = () => {
+      if (!timeoutActive) return;
+      timeoutActive = false;
+      clearTimeout(timeoutId);
+    };
+    const cleanupExternalAbortListener = () => {
+      if (!externalAbortListenerActive) return;
+      externalAbortListenerActive = false;
+      signal?.removeEventListener('abort', onExternalAbort);
+    };
+    const cleanup = () => {
+      clearRequestTimeout();
+      cleanupExternalAbortListener();
+    };
+    const abortError = (): Error => {
+      if (signal?.aborted) {
+        return new RequestCancelledError();
+      }
+      return new Error(
+        `Request timed out after ${timeoutMs / 1000} seconds.\n` +
+        'The server may be overloaded. Please try again later.'
+      );
+    };
 
     try {
       const response = await fetch(`${VENICE_API}${endpoint}`, {
@@ -212,9 +327,7 @@ export async function apiRequest<T>(
           );
           errorBody = errorBytes.toString('utf-8');
         } else {
-          // Preserve the existing JSON/stream behavior: only binary response
-          // bodies retain the request timeout while they are consumed.
-          clearTimeout(timeoutId);
+          clearRequestTimeout();
           errorBody = await response.text();
         }
         throw VeniceApiError.fromResponse(response.status, errorBody);
@@ -223,12 +336,21 @@ export async function apiRequest<T>(
       onHeaders?.(response.headers);
 
       if (stream) {
-        clearTimeout(timeoutId);
         if (spinner) {
           stopSpinner(true);
           spinner = null;
         }
-        return response as unknown as T;
+        clearRequestTimeout();
+        return wrapStreamingResponse(response, cleanupExternalAbortListener, (error) => {
+          if (
+            signal?.aborted ||
+            timedOut ||
+            (error instanceof Error && error.name === 'AbortError')
+          ) {
+            return abortError();
+          }
+          return error;
+        }) as unknown as T;
       }
 
       if (binaryOptions) {
@@ -256,7 +378,7 @@ export async function apiRequest<T>(
           );
         }
 
-        clearTimeout(timeoutId);
+        cleanup();
         if (spinner) {
           stopSpinner(true);
           spinner = null;
@@ -264,21 +386,30 @@ export async function apiRequest<T>(
         return Uint8Array.from(bytes).buffer as T;
       }
 
-      clearTimeout(timeoutId);
       if (spinner) {
         stopSpinner(true);
         spinner = null;
       }
-      return await response.json() as T;
+      clearRequestTimeout();
+      const result = await response.json() as T;
+      cleanup();
+      return result;
     } catch (error) {
-      clearTimeout(timeoutId);
+      cleanup();
 
-      if (error instanceof Error && error.name === 'AbortError') {
-        if (spinner) stopSpinner(false, 'Request timed out');
-        throw new Error(
-          `Request timed out after ${timeoutMs / 1000} seconds.\n` +
-          'The server may be overloaded. Please try again later.'
-        );
+      if (
+        signal?.aborted ||
+        timedOut ||
+        (error instanceof Error && error.name === 'AbortError')
+      ) {
+        const classifiedError = abortError();
+        if (spinner) {
+          stopSpinner(
+            false,
+            classifiedError instanceof RequestCancelledError ? 'Request cancelled' : 'Request timed out'
+          );
+        }
+        throw classifiedError;
       }
 
       if (error instanceof BinaryResponseValidationError) {
@@ -299,13 +430,13 @@ export async function apiRequest<T>(
 
         if (error.isRateLimited()) {
           if (spinner) spinner.text = `Rate limited, waiting... (attempt ${attempt + 1}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1) * 2);
+          await waitBeforeRetry(RETRY_DELAY_MS * (attempt + 1) * 2);
           continue;
         }
 
         if (error.isRetryable() && attempt < retries) {
           if (spinner) spinner.text = `Retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
+          await waitBeforeRetry(RETRY_DELAY_MS * (attempt + 1));
           continue;
         }
       } else if (error instanceof Error) {
@@ -319,7 +450,7 @@ export async function apiRequest<T>(
             );
           }
           if (spinner) spinner.text = `Connection error, retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
+          await waitBeforeRetry(RETRY_DELAY_MS * (attempt + 1));
           continue;
         }
         lastError = new VeniceApiError(error.message);
@@ -344,6 +475,7 @@ export interface ChatCompletionRequestOptions {
   reasoning_effort?: ReasoningEffort;
   prompt_cache_key?: string;
   prompt_cache_retention?: PromptCacheRetention;
+  signal?: AbortSignal;
 }
 
 export function buildChatCompletionBody(
@@ -416,6 +548,8 @@ export async function chatCompletion(
     method: 'POST',
     body,
     spinnerText: 'Thinking...',
+    additionalHeaders: options.additionalHeaders,
+    signal: options.signal,
   });
 
   const choice = response.choices?.[0];
@@ -460,6 +594,7 @@ export async function* chatCompletionStream(
     stream: true,
     showSpinner: false,
     additionalHeaders: options.additionalHeaders,
+    signal: options.signal,
   });
 
   const reader = response.body?.getReader();
@@ -530,6 +665,7 @@ export async function* chatCompletionStream(
       }
     }
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 

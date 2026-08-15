@@ -14,6 +14,7 @@ import {
   getDefaultModel,
   addConversation,
   getLastConversation,
+  type ConversationEntry,
 } from '../lib/config.js';
 import {
   getToolDefinitions,
@@ -73,6 +74,7 @@ import {
   hasChatAttachments,
   parseChatAttachments,
 } from '../lib/chat-attachments.js';
+import { runChatRepl, shouldEnterRepl } from '../lib/chat-repl.js';
 
 interface E2EEContext {
   privateKey: Uint8Array;
@@ -86,6 +88,8 @@ export const MAX_TOOL_ROUNDS = 10;
 export const MAX_CHAT_STDIN_BYTES = 1024 * 1024;
 type ChatCompletionFn = typeof chatCompletion;
 type ChatCompletionStreamFn = typeof chatCompletionStream;
+type ChatPrivacy = NonNullable<ConversationEntry['privacy']>;
+type RunChatTurn = () => Promise<void>;
 
 async function setupE2EE(
   modelId: string,
@@ -277,7 +281,7 @@ function encryptMessagesForE2EE(
 export function registerChatCommand(program: Command): void {
   program
     .command('chat [prompt...]')
-    .description('Chat with an AI model')
+    .description('Chat with an AI model (interactive REPL when run with no prompt on a TTY)')
     .option('-m, --model <model>', 'Model to use')
     .option('-s, --system <prompt>', 'System prompt')
     .option('-c, --character <slug>', 'Character slug from the Venice API catalog (e.g. alan-watts)')
@@ -358,6 +362,12 @@ export function registerChatCommand(program: Command): void {
       // Get prompt from args and optionally stdin
       let prompt = promptParts.join(' ');
       const attachments = parseChatAttachments(options);
+      const model = options.model || getDefaultModel();
+      const format = detectOutputFormat(options.format);
+      const enterRepl =
+        shouldEnterRepl(prompt, process.stdin.isTTY) &&
+        format === 'pretty' &&
+        !responseFormat;
 
       try {
         assertLocalAttachmentFiles(attachments);
@@ -377,13 +387,11 @@ export function registerChatCommand(program: Command): void {
       }
 
       const userMessage = buildChatUserMessage(prompt, pipedInput);
-      if (!userMessage && !hasChatAttachments(attachments)) {
+      if (!enterRepl && !userMessage && !hasChatAttachments(attachments)) {
         console.error(formatError('No prompt provided. Usage: venice chat "Your message"'));
         process.exit(1);
       }
 
-      const model = options.model || getDefaultModel();
-      const format = detectOutputFormat(options.format);
       const shouldStream = options.stream !== false && !isPiped() && format === 'pretty' && !responseFormat;
       const quietStatus = options.quiet || Boolean(responseFormat) || format === 'json';
 
@@ -554,20 +562,6 @@ export function registerChatCommand(program: Command): void {
         messages.push({ role: 'system', content: options.system });
       }
 
-      // Add user message
-      let userContent: Message['content'];
-      try {
-        const textContent =
-          userMessage && typeof userMessage.content === 'string'
-            ? userMessage.content
-            : '';
-        userContent = await buildUserMessageContent(textContent, attachments);
-      } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
-        process.exit(1);
-      }
-      messages.push({ role: 'user', content: userContent });
-
       // Get tool definitions
       const toolNames = options.tools?.split(',').map((t: string) => t.trim()) || [];
       const tools = getToolDefinitions(toolNames);
@@ -614,22 +608,66 @@ export function registerChatCommand(program: Command): void {
         promptCacheRetention,
       };
 
-      try {
+      const runChatTurn = async (signal?: AbortSignal): Promise<void> => {
+        const turnExtras = signal ? { ...chatExtras, signal } : chatExtras;
         if (shouldStream) {
-          await streamChat(messages, model, tools, options.interactiveTools, format, chatExtras);
+          await streamChat(messages, model, tools, options.interactiveTools, format, turnExtras);
         } else {
-          await nonStreamChat(messages, model, tools, options.interactiveTools, format, chatExtras);
+          await nonStreamChat(messages, model, tools, options.interactiveTools, format, turnExtras);
         }
+      };
 
-        if (!useE2EE && !useTEE) {
-          addConversation({
-            id: randomUUID(),
-            timestamp: new Date().toISOString(),
-            messages,
-            model,
-            character: historyCharacter,
-            privacy: 'plain',
+      const submitUserTurn = (content: Message['content'], signal?: AbortSignal): Promise<void> =>
+        runTransactionalChatTurn(messages, content, () => runChatTurn(signal));
+      const privacy: ChatPrivacy = useE2EE ? 'e2ee' : useTEE ? 'tee' : 'plain';
+      let completedTurns = 0;
+      const saveHistoryIfNeeded = (): void => {
+        persistChatHistory({
+          privacy,
+          messages,
+          model,
+          character: historyCharacter,
+          completedTurns,
+        });
+      };
+
+      try {
+        if (enterRepl) {
+          const preparedAttachments = hasChatAttachments(attachments)
+            ? await buildUserMessageContent('', attachments)
+            : undefined;
+          console.log(`Interactive chat (${model}). Type exit, quit, or Ctrl-C to leave.\n`);
+          let firstTurn = true;
+          await runChatRepl({
+            input: process.stdin,
+            output: process.stdout,
+            onTurn: async (line, signal) => {
+              try {
+                const content: Message['content'] =
+                  firstTurn && Array.isArray(preparedAttachments)
+                    ? [{ type: 'text', text: line }, ...preparedAttachments]
+                    : line;
+                await submitUserTurn(content, signal);
+                firstTurn = false;
+                completedTurns++;
+              } catch (error) {
+                if (signal.aborted) {
+                  return;
+                }
+                console.error(formatError(error instanceof Error ? error.message : String(error)));
+              }
+            },
           });
+          saveHistoryIfNeeded();
+        } else {
+          const textContent =
+            userMessage && typeof userMessage.content === 'string'
+              ? userMessage.content
+              : '';
+          const userContent = await buildUserMessageContent(textContent, attachments);
+          await submitUserTurn(userContent);
+          completedTurns++;
+          saveHistoryIfNeeded();
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -641,6 +679,48 @@ export function registerChatCommand(program: Command): void {
         }
       }
     });
+}
+
+export async function runTransactionalChatTurn(
+  messages: Message[],
+  content: Message['content'],
+  runTurn: RunChatTurn
+): Promise<void> {
+  const turnStart = messages.length;
+  messages.push({ role: 'user', content });
+  try {
+    await runTurn();
+  } catch (error) {
+    messages.splice(turnStart);
+    throw error;
+  }
+}
+
+export function persistChatHistory(input: {
+  privacy: ChatPrivacy;
+  messages: Message[];
+  model: string;
+  character?: string;
+  completedTurns: number;
+}): boolean {
+  if (
+    input.privacy === 'e2ee' ||
+    input.privacy === 'tee' ||
+    input.completedTurns < 1 ||
+    !input.messages.some((message) => message.role === 'user')
+  ) {
+    return false;
+  }
+
+  addConversation({
+    id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    messages: input.messages,
+    model: input.model,
+    character: input.character,
+    privacy: 'plain',
+  });
+  return true;
 }
 
 // State machine for processing thinking blocks in streaming content
@@ -754,8 +834,17 @@ export interface ChatRunExtras {
   reasoningEffort?: ReasoningEffort;
   promptCacheKey?: string;
   promptCacheRetention?: PromptCacheRetention;
+  signal?: AbortSignal;
   completion?: ChatCompletionFn;
   completionStream?: ChatCompletionStreamFn;
+}
+
+function appendAssistantMessage(messages: Message[], content: string): void {
+  const last = messages[messages.length - 1];
+  if (last?.role === 'assistant' && last.content === content && !last.tool_calls) {
+    return;
+  }
+  messages.push({ role: 'assistant', content });
 }
 
 function buildRequestOptions(
@@ -786,6 +875,9 @@ function buildRequestOptions(
   }
   if (extras.promptCacheRetention) {
     request.prompt_cache_retention = extras.promptCacheRetention;
+  }
+  if (extras.signal) {
+    request.signal = extras.signal;
   }
 
   return request;
@@ -926,9 +1018,13 @@ export async function streamChat(
       }
 
       const hasToolCalls = collectedToolCalls.length > 0;
+      const contextContent = stripThinking
+        ? stripCompletedThinkingBlocks(roundContent)
+        : roundContent;
       const requestsToolExecution =
         finishReason === 'tool_calls' || hasToolCalls;
       if (!requestsToolExecution || e2eeContext) {
+        appendAssistantMessage(messages, contextContent);
         break;
       }
       if (!hasToolCalls) {
@@ -942,7 +1038,7 @@ export async function streamChat(
       const toolCalls = reconstructStreamToolCalls(collectedToolCalls);
       messages.push({
         role: 'assistant',
-        content: roundContent,
+        content: contextContent,
         tool_calls: toolCalls,
       });
 
@@ -1127,9 +1223,13 @@ export async function nonStreamChat(
   let toolRounds = 0;
   while (true) {
     const response = await completion(messages, chatOptions);
+    const contextContent = extras.stripThinking
+      ? stripCompletedThinkingBlocks(response.content)
+      : response.content;
     const hasToolCalls = Boolean(response.tool_calls?.length);
 
     if (response.finish_reason !== 'tool_calls' && !hasToolCalls) {
+      appendAssistantMessage(messages, contextContent);
       if (extras.responseFormat) {
         outputStructuredResponse(response.content, extras.responseFormat, format);
       } else {
@@ -1150,7 +1250,7 @@ export async function nonStreamChat(
 
     messages.push({
       role: 'assistant',
-      content: response.content,
+      content: contextContent,
       tool_calls: response.tool_calls,
     });
 
@@ -1167,6 +1267,10 @@ export async function nonStreamChat(
       });
     }
   }
+}
+
+function stripCompletedThinkingBlocks(content: string): string {
+  return content.replace(/<think>[\s\S]*?<\/think>/g, '');
 }
 
 function outputChatText(

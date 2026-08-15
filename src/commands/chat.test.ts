@@ -12,6 +12,7 @@ import {
   MAX_TOOL_ROUNDS,
   nonStreamChat,
   requestedCapabilityError,
+  runTransactionalChatTurn,
   streamChat,
 } from './chat.js';
 import { getToolDefinitions } from '../lib/tools.js';
@@ -34,6 +35,7 @@ interface ChatRequest {
 function runCli(args: string[], homeDir: string) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
+    timeout: 3_000,
     env: {
       ...process.env,
       HOME: homeDir,
@@ -318,6 +320,20 @@ test('chat rejects --no-thinking with a non-none reasoning effort', () => {
   }
 });
 
+test('chat with no prompt on piped stdin does not start a REPL', () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-piped-'));
+
+  try {
+    const result = runCli(['chat'], homeDir);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stderr}\n${result.stdout}`, /No prompt provided/i);
+    assert.doesNotMatch(`${result.stderr}\n${result.stdout}`, /you>/);
+    assert.doesNotMatch(`${result.stderr}\n${result.stdout}`, /Interactive chat/i);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test('chat --image fails before the API when the file is missing', () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-image-'));
 
@@ -511,6 +527,7 @@ test('streaming chat preserves options and handles sequential tool rounds', asyn
   );
 
   assert.equal(round, 3);
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'done' });
   assert.equal(
     messages.find((message) => message.tool_call_id === 'call-disabled')?.content,
     'Tool not enabled: calculator'
@@ -533,6 +550,167 @@ test('streaming chat preserves options and handles sequential tool rounds', asyn
     assert.equal(options.prompt_cache_key, 'session-123');
     assert.equal(options.prompt_cache_retention, '24h');
   }
+});
+
+test('--strip-thinking excludes hidden content from streaming tool follow-up context', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'Use a tool' }];
+  let round = 0;
+  let followUpMessages: Message[] | undefined;
+
+  await streamChat(
+    messages,
+    'test-model',
+    [],
+    false,
+    'raw',
+    {
+      quiet: true,
+      stripThinking: true,
+      completionStream: async function* (roundMessages) {
+        round++;
+        if (round === 1) {
+          yield { content: 'visible <thi', done: false };
+          yield { content: 'nk>hidden plan</think> answer', done: false };
+          yield {
+            tool_calls: [{
+              index: 0,
+              id: 'call-disabled',
+              type: 'function',
+              function: { name: 'disabled', arguments: '{}' },
+            }],
+            done: false,
+          };
+          yield { finish_reason: 'tool_calls', done: false };
+          yield { done: true };
+          return;
+        }
+        followUpMessages = structuredClone(roundMessages);
+        yield { content: 'done', done: false };
+        yield { finish_reason: 'stop', done: false };
+        yield { done: true };
+      },
+    }
+  );
+
+  assert.ok(followUpMessages);
+  const toolCallMessage = followUpMessages.find((message) => message.role === 'assistant');
+  assert.equal(toolCallMessage?.content, 'visible  answer');
+  assert.doesNotMatch(JSON.stringify(followUpMessages), /hidden plan|<think>/);
+});
+
+test('--strip-thinking excludes hidden content from the next streaming REPL turn', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'first prompt' }];
+  await streamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    stripThinking: true,
+    completionStream: async function* () {
+      yield { reasoning_content: 'redacted reasoning', done: false };
+      yield { content: '<think>hidden reasoning</think>safe answer', done: false };
+      yield { finish_reason: 'stop', done: false };
+      yield { done: true };
+    },
+  });
+
+  messages.push({ role: 'user', content: 'second prompt' });
+  let nextTurnMessages: Message[] | undefined;
+  await streamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    stripThinking: true,
+    completionStream: async function* (roundMessages) {
+      nextTurnMessages = structuredClone(roundMessages);
+      yield { content: 'second answer', done: false };
+      yield { finish_reason: 'stop', done: false };
+      yield { done: true };
+    },
+  });
+
+  assert.ok(nextTurnMessages);
+  assert.equal(
+    nextTurnMessages.find((message) => message.role === 'assistant')?.content,
+    'safe answer'
+  );
+  assert.doesNotMatch(
+    JSON.stringify(nextTurnMessages),
+    /hidden reasoning|redacted reasoning|<think>/
+  );
+});
+
+test('streaming empty replies preserve assistant role before the next turn', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'first prompt' }];
+  await streamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    completionStream: async function* () {
+      yield { finish_reason: 'stop', done: false };
+      yield { done: true };
+    },
+  });
+
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: '' });
+  messages.push({ role: 'user', content: 'second prompt' });
+
+  let nextTurnMessages: Message[] | undefined;
+  await streamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    completionStream: async function* (roundMessages) {
+      nextTurnMessages = structuredClone(roundMessages);
+      yield { finish_reason: 'stop', done: false };
+      yield { done: true };
+    },
+  });
+
+  assert.deepEqual(nextTurnMessages?.map((message) => message.role), [
+    'user',
+    'assistant',
+    'user',
+  ]);
+});
+
+test('non-streaming fully stripped replies preserve an empty assistant turn', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'first prompt' }];
+  await nonStreamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    stripThinking: true,
+    completion: async () => ({
+      content: '<think>hidden reasoning</think>',
+      finish_reason: 'stop',
+    }),
+  });
+
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: '' });
+  messages.push({ role: 'user', content: 'second prompt' });
+
+  let nextTurnMessages: Message[] | undefined;
+  await nonStreamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    completion: async (roundMessages) => {
+      nextTurnMessages = structuredClone(roundMessages);
+      return { content: '', finish_reason: 'stop' };
+    },
+  });
+
+  assert.deepEqual(nextTurnMessages?.map((message) => message.role), [
+    'user',
+    'assistant',
+    'user',
+  ]);
+  assert.equal(nextTurnMessages?.[1].content, '');
+});
+
+test('--strip-thinking preserves an unclosed thinking tag in assistant context', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'prompt' }];
+  await streamChat(messages, 'test-model', [], false, 'raw', {
+    quiet: true,
+    stripThinking: true,
+    completionStream: async function* () {
+      yield { content: 'before <think>unfinished', done: false };
+      yield { done: true };
+    },
+  });
+
+  assert.deepEqual(messages.at(-1), {
+    role: 'assistant',
+    content: 'before <think>unfinished',
+  });
 });
 
 test('E2EE streaming strips server-side controls from the request', async () => {
@@ -700,6 +878,7 @@ test('non-streaming tool rounds reuse encoded attachments without rereading file
 
     assert.equal(round, 2);
     assert.deepEqual(seenUserContent, [content, content]);
+    assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'done' });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -795,6 +974,54 @@ test('streaming chat stops after the maximum tool rounds', async () => {
     new RegExp(`limit of ${MAX_TOOL_ROUNDS} rounds`)
   );
   assert.equal(completionCalls, MAX_TOOL_ROUNDS + 1);
+});
+
+test('failed turn rolls back its user message before a successful retry', async () => {
+  const messages: Message[] = [{ role: 'system', content: 'Keep this' }];
+
+  await assert.rejects(
+    runTransactionalChatTurn(messages, 'stale prompt', async () => {
+      throw new Error('completion failed');
+    }),
+    /completion failed/
+  );
+  assert.deepEqual(messages, [{ role: 'system', content: 'Keep this' }]);
+
+  await runTransactionalChatTurn(messages, 'retry prompt', async () => {
+    messages.push({ role: 'assistant', content: 'success' });
+  });
+  assert.deepEqual(messages, [
+    { role: 'system', content: 'Keep this' },
+    { role: 'user', content: 'retry prompt' },
+    { role: 'assistant', content: 'success' },
+  ]);
+});
+
+test('failed turn rolls back partial assistant and tool-call state', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'previous successful turn' }];
+
+  await assert.rejects(
+    runTransactionalChatTurn(messages, 'failing tool turn', async () => {
+      messages.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'partial-call',
+          type: 'function',
+          function: { name: 'datetime', arguments: '{}' },
+        }],
+      });
+      messages.push({
+        role: 'tool',
+        content: 'partial result',
+        tool_call_id: 'partial-call',
+      });
+      throw new Error('follow-up completion failed');
+    }),
+    /follow-up completion failed/
+  );
+
+  assert.deepEqual(messages, [{ role: 'user', content: 'previous successful turn' }]);
 });
 
 test('buildChatUserMessage uses prompt when only args are provided', () => {
