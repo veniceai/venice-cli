@@ -14,6 +14,10 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const HISTORY_FILE = path.join(CONFIG_DIR, 'history.json');
 const USAGE_FILE = path.join(CONFIG_DIR, 'usage.json');
 
+let configCache: VeniceConfig | undefined;
+let historyCache: ConversationEntry[] | undefined;
+let usageCache: UsageEntry[] | undefined;
+
 export function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
@@ -21,21 +25,29 @@ export function ensureConfigDir(): void {
 }
 
 export function loadConfig(): VeniceConfig {
+  if (configCache) {
+    return { ...configCache };
+  }
+
   ensureConfigDir();
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      return JSON.parse(content);
+      configCache = JSON.parse(content) as VeniceConfig;
+      return { ...configCache };
     }
   } catch {
     // Return empty config on error
   }
+
+  configCache = {};
   return {};
 }
 
 export function saveConfig(config: VeniceConfig): void {
   ensureConfigDir();
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  configCache = { ...config };
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(configCache, null, 2), { mode: 0o600 });
 }
 
 export function getConfigValue(key: keyof VeniceConfig): unknown {
@@ -129,15 +141,22 @@ export interface ConversationEntry {
 }
 
 export function loadHistory(): ConversationEntry[] {
+  if (historyCache) {
+    return [...historyCache];
+  }
+
   ensureConfigDir();
   try {
     if (fs.existsSync(HISTORY_FILE)) {
       const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      return JSON.parse(content);
+      historyCache = JSON.parse(content) as ConversationEntry[];
+      return [...historyCache];
     }
   } catch {
     // Return empty on error
   }
+
+  historyCache = [];
   return [];
 }
 
@@ -145,6 +164,7 @@ export function saveHistory(history: ConversationEntry[]): void {
   ensureConfigDir();
   // Keep only last 100 conversations
   const trimmed = history.slice(-100);
+  historyCache = trimmed;
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
 }
 
@@ -161,6 +181,7 @@ export function getLastConversation(): ConversationEntry | undefined {
 
 export function clearHistory(): void {
   ensureConfigDir();
+  historyCache = undefined;
   if (fs.existsSync(HISTORY_FILE)) {
     fs.unlinkSync(HISTORY_FILE);
   }
@@ -177,15 +198,22 @@ export interface UsageEntry {
 }
 
 export function loadUsage(): UsageEntry[] {
+  if (usageCache) {
+    return [...usageCache];
+  }
+
   ensureConfigDir();
   try {
     if (fs.existsSync(USAGE_FILE)) {
       const content = fs.readFileSync(USAGE_FILE, 'utf-8');
-      return JSON.parse(content);
+      usageCache = JSON.parse(content) as UsageEntry[];
+      return [...usageCache];
     }
   } catch {
     // Return empty on error
   }
+
+  usageCache = [];
   return [];
 }
 
@@ -196,6 +224,7 @@ export function saveUsage(usage: UsageEntry[]): void {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
   const filtered = usage.filter(u => new Date(u.timestamp) > thirtyDaysAgo);
+  usageCache = filtered;
   fs.writeFileSync(USAGE_FILE, JSON.stringify(filtered, null, 2), { mode: 0o600 });
 }
 
