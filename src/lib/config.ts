@@ -15,6 +15,7 @@ const CONFIG_DIR = path.join(os.homedir(), '.venice');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const HISTORY_FILE = path.join(CONFIG_DIR, 'history.json');
 const USAGE_FILE = path.join(CONFIG_DIR, 'usage.json');
+let cachedConfig: VeniceConfig | undefined;
 
 export function ensureConfigDir(): void {
   if (fs.existsSync(CONFIG_DIR)) {
@@ -29,19 +30,24 @@ export function ensureConfigDir(): void {
 }
 
 export function loadConfig(): VeniceConfig {
+  if (cachedConfig !== undefined) {
+    return { ...cachedConfig };
+  }
+
   ensureConfigDir();
   if (!fs.existsSync(CONFIG_FILE)) {
+    cachedConfig = {};
     return {};
   }
 
   assertRegularConfigFile();
   try {
     const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-    return JSON.parse(content);
+    cachedConfig = JSON.parse(content);
   } catch {
-    // Return empty config on error
+    cachedConfig = {};
   }
-  return {};
+  return { ...cachedConfig };
 }
 
 export function saveConfig(config: VeniceConfig): void {
@@ -66,6 +72,7 @@ export function saveConfig(config: VeniceConfig): void {
     fileDescriptor = undefined;
     fs.renameSync(temporaryFile, CONFIG_FILE);
     fs.chmodSync(CONFIG_FILE, 0o600);
+    cachedConfig = { ...config };
   } catch (error) {
     if (fileDescriptor !== undefined) {
       fs.closeSync(fileDescriptor);
