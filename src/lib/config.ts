@@ -14,6 +14,9 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const HISTORY_FILE = path.join(CONFIG_DIR, 'history.json');
 const USAGE_FILE = path.join(CONFIG_DIR, 'usage.json');
 
+// Cache for config to avoid redundant file reads
+let configCache: VeniceConfig | null = null;
+
 export function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
@@ -21,21 +24,28 @@ export function ensureConfigDir(): void {
 }
 
 export function loadConfig(): VeniceConfig {
+  if (configCache !== null) {
+    return configCache;
+  }
+  
   ensureConfigDir();
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      return JSON.parse(content);
+      configCache = JSON.parse(content) as VeniceConfig;
+      return configCache;
     }
   } catch {
     // Return empty config on error
   }
-  return {};
+  configCache = {};
+  return configCache;
 }
 
 export function saveConfig(config: VeniceConfig): void {
   ensureConfigDir();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  configCache = config; // Update cache when saving
 }
 
 export function getConfigValue(key: keyof VeniceConfig): unknown {
@@ -60,6 +70,7 @@ export function deleteConfigValue(key: keyof VeniceConfig): void {
   const config = loadConfig();
   delete config[key];
   saveConfig(config);
+  // Cache is already updated in saveConfig
 }
 
 export function getApiKey(): string | undefined {
@@ -214,4 +225,9 @@ export function getConfigDir(): string {
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
+}
+
+// Export cache invalidation for testing purposes
+export function invalidateConfigCache(): void {
+  configCache = null;
 }
