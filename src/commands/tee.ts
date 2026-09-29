@@ -201,7 +201,7 @@ export function registerTeeCommand(program: Command): void {
                 attestation: {
                   verified: response.verified,
                   nonceMatch,
-                  signingKey: signingKey?.slice(0, 32) + '...',
+                  signingKey: signingKey ? signingKey.slice(0, 32) + '...' : null,
                   signingAddress: response.signing_address,
                   teeProvider: response.tee_provider,
                   hasIntelQuote: !!response.intel_quote,
@@ -212,7 +212,7 @@ export function registerTeeCommand(program: Command): void {
               2
             )
           );
-          return;
+          process.exit(policy.passed ? 0 : 1);
         }
 
         console.log(c.bold('\n🛡️ E2EE Attestation Policy Verification\n'));
