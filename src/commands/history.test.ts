@@ -7,13 +7,18 @@ import test from 'node:test';
 
 const cliPath = join(process.cwd(), 'dist', 'index.js');
 const configModuleUrl = new URL('../lib/config.js', import.meta.url).href;
+const historyModuleUrl = new URL('./history.js', import.meta.url).href;
 
-function runNode(home: string, args: string[]): string {
-  const result = spawnSync(process.execPath, args, {
+function spawnNode(home: string, args: string[]) {
+  return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     env: { ...process.env, HOME: home, NO_COLOR: '1' },
     encoding: 'utf8',
   });
+}
+
+function runNode(home: string, args: string[]): string {
+  const result = spawnNode(home, args);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 }
@@ -107,6 +112,38 @@ test('list, show JSON, and export sanitize legacy attachment history', () => {
       assert.match(output, /legacy \[image\] \[video\] \[file: private\.pdf\]/);
     }
     assert.equal(JSON.parse(show).messages[0].tool_call_id, 'unchanged-tool-id');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('export creates nested directories', () => {
+  const home = mkdtempSync(join(tmpdir(), 'venice-history-nested-'));
+  const exportPath = join(home, 'nested', 'history.json');
+  try {
+    runNode(home, [cliPath, 'history', 'export', exportPath]);
+    assert.deepEqual(JSON.parse(readFileSync(exportPath, 'utf8')), []);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('export reports write failures as formatted errors', () => {
+  const home = mkdtempSync(join(tmpdir(), 'venice-history-error-'));
+  const blockingFile = join(home, 'file.txt');
+  writeFileSync(blockingFile, '');
+  try {
+    const script = `
+      import { Command } from 'commander';
+      import { registerHistoryCommand } from ${JSON.stringify(historyModuleUrl)};
+      const program = new Command();
+      registerHistoryCommand(program);
+      await program.parseAsync(['node', 'venice', 'history', 'export', ${JSON.stringify(join(blockingFile, 'x.json'))}]);
+    `;
+    const result = spawnNode(home, ['--input-type=module', '--eval', script]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /^Error: /);
+    assert.doesNotMatch(result.stderr, /^\s+at /m);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
