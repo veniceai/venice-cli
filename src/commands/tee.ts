@@ -251,9 +251,24 @@ export function registerTeeCommand(program: Command): void {
       try {
         const response = await fetchTeeSignature(modelId, completionId);
 
+        const signatureHex = typeof response.signature === 'string' ? response.signature : response.signature?.value;
+        const recoveredSigner =
+          response.text && signatureHex ? recoverSignerAddress(response.text, signatureHex) : null;
+        const normaliseAddress = (address: string) => address.toLowerCase().replace(/^0x/, '');
+        const expectedSigner =
+          options.verifySigner !== undefined ? normaliseAddress(options.verifySigner) : undefined;
+        const verified =
+          expectedSigner !== undefined && recoveredSigner !== null && normaliseAddress(recoveredSigner) === expectedSigner;
+
         if (format === 'json') {
-          console.log(JSON.stringify(response, null, 2));
-          return;
+          if (expectedSigner === undefined) {
+            console.log(JSON.stringify(response, null, 2));
+            return;
+          }
+          console.log(
+            JSON.stringify({ ...response, verification: { expectedSigner, recoveredSigner, verified } }, null, 2)
+          );
+          process.exit(verified ? 0 : 1);
         }
 
         console.log(c.bold('\n📝 TEE Response Signature\n'));
@@ -268,25 +283,19 @@ export function registerTeeCommand(program: Command): void {
           console.log(`${c.dim('Signing Address:')} ${response.signing_address}`);
         }
 
-        const signatureHex = typeof response.signature === 'string' ? response.signature : response.signature?.value;
         if (signatureHex) {
           console.log(`${c.dim('Signature:')} ${signatureHex.slice(0, 32)}...`);
-
-          // Try to recover signer from signature
-          if (response.text) {
-            const recoveredAddress = recoverSignerAddress(response.text, signatureHex);
-            if (recoveredAddress) {
-              console.log(`${c.dim('Recovered Signer:')} ${recoveredAddress}`);
-
-              if (options.verifySigner) {
-                const expected = options.verifySigner.toLowerCase().replace(/^0x/, '');
-                const matches = recoveredAddress === expected;
-                console.log(
-                  `${c.dim('Signer Verified:')} ${matches ? c.green('✓ Yes') : c.red('✗ No (expected ' + expected + ')')}`
-                );
-              }
-            }
-          }
+        }
+        if (recoveredSigner) {
+          console.log(`${c.dim('Recovered Signer:')} ${recoveredSigner}`);
+        }
+        if (expectedSigner !== undefined) {
+          const status = verified
+            ? c.green('✓ Yes')
+            : recoveredSigner
+              ? c.red('✗ No (expected ' + expectedSigner + ')')
+              : c.red('✗ No (could not recover signer)');
+          console.log(`${c.dim('Signer Verified:')} ${status}`);
         }
 
         if (response.text) {
@@ -309,6 +318,9 @@ export function registerTeeCommand(program: Command): void {
         }
 
         console.log('');
+        if (expectedSigner !== undefined && !verified) {
+          process.exit(1);
+        }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
