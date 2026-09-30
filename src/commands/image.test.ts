@@ -292,6 +292,85 @@ test('image edit JSON skips file writes and pretty output creates nested directo
   }
 });
 
+test('image generate JSON skips file writes and pretty output creates nested directories', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-generate-cli-test-'));
+  const ignoredOutputPath = join(tempDir, 'ignored', 'out.png');
+  const nestedOutputPath = join(tempDir, 'nested', 'out.png');
+
+  process.env.VENICE_API_KEY = 'test-key';
+  globalThis.fetch = async () =>
+    Response.json({ id: 'image-id', images: [PNG_BYTES.toString('base64')] });
+
+  try {
+    await runImageCommand(['image', 'a red cube', '--format', 'json', '--output', ignoredOutputPath]);
+    assert.equal(existsSync(ignoredOutputPath), false);
+
+    await runImageCommand(['image', 'a red cube', '--output', nestedOutputPath]);
+    assert.equal(readFileSync(nestedOutputPath).equals(PNG_BYTES), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('image generate and edit reject empty image payloads without writing files', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const originalError = console.error;
+  const originalExit = process.exit;
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-empty-image-test-'));
+  const inputPath = join(tempDir, 'input.png');
+  const generatePath = join(tempDir, 'generated.png');
+  const editPath = join(tempDir, 'edited.png');
+  const errors: string[] = [];
+
+  writeFileSync(inputPath, PNG_BYTES);
+  process.env.VENICE_API_KEY = 'test-key';
+  console.error = (...values: unknown[]) => errors.push(values.join(' '));
+  process.exit = ((code?: number) => {
+    throw new Error(`exit ${code}`);
+  }) as typeof process.exit;
+
+  try {
+    globalThis.fetch = async () => Response.json({ id: 'image-id', images: [''] });
+    await assert.rejects(
+      runImageCommand(['image', 'a red cube', '--output', generatePath]),
+      /exit 1/
+    );
+
+    globalThis.fetch = async () => new Response(new Uint8Array(), {
+      headers: { 'Content-Type': 'image/png' },
+    });
+    await assert.rejects(
+      runImageCommand(['image-edit', inputPath, 'Improve', '--output', editPath]),
+      /exit 1/
+    );
+
+    assert.equal(errors.length, 2);
+    assert.match(errors[0], /Generated image response was empty/);
+    assert.match(errors[1], /Edited image response was empty/);
+    assert.equal(existsSync(generatePath), false);
+    assert.equal(existsSync(editPath), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    process.exit = originalExit;
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('image-styles honors its output format option', async () => {
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
