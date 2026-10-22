@@ -15,6 +15,8 @@ const E2EE_MODEL = 'e2ee-pty-model';
 const TEE_MODEL = 'tee-pty-model';
 const PLAIN_MODEL = 'plain-pty-model';
 const PROMPT = 'you> ';
+const APPROVAL_PROMPT = 'Approve? [y/N]';
+const TOOL_PROMPT = 'use a tool';
 const TEST_TIMEOUT_MS = 8_000;
 
 interface CapturedRequest {
@@ -140,6 +142,32 @@ function startMockApi(options: {
             finish_reason: 'tool_calls',
           }],
         }));
+        return;
+      }
+      if (body.messages.at(-1)?.content === TOOL_PROMPT) {
+        const toolCall = {
+          id: `tool-call-${requests.length}`,
+          type: 'function',
+          function: { name: 'datetime', arguments: '{}' },
+        };
+        if (body.stream) {
+          response.setHeader('Content-Type', 'text/event-stream');
+          response.write(`data: ${JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index: 0, ...toolCall }] }, finish_reason: null }],
+          })}\n\n`);
+          response.write(`data: ${JSON.stringify({
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          })}\n\n`);
+          response.end('data: [DONE]\n\n');
+        } else {
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({
+            choices: [{
+              message: { content: '', tool_calls: [toolCall] },
+              finish_reason: 'tool_calls',
+            }],
+          }));
+        }
         return;
       }
       reply++;
@@ -511,3 +539,88 @@ for (const [name, input] of [['Ctrl-C', '\x03'], ['Ctrl-D', '\x04']] as const) {
     }
   });
 }
+
+function toolResults(request: CapturedRequest): unknown[] {
+  return request.messages
+    .filter((message) => message.role === 'tool')
+    .map((message) => message.content);
+}
+
+for (const mode of ['stream', 'no-stream'] as const) {
+  for (const [answer, approved] of [['y', true], ['n', false]] as const) {
+    test(`REPL --interactive-tools (${mode}) answers "${answer}" without leaking it into the chat`, async () => {
+      const mock = startMockApi();
+      const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-approval-'));
+      try {
+        const port = await mock.listen();
+        const args = ['chat', '--model', PLAIN_MODEL, '--tools', 'datetime', '--interactive-tools'];
+        if (mode === 'no-stream') args.push('--no-stream');
+        const session = startPty(args, homeDir, port);
+
+        await waitFor(session, (output) => occurrences(output, PROMPT) >= 1, 'approval initial prompt');
+        session.terminal.write(`${TOOL_PROMPT}\r`);
+        await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'tool approval prompt');
+        session.terminal.write(`${answer}\r`);
+        await waitFor(session, (output) => output.includes('mock-reply-1'), 'reply after tool');
+        await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'prompt after tool turn');
+        session.terminal.write('second turn\r');
+        await waitFor(session, (output) => output.includes('mock-reply-2'), 'second reply');
+        await waitFor(session, (output) => occurrences(output, PROMPT) >= 3, 'approval exit prompt');
+        session.terminal.write('exit\r');
+
+        const result = await waitForExit(session);
+        assert.equal(result.exitCode, 0, session.output);
+        assert.equal(occurrences(session.output, `${APPROVAL_PROMPT} ${answer}${answer}`), 0, session.output);
+        assert.equal(mock.requests.length, 3, session.output);
+        for (const request of mock.requests) {
+          assert.ok(
+            !request.messages.some((message) => message.role === 'user' && message.content === answer),
+            `approval answer leaked into the conversation:\n${JSON.stringify(request.messages)}`
+          );
+        }
+        const [toolResult] = toolResults(mock.requests[1]);
+        if (approved) {
+          assert.notEqual(toolResult, 'Tool execution cancelled by user');
+        } else {
+          assert.equal(toolResult, 'Tool execution cancelled by user');
+        }
+        assert.equal(mock.requests[2].messages.at(-1)?.content, 'second turn');
+
+        const history = JSON.parse(
+          readFileSync(join(homeDir, '.venice', 'history.json'), 'utf8')
+        ) as Array<{ messages: Message[] }>;
+        assert.equal(history.length, 1);
+        assert.ok(history[0].messages.some((message) => message.content === 'second turn'));
+      } finally {
+        await closeServer(mock.server);
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test('Ctrl-C at the REPL tool approval prompt exits without running the tool', async () => {
+  const mock = startMockApi();
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-approval-cancel-'));
+  try {
+    const port = await mock.listen();
+    const session = startPty(
+      ['chat', '--model', PLAIN_MODEL, '--tools', 'datetime', '--interactive-tools'],
+      homeDir,
+      port
+    );
+
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 1, 'approval cancel prompt');
+    session.terminal.write(`${TOOL_PROMPT}\r`);
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt to cancel');
+    session.terminal.write('\x03');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.equal(mock.requests.length, 1);
+    assertNoHistory(homeDir);
+  } finally {
+    await closeServer(mock.server);
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});

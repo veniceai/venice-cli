@@ -485,12 +485,17 @@ export function listAvailableTools(): string[] {
   return Object.keys(BUILTIN_TOOLS);
 }
 
+export type AskQuestion = (question: string) => Promise<string>;
+
 export async function executeTool(
   name: string,
   args: unknown,
   options: {
     interactive?: boolean;
     allowedTools?: ReadonlySet<string> | readonly string[];
+    // Callers that already own a readline on stdin must supply this; a second
+    // reader would receive the same keystrokes.
+    askQuestion?: AskQuestion;
   } = {}
 ): Promise<string> {
   const allowedTools = options.allowedTools;
@@ -510,7 +515,7 @@ export async function executeTool(
 
   // Interactive approval mode
   if (options.interactive) {
-    const approved = await promptForApproval(name, args);
+    const approved = await promptForApproval(name, args, options.askQuestion ?? askOnStdin);
     if (!approved) {
       return 'Tool execution cancelled by user';
     }
@@ -523,22 +528,31 @@ export async function executeTool(
   }
 }
 
-async function promptForApproval(name: string, args: unknown): Promise<boolean> {
+async function promptForApproval(
+  name: string,
+  args: unknown,
+  askQuestion: AskQuestion
+): Promise<boolean> {
   const c = getChalk();
   
   console.log('\n' + c.yellow('⚡ Tool Call Request'));
   console.log(`${c.cyan('Tool:')} ${name}`);
   console.log(`${c.cyan('Args:')} ${JSON.stringify(args, null, 2)}`);
-  
+
+  const answer = (await askQuestion(c.yellow('\nApprove? [y/N] '))).toLowerCase();
+  return answer === 'y' || answer === 'yes';
+}
+
+function askOnStdin(question: string): Promise<string> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
   return new Promise((resolve) => {
-    rl.question(c.yellow('\nApprove? [y/N] '), (answer) => {
+    rl.question(question, (answer) => {
       rl.close();
-      resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+      resolve(answer);
     });
   });
 }

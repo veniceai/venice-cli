@@ -20,6 +20,7 @@ import {
   getToolDefinitions,
   executeTool,
   formatToolsHelp,
+  type AskQuestion,
 } from '../lib/tools.js';
 import {
   formatUsage,
@@ -608,8 +609,8 @@ export function registerChatCommand(program: Command): void {
         promptCacheRetention,
       };
 
-      const runChatTurn = async (signal?: AbortSignal): Promise<void> => {
-        const turnExtras = signal ? { ...chatExtras, signal } : chatExtras;
+      const runChatTurn = async (signal?: AbortSignal, askQuestion?: AskQuestion): Promise<void> => {
+        const turnExtras = signal ? { ...chatExtras, signal, askQuestion } : chatExtras;
         if (shouldStream) {
           await streamChat(messages, model, tools, options.interactiveTools, format, turnExtras);
         } else {
@@ -617,8 +618,12 @@ export function registerChatCommand(program: Command): void {
         }
       };
 
-      const submitUserTurn = (content: Message['content'], signal?: AbortSignal): Promise<void> =>
-        runTransactionalChatTurn(messages, content, () => runChatTurn(signal));
+      const submitUserTurn = (
+        content: Message['content'],
+        signal?: AbortSignal,
+        askQuestion?: AskQuestion
+      ): Promise<void> =>
+        runTransactionalChatTurn(messages, content, () => runChatTurn(signal, askQuestion));
       const privacy: ChatPrivacy = useE2EE ? 'e2ee' : useTEE ? 'tee' : 'plain';
       let completedTurns = 0;
       const saveHistoryIfNeeded = (): void => {
@@ -641,13 +646,13 @@ export function registerChatCommand(program: Command): void {
           await runChatRepl({
             input: process.stdin,
             output: process.stdout,
-            onTurn: async (line, signal) => {
+            onTurn: async (line, signal, askQuestion) => {
               try {
                 const content: Message['content'] =
                   firstTurn && Array.isArray(preparedAttachments)
                     ? [{ type: 'text', text: line }, ...preparedAttachments]
                     : line;
-                await submitUserTurn(content, signal);
+                await submitUserTurn(content, signal, askQuestion);
                 firstTurn = false;
                 completedTurns++;
               } catch (error) {
@@ -835,6 +840,7 @@ export interface ChatRunExtras {
   promptCacheKey?: string;
   promptCacheRetention?: PromptCacheRetention;
   signal?: AbortSignal;
+  askQuestion?: AskQuestion;
   completion?: ChatCompletionFn;
   completionStream?: ChatCompletionStreamFn;
 }
@@ -1051,7 +1057,8 @@ export async function streamChat(
         const result = await executeChatTool(
           toolCall,
           allowedTools,
-          interactiveTools
+          interactiveTools,
+          extras.askQuestion
         );
         console.log(c.dim(`\n[Tool: ${toolCall.function.name}]`));
         console.log(result);
@@ -1190,7 +1197,8 @@ function parseToolCallArguments(toolCall: ToolCall): Record<string, unknown> {
 async function executeChatTool(
   toolCall: ToolCall,
   allowedTools: ReadonlySet<string>,
-  interactive: boolean
+  interactive: boolean,
+  askQuestion?: AskQuestion
 ): Promise<string> {
   if (!allowedTools.has(toolCall.function.name)) {
     return `Tool not enabled: ${toolCall.function.name}`;
@@ -1200,6 +1208,7 @@ async function executeChatTool(
   return executeTool(toolCall.function.name, args, {
     interactive,
     allowedTools,
+    askQuestion,
   });
 }
 
@@ -1258,7 +1267,8 @@ export async function nonStreamChat(
       const result = await executeChatTool(
         toolCall,
         allowedTools,
-        interactiveTools
+        interactiveTools,
+        extras.askQuestion
       );
       messages.push({
         role: 'tool',

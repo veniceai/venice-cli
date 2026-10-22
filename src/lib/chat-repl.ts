@@ -19,7 +19,11 @@ export function isReplHelpCommand(line: string): boolean {
 export async function runChatRepl(options: {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
-  onTurn: (prompt: string, signal: AbortSignal) => Promise<void>;
+  onTurn: (
+    prompt: string,
+    signal: AbortSignal,
+    askQuestion: (question: string) => Promise<string>
+  ) => Promise<void>;
   prompt?: string;
 }): Promise<void> {
   const promptLabel = options.prompt ?? REPL_PROMPT;
@@ -67,8 +71,24 @@ export async function runChatRepl(options: {
         continue;
       }
       activeTurn = new AbortController();
+      const { signal } = activeTurn;
+      // readline hands a line to a pending question() instead of emitting it,
+      // so answers never reach the turn iterator.
+      const askQuestion = (question: string): Promise<string> =>
+        new Promise((resolve, reject) => {
+          if (signal.aborted || closed) {
+            reject(new Error('Question cancelled'));
+            return;
+          }
+          const onAbort = () => reject(new Error('Question cancelled'));
+          signal.addEventListener('abort', onAbort, { once: true });
+          rl.question(question, { signal }, (answer) => {
+            signal.removeEventListener('abort', onAbort);
+            resolve(answer);
+          });
+        });
       try {
-        await options.onTurn(line, activeTurn.signal);
+        await options.onTurn(line, signal, askQuestion);
       } finally {
         activeTurn = undefined;
       }

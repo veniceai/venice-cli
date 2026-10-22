@@ -98,3 +98,69 @@ test('runChatRepl aborts the active turn when input closes', async () => {
   assert.equal(activeSignal?.aborted, true);
   assert.equal(abortEvents, 1);
 });
+
+test('runChatRepl routes question answers to the turn instead of starting a new turn', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const turns: string[] = [];
+  const answers: string[] = [];
+  let markAsked: (() => void) | undefined;
+  const asked = new Promise<void>((resolve) => {
+    markAsked = resolve;
+  });
+
+  const done = runChatRepl({
+    input,
+    output,
+    onTurn: async (line, _signal, askQuestion) => {
+      turns.push(line);
+      if (line === 'needs approval') {
+        const answer = askQuestion('Approve? ');
+        markAsked?.();
+        answers.push(await answer);
+      }
+    },
+  });
+
+  input.write('needs approval\n');
+  await asked;
+  input.write('y\n');
+  input.write('next turn\n');
+  input.write('exit\n');
+  input.end();
+
+  await done;
+  assert.deepEqual(turns, ['needs approval', 'next turn']);
+  assert.deepEqual(answers, ['y']);
+});
+
+test('runChatRepl rejects a pending question when input closes', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let questionError: unknown;
+  let markAsked: (() => void) | undefined;
+  const asked = new Promise<void>((resolve) => {
+    markAsked = resolve;
+  });
+
+  const done = runChatRepl({
+    input,
+    output,
+    onTurn: async (_line, _signal, askQuestion) => {
+      const answer = askQuestion('Approve? ');
+      markAsked?.();
+      try {
+        await answer;
+      } catch (error) {
+        questionError = error;
+      }
+    },
+  });
+
+  input.write('needs approval\n');
+  await asked;
+  input.end();
+  await done;
+
+  assert.ok(questionError instanceof Error);
+});
