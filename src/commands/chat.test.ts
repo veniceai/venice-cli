@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -13,6 +13,7 @@ import {
   nonStreamChat,
   requestedCapabilityError,
   streamChat,
+  stripThinkingForContext,
 } from './chat.js';
 import { getToolDefinitions } from '../lib/tools.js';
 import { encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
@@ -238,6 +239,99 @@ test('chat preserves options and enforces the allowlist across tool rounds', asy
     });
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+test('chat --continue resends the previous reply without its reasoning', async () => {
+  const requests: ChatRequest[] = [];
+  const server = createServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'GET' && request.url?.startsWith('/api/v1/models')) {
+      response.end(JSON.stringify({ data: [{ id: 'test-model', type: 'text', model_spec: { capabilities: {} } }] }));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) {
+      chunks.push(Buffer.from(chunk));
+    }
+    requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as ChatRequest);
+    const content = requests.length === 1 ? '<think>secret plan</think>Hello Ada' : 'You are Ada';
+    response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }));
+  });
+
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-continue-'));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    // spawnSync would block the event loop the mock server runs on.
+    const runAsync = (args: string[]) => new Promise<{ status: number | null; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [cliPath, 'chat', '--model', 'test-model', ...args], {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          NODE_ENV: 'test',
+          NO_COLOR: '1',
+          VENICE_API_KEY: 'test-key',
+          VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.on('close', (status) => resolve({ status, stderr }));
+    });
+
+    const first = await runAsync(['My name is Ada']);
+    assert.equal(first.status, 0, first.stderr);
+    const second = await runAsync(['--continue', 'What is my name?']);
+    assert.equal(second.status, 0, second.stderr);
+
+    assert.deepEqual(
+      requests[1].messages.map((message) => [message.role, message.content]),
+      [
+        ['user', 'My name is Ada'],
+        ['assistant', 'Hello Ada'],
+        ['user', 'What is my name?'],
+      ]
+    );
+    const history = readFileSync(join(homeDir, '.venice', 'history.json'), 'utf8');
+    assert.doesNotMatch(history, /secret plan/);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test('streaming chat keeps the final reply in the conversation without reasoning', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'Hi' }];
+  const completionStream: NonNullable<NonNullable<Parameters<typeof streamChat>[5]>['completionStream']> =
+    async function* () {
+      yield { content: '<think>secret', done: false };
+      yield { content: ' plan</think>Hello', done: false };
+      yield { done: true };
+    };
+
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  console.log = () => {};
+  try {
+    await streamChat(messages, 'test-model', [], false, 'raw', { quiet: true, completionStream });
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'Hello' });
+});
+
+test('stripThinkingForContext removes complete and unclosed thinking blocks', () => {
+  assert.equal(stripThinkingForContext('<think>a</think>answer'), 'answer');
+  assert.equal(stripThinkingForContext('x<think>a</think>y<think>b</think>z'), 'xyz');
+  assert.equal(stripThinkingForContext('before <think>cut off'), 'before ');
+  assert.equal(stripThinkingForContext('no reasoning'), 'no reasoning');
 });
 
 test('chat --json-schema fails before the API when the file is invalid JSON', () => {

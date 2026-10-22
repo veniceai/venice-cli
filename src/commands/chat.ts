@@ -929,6 +929,7 @@ export async function streamChat(
       const requestsToolExecution =
         finishReason === 'tool_calls' || hasToolCalls;
       if (!requestsToolExecution || e2eeContext) {
+        appendAssistantReply(messages, roundContent);
         break;
       }
       if (!hasToolCalls) {
@@ -942,7 +943,7 @@ export async function streamChat(
       const toolCalls = reconstructStreamToolCalls(collectedToolCalls);
       messages.push({
         role: 'assistant',
-        content: roundContent,
+        content: stripThinkingForContext(roundContent),
         tool_calls: toolCalls,
       });
 
@@ -1135,6 +1136,7 @@ export async function nonStreamChat(
       } else {
         outputChatText(response.content, response.reasoning_content, format, extras);
       }
+      appendAssistantReply(messages, response.content);
       if (response.usage && format === 'pretty') {
         console.log(formatUsage(response.usage));
       }
@@ -1150,7 +1152,7 @@ export async function nonStreamChat(
 
     messages.push({
       role: 'assistant',
-      content: response.content,
+      content: stripThinkingForContext(response.content),
       tool_calls: response.tool_calls,
     });
 
@@ -1166,6 +1168,24 @@ export async function nonStreamChat(
         tool_call_id: toolCall.id,
       });
     }
+  }
+}
+
+/**
+ * Reasoning is shown to the user but never kept in the conversation, so
+ * `--continue` does not resend it. An unclosed block (a reply cut off
+ * mid-thought) is dropped too.
+ */
+export function stripThinkingForContext(content: string): string {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/, '');
+}
+
+function appendAssistantReply(messages: Message[], content: string): void {
+  const reply = stripThinkingForContext(content).trim();
+  if (reply) {
+    messages.push({ role: 'assistant', content: reply });
   }
 }
 
