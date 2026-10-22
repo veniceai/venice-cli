@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 import * as fs from 'fs';
+import * as path from 'path';
 import {
   loadHistory,
   clearHistory,
@@ -196,9 +197,15 @@ export function registerHistoryCommand(program: Command): void {
     .command('export <file>')
     .description('Export history to a JSON file')
     .action((file: string) => {
-      const conversations = loadHistory();
+      try {
+        const conversations = loadHistory();
 
-      fs.writeFileSync(file, JSON.stringify(conversations, null, 2));
-      console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(conversations, null, 2));
+        console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
     });
 }

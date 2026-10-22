@@ -223,7 +223,10 @@ export function registerImageCommand(program: Command): void {
             outputPath = path.join(dir, `${base}_${i + 1}${ext}`);
           }
 
-          fs.writeFileSync(outputPath, imageData);
+          writeBufferToFile(imageData, outputPath, {
+            maxBytes: MAX_IMAGE_DOWNLOAD_BYTES,
+            label: 'Generated image',
+          });
           console.log(formatSuccess(`Saved to ${outputPath}`));
         }
       } catch (error) {
