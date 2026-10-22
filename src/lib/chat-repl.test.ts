@@ -49,10 +49,19 @@ test('runChatRepl collects turns until exit without requiring a TTY', async () =
     },
   });
 
-  input.write('hello\n');
-  input.write('\n');
-  input.write('/help\n');
-  input.write('next turn\n');
+  const promptCount = () => outputText.split(REPL_PROMPT).length - 1;
+  const send = async (line: string) => {
+    const before = promptCount();
+    input.write(`${line}\n`);
+    while (promptCount() === before) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  await send('hello');
+  await send('');
+  await send('/help');
+  await send('next turn');
   input.write('exit\n');
   input.end();
 
@@ -125,6 +134,10 @@ test('runChatRepl routes question answers to the turn instead of starting a new 
   input.write('needs approval\n');
   await asked;
   input.write('y\n');
+  while (turns.length === 1 && answers.length === 0) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
   input.write('next turn\n');
   input.write('exit\n');
   input.end();
@@ -132,6 +145,49 @@ test('runChatRepl routes question answers to the turn instead of starting a new 
   await done;
   assert.deepEqual(turns, ['needs approval', 'next turn']);
   assert.deepEqual(answers, ['y']);
+});
+
+test('runChatRepl drops lines entered while a turn runs instead of queueing them', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let outputText = '';
+  output.on('data', (chunk) => {
+    outputText += chunk.toString();
+  });
+  const turns: string[] = [];
+  let finishTurn: (() => void) | undefined;
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+
+  const done = runChatRepl({
+    input,
+    output,
+    onTurn: async (line) => {
+      turns.push(line);
+      if (turns.length === 1) {
+        markStarted?.();
+        await new Promise<void>((resolve) => {
+          finishTurn = resolve;
+        });
+      }
+    },
+  });
+
+  input.write('slow turn\n');
+  await started;
+  input.write('typed while busy\n');
+  input.write('y\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  finishTurn?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  input.write('exit\n');
+  input.end();
+  await done;
+
+  assert.deepEqual(turns, ['slow turn']);
+  assert.match(outputText, /Ignored 2 lines entered while the response was running/);
 });
 
 test('runChatRepl rejects a pending question when input closes', async () => {

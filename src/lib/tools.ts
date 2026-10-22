@@ -544,13 +544,28 @@ async function promptForApproval(
 }
 
 function askOnStdin(question: string): Promise<string> {
+  // stdin may already be exhausted (e.g. the prompt was piped in); treat that
+  // as a denial instead of leaving the turn pending until the process exits.
+  if (process.stdin.readableEnded) {
+    process.stdout.write(`${question}\n`);
+    return Promise.resolve('');
+  }
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
   return new Promise((resolve) => {
+    let answered = false;
+    rl.once('close', () => {
+      if (!answered) {
+        process.stdout.write('\n');
+        resolve('');
+      }
+    });
     rl.question(question, (answer) => {
+      answered = true;
       rl.close();
       resolve(answer);
     });

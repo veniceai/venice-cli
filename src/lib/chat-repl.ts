@@ -36,6 +36,8 @@ export async function runChatRepl(options: {
   rl.setPrompt(promptLabel);
 
   let closed = false;
+  let turnRunning = false;
+  let ignoredLines = 0;
   let activeTurn: AbortController | undefined;
   const abortActiveTurn = () => {
     const controller = activeTurn;
@@ -48,57 +50,97 @@ export async function runChatRepl(options: {
     abortActiveTurn();
     rl.close();
   };
-  rl.on('SIGINT', onSigint);
-  rl.on('close', () => {
-    closed = true;
-    abortActiveTurn();
-  });
-  rl.prompt();
+  const reportIgnoredLines = () => {
+    if (ignoredLines === 0) return;
+    options.output.write(
+      `\n(Ignored ${ignoredLines} line${ignoredLines === 1 ? '' : 's'} entered while the response was running.)\n`
+    );
+    ignoredLines = 0;
+  };
 
-  try {
-    for await (const answer of rl) {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const settle = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      rl.off('SIGINT', onSigint);
+      rl.close();
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    };
+
+    rl.on('SIGINT', onSigint);
+    rl.on('close', () => {
+      closed = true;
+      abortActiveTurn();
+      if (!turnRunning) settle();
+    });
+
+    // Lines entered while a turn runs are dropped, never queued: queued input
+    // would be sent as an unseen chat turn (e.g. an approval typed too early).
+    // Answers to askQuestion() never arrive here; readline hands a line to a
+    // pending question() instead of emitting 'line'.
+    rl.on('line', (answer) => {
+      if (closed) return;
+      if (turnRunning) {
+        ignoredLines++;
+        return;
+      }
       const line = answer.trim();
       if (!line) {
         rl.prompt();
-        continue;
+        return;
       }
       if (isReplExitCommand(line)) {
-        break;
+        rl.close();
+        return;
       }
       if (isReplHelpCommand(line)) {
         options.output.write(`${REPL_HELP}\n`);
         rl.prompt();
-        continue;
+        return;
       }
+
+      turnRunning = true;
       activeTurn = new AbortController();
       const { signal } = activeTurn;
-      // readline hands a line to a pending question() instead of emitting it,
-      // so answers never reach the turn iterator.
       const askQuestion = (question: string): Promise<string> =>
-        new Promise((resolve, reject) => {
+        new Promise((resolveAnswer, rejectAnswer) => {
           if (signal.aborted || closed) {
-            reject(new Error('Question cancelled'));
+            rejectAnswer(new Error('Question cancelled'));
             return;
           }
-          const onAbort = () => reject(new Error('Question cancelled'));
+          reportIgnoredLines();
+          const onAbort = () => rejectAnswer(new Error('Question cancelled'));
           signal.addEventListener('abort', onAbort, { once: true });
-          rl.question(question, { signal }, (answer) => {
+          rl.question(question, { signal }, (reply) => {
             signal.removeEventListener('abort', onAbort);
-            resolve(answer);
+            resolveAnswer(reply);
           });
         });
-      try {
-        await options.onTurn(line, signal, askQuestion);
-      } finally {
-        activeTurn = undefined;
-      }
-      if (closed) {
-        break;
-      }
-      rl.prompt();
-    }
-  } finally {
-    rl.off('SIGINT', onSigint);
-    rl.close();
-  }
+
+      options.onTurn(line, signal, askQuestion).then(
+        () => {
+          turnRunning = false;
+          activeTurn = undefined;
+          if (closed) {
+            settle();
+            return;
+          }
+          reportIgnoredLines();
+          rl.prompt();
+        },
+        (error: unknown) => {
+          turnRunning = false;
+          activeTurn = undefined;
+          settle(error);
+        }
+      );
+    });
+
+    rl.prompt();
+  });
 }

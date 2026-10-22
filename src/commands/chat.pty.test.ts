@@ -1,4 +1,5 @@
 import { spawn as spawnPty, type IPty } from 'node-pty';
+import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,7 @@ const PLAIN_MODEL = 'plain-pty-model';
 const PROMPT = 'you> ';
 const APPROVAL_PROMPT = 'Approve? [y/N]';
 const TOOL_PROMPT = 'use a tool';
+const TWO_TOOLS_PROMPT = 'use two tools';
 const TEST_TIMEOUT_MS = 8_000;
 
 interface CapturedRequest {
@@ -42,6 +44,7 @@ function createQuote(reportAddress?: string): string {
 function startMockApi(options: {
   failFirstToolTurn?: boolean;
   stallFirstCompletion?: boolean;
+  delayToolCallMs?: number;
 } = {}): {
   server: Server;
   requests: CapturedRequest[];
@@ -144,12 +147,30 @@ function startMockApi(options: {
         }));
         return;
       }
-      if (body.messages.at(-1)?.content === TOOL_PROMPT) {
-        const toolCall = {
-          id: `tool-call-${requests.length}`,
-          type: 'function',
-          function: { name: 'datetime', arguments: '{}' },
-        };
+      const lastContent = body.messages.at(-1)?.content;
+      if (lastContent === TOOL_PROMPT || lastContent === TWO_TOOLS_PROMPT) {
+        const toolCalls = Array.from(
+          { length: lastContent === TWO_TOOLS_PROMPT ? 2 : 1 },
+          (_, index) => ({
+            id: `tool-call-${requests.length}-${index}`,
+            type: 'function',
+            function: { name: 'datetime', arguments: '{}' },
+          })
+        );
+        const toolCall = toolCalls[0];
+        if (options.delayToolCallMs) {
+          await new Promise((resolve) => setTimeout(resolve, options.delayToolCallMs));
+        }
+        if (lastContent === TWO_TOOLS_PROMPT) {
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({
+            choices: [{
+              message: { content: '', tool_calls: toolCalls },
+              finish_reason: 'tool_calls',
+            }],
+          }));
+          return;
+        }
         if (body.stream) {
           response.setHeader('Content-Type', 'text/event-stream');
           response.write(`data: ${JSON.stringify({
@@ -619,6 +640,190 @@ test('Ctrl-C at the REPL tool approval prompt exits without running the tool', a
     assert.equal(result.exitCode, 0, session.output);
     assert.equal(mock.requests.length, 1);
     assertNoHistory(homeDir);
+  } finally {
+    await closeServer(mock.server);
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+const IGNORED_NOTICE = /Ignored 1 line entered while the response was running/;
+
+function readHistory(homeDir: string): Array<{ messages: Message[] }> {
+  return JSON.parse(readFileSync(join(homeDir, '.venice', 'history.json'), 'utf8'));
+}
+
+function assertNeverSentAsUserTurn(requests: CapturedRequest[], content: string): void {
+  for (const request of requests) {
+    assert.ok(
+      !request.messages.some((message) => message.role === 'user' && message.content === content),
+      `"${content}" was sent as a user turn:\n${JSON.stringify(request.messages)}`
+    );
+  }
+}
+
+async function withApprovalSession(
+  name: string,
+  mockOptions: Parameters<typeof startMockApi>[0],
+  extraArgs: string[],
+  run: (
+    session: PtySession,
+    mock: ReturnType<typeof startMockApi>,
+    homeDir: string
+  ) => Promise<void>
+): Promise<void> {
+  const mock = startMockApi(mockOptions);
+  const homeDir = mkdtempSync(join(tmpdir(), `venice-chat-${name}-`));
+  try {
+    const port = await mock.listen();
+    const session = startPty(
+      ['chat', '--model', PLAIN_MODEL, '--tools', 'datetime', '--interactive-tools', ...extraArgs],
+      homeDir,
+      port
+    );
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 1, `${name} initial prompt`);
+    await run(session, mock, homeDir);
+  } finally {
+    await closeServer(mock.server);
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
+test('an approval typed before the prompt appears is dropped, not sent to the model', async () => {
+  await withApprovalSession('approval-typeahead', { delayToolCallMs: 500 }, [], async (session, mock, homeDir) => {
+    session.terminal.write(`${TOOL_PROMPT}\r`);
+    await waitForCondition(() => mock.requests.length === 1, 'tool-call request');
+    session.terminal.write('y\r');
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt');
+    assert.match(session.output, IGNORED_NOTICE);
+    session.terminal.write('n\r');
+    await waitFor(session, (output) => output.includes('mock-reply-1'), 'reply after denial');
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'prompt after denial');
+    session.terminal.write('exit\r');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.equal(mock.requests.length, 2, session.output);
+    assertNeverSentAsUserTurn(mock.requests, 'y');
+    assert.deepEqual(toolResults(mock.requests[1]), ['Tool execution cancelled by user']);
+    assert.ok(!readHistory(homeDir)[0].messages.some((message) => message.content === 'y'));
+  });
+});
+
+test('a pasted prompt plus approval does not answer or queue the approval', async () => {
+  await withApprovalSession('approval-paste', {}, [], async (session, mock) => {
+    session.terminal.write(`${TOOL_PROMPT}\ry\r`);
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt');
+    session.terminal.write('n\r');
+    await waitFor(session, (output) => output.includes('mock-reply-1'), 'reply after paste');
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'prompt after paste');
+    session.terminal.write('exit\r');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.equal(mock.requests.length, 2, session.output);
+    assertNeverSentAsUserTurn(mock.requests, 'y');
+    assert.deepEqual(toolResults(mock.requests[1]), ['Tool execution cancelled by user']);
+  });
+});
+
+test('a line entered while a reply is running is dropped with a notice', async () => {
+  await withApprovalSession('typing-while-busy', { delayToolCallMs: 500 }, [], async (session, mock) => {
+    session.terminal.write(`${TOOL_PROMPT}\r`);
+    await waitForCondition(() => mock.requests.length === 1, 'busy request');
+    session.terminal.write('typed while busy\r');
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt');
+    session.terminal.write('y\r');
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'prompt after busy turn');
+    session.terminal.write('exit\r');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.match(session.output, IGNORED_NOTICE);
+    assert.equal(mock.requests.length, 2, session.output);
+    assertNeverSentAsUserTurn(mock.requests, 'typed while busy');
+  });
+});
+
+test('each of several tool calls gets its own approval answer', async () => {
+  await withApprovalSession('two-approvals', {}, ['--no-stream'], async (session, mock) => {
+    session.terminal.write(`${TWO_TOOLS_PROMPT}\r`);
+    await waitFor(session, (output) => occurrences(output, APPROVAL_PROMPT) >= 1, 'first approval');
+    session.terminal.write('y\r');
+    await waitFor(session, (output) => occurrences(output, APPROVAL_PROMPT) >= 2, 'second approval');
+    session.terminal.write('n\r');
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'prompt after approvals');
+    session.terminal.write('exit\r');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    const [approved, denied] = toolResults(mock.requests[1]);
+    assert.notEqual(approved, 'Tool execution cancelled by user');
+    assert.equal(denied, 'Tool execution cancelled by user');
+    assertNeverSentAsUserTurn(mock.requests, 'y');
+    assertNeverSentAsUserTurn(mock.requests, 'n');
+  });
+});
+
+test('Ctrl-C at an approval on a later turn saves only the completed turns', async () => {
+  await withApprovalSession('approval-cancel-later', {}, [], async (session, mock, homeDir) => {
+    session.terminal.write('plain first\r');
+    await waitFor(session, (output) => occurrences(output, PROMPT) >= 2, 'second prompt');
+    session.terminal.write(`${TOOL_PROMPT}\r`);
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt');
+    session.terminal.write('\x03');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.equal(mock.requests.length, 2);
+    assert.deepEqual(readHistory(homeDir)[0].messages, [
+      { role: 'user', content: 'plain first' },
+      { role: 'assistant', content: 'mock-reply-1' },
+    ]);
+  });
+});
+
+test('Ctrl-D at the approval prompt exits without running the tool', async () => {
+  await withApprovalSession('approval-eof', {}, [], async (session, mock, homeDir) => {
+    session.terminal.write(`${TOOL_PROMPT}\r`);
+    await waitFor(session, (output) => output.includes(APPROVAL_PROMPT), 'approval prompt');
+    session.terminal.write('\x04');
+
+    const result = await waitForExit(session);
+    assert.equal(result.exitCode, 0, session.output);
+    assert.equal(mock.requests.length, 1);
+    assertNoHistory(homeDir);
+  });
+});
+
+test('one-shot --interactive-tools with a piped prompt denies instead of exiting mid-turn', async () => {
+  const mock = startMockApi();
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-piped-approval-'));
+  try {
+    const port = await mock.listen();
+    const child = spawn(
+      process.execPath,
+      [cliPath, 'chat', '--model', PLAIN_MODEL, '--no-stream', '--tools', 'datetime', '--interactive-tools'],
+      {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          NODE_ENV: 'test',
+          NO_COLOR: '1',
+          VENICE_API_KEY: 'test-key',
+          VENICE_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
+        },
+      }
+    );
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.stdin.end(TOOL_PROMPT);
+    const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
+
+    assert.equal(exitCode, 0, output);
+    assert.equal(mock.requests.length, 2, output);
+    assert.deepEqual(toolResults(mock.requests[1]), ['Tool execution cancelled by user']);
+    assert.match(output, /mock-reply-1/);
   } finally {
     await closeServer(mock.server);
     rmSync(homeDir, { recursive: true, force: true });
