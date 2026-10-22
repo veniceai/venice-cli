@@ -270,10 +270,8 @@ function shuntingYard(tokens: Token[]): (Token | { type: 'function'; value: stri
       while (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type !== 'lparen') {
         output.push(opStack.pop() as Token);
       }
-      const fnToken = opStack.find((t): t is Token & { argCount: number } => 
-        'argCount' in t && t.type === 'function'
-      );
-      if (fnToken) {
+      const fnToken = opStack[opStack.length - 2];
+      if (fnToken && 'argCount' in fnToken && fnToken.type === 'function') {
         fnToken.argCount++;
       }
     } else if (token.type === 'operator') {
