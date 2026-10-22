@@ -1024,9 +1024,7 @@ export async function streamChat(
       }
 
       const hasToolCalls = collectedToolCalls.length > 0;
-      const contextContent = stripThinking
-        ? stripCompletedThinkingBlocks(roundContent)
-        : roundContent;
+      const contextContent = stripThinkingForContext(roundContent);
       const requestsToolExecution =
         finishReason === 'tool_calls' || hasToolCalls;
       if (!requestsToolExecution || e2eeContext) {
@@ -1232,9 +1230,7 @@ export async function nonStreamChat(
   let toolRounds = 0;
   while (true) {
     const response = await completion(messages, chatOptions);
-    const contextContent = extras.stripThinking
-      ? stripCompletedThinkingBlocks(response.content)
-      : response.content;
+    const contextContent = stripThinkingForContext(response.content);
     const hasToolCalls = Boolean(response.tool_calls?.length);
 
     if (response.finish_reason !== 'tool_calls' && !hasToolCalls) {
@@ -1279,8 +1275,12 @@ export async function nonStreamChat(
   }
 }
 
-function stripCompletedThinkingBlocks(content: string): string {
-  return content.replace(/<think>[\s\S]*?<\/think>/g, '');
+// Reasoning is shown to the user but never kept in the conversation context or
+// history. An unclosed block (a reply cut off mid-thought) is dropped too.
+export function stripThinkingForContext(content: string): string {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/, '');
 }
 
 function outputChatText(

@@ -14,6 +14,7 @@ import {
   requestedCapabilityError,
   runTransactionalChatTurn,
   streamChat,
+  stripThinkingForContext,
 } from './chat.js';
 import { getToolDefinitions } from '../lib/tools.js';
 import { encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
@@ -696,7 +697,7 @@ test('non-streaming fully stripped replies preserve an empty assistant turn', as
   assert.equal(nextTurnMessages?.[1].content, '');
 });
 
-test('--strip-thinking preserves an unclosed thinking tag in assistant context', async () => {
+test('an unclosed thinking tag is dropped from assistant context', async () => {
   const messages: Message[] = [{ role: 'user', content: 'prompt' }];
   await streamChat(messages, 'test-model', [], false, 'raw', {
     quiet: true,
@@ -709,8 +710,38 @@ test('--strip-thinking preserves an unclosed thinking tag in assistant context',
 
   assert.deepEqual(messages.at(-1), {
     role: 'assistant',
-    content: 'before <think>unfinished',
+    content: 'before ',
   });
+});
+
+test('stripThinkingForContext removes completed and unclosed thinking blocks', () => {
+  assert.equal(stripThinkingForContext('<think>a</think>one<think>b</think> two'), 'one two');
+  assert.equal(stripThinkingForContext('answer <think>cut off'), 'answer ');
+  assert.equal(stripThinkingForContext('no reasoning'), 'no reasoning');
+});
+
+test('thinking is kept out of context and history even without --strip-thinking', async () => {
+  const streamed: Message[] = [{ role: 'user', content: 'prompt' }];
+  await streamChat(streamed, 'test-model', [], false, 'raw', {
+    quiet: true,
+    completionStream: async function* () {
+      yield { content: '<think>private plan</think>visible answer', done: false };
+      yield { finish_reason: 'stop', done: false };
+      yield { done: true };
+    },
+  });
+  assert.deepEqual(streamed.at(-1), { role: 'assistant', content: 'visible answer' });
+
+  const nonStreamed: Message[] = [{ role: 'user', content: 'prompt' }];
+  await nonStreamChat(nonStreamed, 'test-model', [], false, 'raw', {
+    quiet: true,
+    completion: async () => ({
+      content: '<think>private plan</think>visible answer',
+      finish_reason: 'stop',
+    }),
+  });
+  assert.deepEqual(nonStreamed.at(-1), { role: 'assistant', content: 'visible answer' });
+  assert.doesNotMatch(JSON.stringify([streamed, nonStreamed]), /private plan|<think>/);
 });
 
 test('E2EE streaming strips server-side controls from the request', async () => {
