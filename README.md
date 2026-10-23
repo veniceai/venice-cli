@@ -510,11 +510,14 @@ venice rpc ethereum-mainnet eth_chainId -f json
 
 Pretty mode prints the JSON-RPC result and, when present, `X-Venice-RPC-Credits` / cost headers. JSON-RPC `error` responses exit non-zero.
 
+Each call sends a fresh `Idempotency-Key` and reuses it on automatic retries, so a retried request gets the cached response instead of being charged again. To retry safely across separate runs, pass the same `--idempotency-key` with the same request; Venice caches keys for 24 hours and rejects a reused key with a different body.
+
 **Options:**
 
 | Option | Description |
 |--------|-------------|
 | `--batch <file>` | JSON array of JSON-RPC 2.0 objects (max 100) |
+| `--idempotency-key <key>` | Key for cross-invocation retries (`[A-Za-z0-9_-]`, 1-255 chars) |
 | `-f, --format <format>` | Output format (pretty\|json) |
 
 ### Configuration

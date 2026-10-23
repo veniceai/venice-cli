@@ -331,6 +331,7 @@ test('listCryptoNetworks is a public GET without Authorization', async () => {
     assert.match(requests[0].url, /\/crypto\/rpc\/networks$/);
     assert.equal(requests[0].init?.method ?? 'GET', 'GET');
     assert.equal(getHeader(requests[0].init, 'Authorization'), undefined);
+    assert.equal(getHeader(requests[0].init, 'Idempotency-Key'), undefined);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv('VENICE_API_KEY', originalApiKey);
@@ -380,6 +381,78 @@ test('cryptoRpc posts JSON-RPC with an API key and captures cost headers', async
       params: [],
       id: 1,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv('VENICE_API_KEY', originalApiKey);
+  }
+});
+
+test('cryptoRpc reuses one idempotency key and body across retries', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const requests: Array<{ key?: string; body: string }> = [];
+
+  process.env.VENICE_API_KEY = 'test-key';
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ key: getHeader(init, 'Idempotency-Key'), body: readBody(init) });
+    if (requests.length === 1) {
+      return new Response('upstream unavailable', { status: 503 });
+    }
+    return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' });
+  }) as typeof fetch;
+
+  try {
+    const result = await cryptoRpc('ethereum-mainnet', [
+      { jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 },
+      { jsonrpc: '2.0', method: 'eth_chainId', params: [], id: 2 },
+    ]);
+    assert.deepEqual(result.body, { jsonrpc: '2.0', id: 1, result: '0x1' });
+    assert.equal(requests.length, 2);
+    assert.match(requests[0].key ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(requests[1].key, requests[0].key);
+    assert.equal(requests[1].body, requests[0].body);
+
+    await cryptoRpc('ethereum-mainnet', {
+      jsonrpc: '2.0',
+      method: 'eth_blockNumber',
+      params: [],
+      id: 1,
+    });
+    assert.equal(requests.length, 3);
+    assert.notEqual(requests[2].key, requests[0].key);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv('VENICE_API_KEY', originalApiKey);
+  }
+});
+
+test('cryptoRpc forwards a valid supplied idempotency key and rejects invalid ones locally', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const keys: Array<string | undefined> = [];
+  const request = { jsonrpc: '2.0' as const, method: 'eth_blockNumber', params: [], id: 1 };
+
+  process.env.VENICE_API_KEY = 'test-key';
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    keys.push(getHeader(init, 'Idempotency-Key'));
+    return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' });
+  }) as typeof fetch;
+
+  try {
+    const maxLengthKey = 'A'.repeat(255);
+    await cryptoRpc('ethereum-mainnet', request, { idempotencyKey: 'tx_42-retry' });
+    await cryptoRpc('ethereum-mainnet', request, { idempotencyKey: maxLengthKey });
+    assert.deepEqual(keys, ['tx_42-retry', maxLengthKey]);
+
+    for (const idempotencyKey of ['', 'has space', 'semi;colon', 'ünicode', 'A'.repeat(256)]) {
+      await assert.rejects(
+        () => cryptoRpc('ethereum-mainnet', request, { idempotencyKey }),
+        /Invalid idempotency key/
+      );
+    }
+    assert.equal(keys.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv('VENICE_API_KEY', originalApiKey);
