@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import elliptic from 'elliptic';
 
 import {
   buildChatUserMessage,
@@ -16,7 +17,7 @@ import {
   stripThinkingForContext,
 } from './chat.js';
 import { getToolDefinitions } from '../lib/tools.js';
-import { encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
+import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
 import { buildUserMessageContent } from '../lib/chat-attachments.js';
 import type { Message } from '../types/index.js';
 
@@ -532,6 +533,172 @@ test('chat rejects prompt caching and reasoning with E2EE before completion', as
     });
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+function buildTdxQuote(signingAddress: string): string {
+  const quote = Buffer.alloc(632);
+  quote.writeUInt32LE(0x81, 4);
+  Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
+  return quote.toString('hex');
+}
+
+async function runE2EEChat(args: string[], replyChunks: string[]) {
+  const model = 'e2ee-test-model';
+  const signingKey = new elliptic.ec('secp256k1').genKeyPair().getPublic(false, 'hex');
+  const signingAddress = deriveSigningAddressFromKey(signingKey);
+  assert.ok(signingAddress);
+  const requests: string[] = [];
+
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    requests.push(`${request.method} ${url.pathname}`);
+    if (request.method === 'GET' && url.pathname === '/api/v1/models') {
+      const requestedType = url.searchParams.get('type');
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        data: !requestedType || requestedType === 'text' ? [{
+          id: model,
+          type: 'text',
+          model_spec: { capabilities: { supportsE2EE: true, supportsTeeAttestation: true } },
+        }] : [],
+      }));
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/api/v1/tee/attestation') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        model,
+        nonce: url.searchParams.get('nonce'),
+        verified: true,
+        signing_key: signingKey,
+        signing_address: signingAddress,
+        intel_quote: buildTdxQuote(signingAddress),
+        server_verification: {
+          tdx: { valid: true },
+          nonceBinding: { bound: true },
+          verifiedAt: new Date().toISOString(),
+          verificationDurationMs: 1,
+        },
+      }));
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/chat/completions') {
+      for await (const _chunk of request) { /* drain */ }
+      const clientPublicKey = String(request.headers['x-venice-tee-client-pub-key']);
+      response.setHeader('Content-Type', 'text/event-stream');
+      for (const text of replyChunks) {
+        const delta = { content: encryptMessage(text, clientPublicKey) };
+        response.write(`data: ${JSON.stringify({ id: 'cmpl-1', choices: [{ delta }] })}\n\n`);
+      }
+      response.end('data: [DONE]\n\n');
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-chat-e2ee-route-'));
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, [cliPath, 'chat', '--model', model, ...args], {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          NODE_ENV: 'test',
+          NO_COLOR: '1',
+          VENICE_API_KEY: 'test-key',
+          VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+    let history: string | undefined;
+    try {
+      history = readFileSync(join(homeDir, '.venice', 'history.json'), 'utf8');
+    } catch {
+      history = undefined;
+    }
+    return { ...result, requests, history };
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
+test('piped E2EE chat streams and prints only the decrypted reply', async () => {
+  const result = await runE2EEChat(['hello'], ['Hello ', 'from the enclave']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'Hello from the enclave\n');
+  assert.match(result.stderr, /TEE attestation verified/);
+  assert.ok(result.requests.includes('POST /api/v1/chat/completions'));
+  assert.doesNotMatch(result.history ?? '', /from the enclave|hello/);
+});
+
+test('E2EE chat with -f json streams and emits the non-streaming JSON contract', async () => {
+  const result = await runE2EEChat(['-f', 'json', 'hello'], ['{"a":', '1}']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { content: '{"a":1}' });
+  assert.doesNotMatch(result.history ?? '', /"a"/);
+});
+
+test('E2EE chat rejects explicit --no-stream before attestation or completion', async () => {
+  const result = await runE2EEChat(['--no-stream', 'hello'], ['unused']);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--no-stream is not supported with E2EE/);
+  assert.equal(result.stdout, '');
+  assert.ok(!result.requests.some((request) => /attestation|completions/.test(request)), result.requests.join('\n'));
+});
+
+test('streaming chat -f json buffers output and honours --strip-thinking', async () => {
+  const clientKeys = generateEphemeralKeyPair();
+  const completionStream: NonNullable<NonNullable<Parameters<typeof streamChat>[5]>['completionStream']> =
+    async function* () {
+      yield { content: encryptMessage('<think>plan</think>', clientKeys.publicKeyHex), done: false };
+      yield { content: encryptMessage('answer', clientKeys.publicKeyHex), done: false };
+      yield { done: true };
+    };
+  const writes: string[] = [];
+  const logs: string[] = [];
+  const originalWrite = process.stdout.write;
+  const originalLog = console.log;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    writes.push(chunk.toString());
+    return true;
+  }) as typeof process.stdout.write;
+  console.log = (...args: unknown[]) => logs.push(args.join(' '));
+
+  try {
+    await streamChat([], 'e2ee-test-model', [], false, 'json', {
+      e2eeContext: {
+        privateKey: clientKeys.privateKey,
+        publicKeyHex: clientKeys.publicKeyHex,
+        modelPublicKey: '00',
+        attestation: {} as never,
+      },
+      quiet: true,
+      stripThinking: true,
+      completionStream,
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+    console.log = originalLog;
+  }
+
+  assert.doesNotMatch(writes.join(''), /answer|plan/);
+  assert.deepEqual(logs.map((line) => JSON.parse(line)), [{ content: 'answer' }]);
 });
 
 test('streaming chat preserves options and handles sequential tool rounds', async () => {
