@@ -46,4 +46,30 @@ test('calculator still evaluates flat expressions', async () => {
 test('calculator returns an error string for invalid expressions', async () => {
   assert.match(await calculate('2+'), /^Error evaluating expression:/);
   assert.match(await calculate('(1,2)'), /^Error evaluating expression:/);
+  assert.match(await calculate('--'), /^Error evaluating expression:/);
+  assert.match(await calculate('2*'), /^Error evaluating expression:/);
+});
+
+test('calculator supports unary minus and plus', async () => {
+  assert.equal(await calculate('-5'), 'Result: -5');
+  assert.equal(await calculate('2 + -3'), 'Result: -1');
+  assert.equal(await calculate('(-5)+3'), 'Result: -2');
+  assert.equal(await calculate('abs(-4)'), 'Result: 4');
+  assert.equal(await calculate('max(-1,-2)'), 'Result: -1');
+  assert.equal(await calculate('+5'), 'Result: 5');
+  assert.equal(await calculate('2 * -3'), 'Result: -6');
+  assert.equal(await calculate('--5'), 'Result: 5');
+});
+
+test('calculator keeps binary minus distinct from unary minus', async () => {
+  assert.equal(await calculate('5-3'), 'Result: 2');
+  assert.equal(await calculate('5 - -3'), 'Result: 8');
+  assert.equal(await calculate('(1)-1'), 'Result: 0');
+});
+
+test('calculator binds unary minus looser than powers', async () => {
+  assert.equal(await calculate('-2^2'), 'Result: -4');
+  assert.equal(await calculate('(-2)^2'), 'Result: 4');
+  assert.equal(await calculate('2^-1'), 'Result: 0.5');
+  assert.equal(await calculate('-2*3'), 'Result: -6');
 });
