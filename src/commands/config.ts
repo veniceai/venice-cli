@@ -120,6 +120,9 @@ export function registerConfigCommand(program: Command): void {
         throw new Error('Do not provide a value when using --stdin');
       }
 
+      // Fail before prompting if the existing config cannot be updated safely.
+      loadConfig();
+
       if (key === 'api_key') {
         if (options.stdin) {
           value = await readStdin();
@@ -194,6 +197,8 @@ export function registerConfigCommand(program: Command): void {
     .action(async () => {
       const c = getChalk();
       let rl: readline.Interface | undefined;
+
+      loadConfig();
 
       console.log(c.bold('\nVenice CLI Setup\n'));
       console.log(`Config will be saved to: ${getConfigPath()}\n`);
