@@ -159,7 +159,7 @@ function safeEvaluateMath(expression: string): number {
   return evaluateRPN(rpn);
 }
 
-type Token = { type: 'number'; value: number } | { type: 'operator'; value: string } | { type: 'function'; value: string } | { type: 'lparen' } | { type: 'rparen' } | { type: 'comma' };
+type Token = { type: 'number'; value: number } | { type: 'operator'; value: string } | { type: 'unary'; value: string } | { type: 'function'; value: string } | { type: 'lparen' } | { type: 'rparen' } | { type: 'comma' };
 
 const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
   sqrt: (args) => Math.sqrt(args[0]),
@@ -189,8 +189,11 @@ const OPERATORS: Record<string, { precedence: number; assoc: 'left' | 'right' }>
   '*': { precedence: 2, assoc: 'left' },
   '/': { precedence: 2, assoc: 'left' },
   '%': { precedence: 2, assoc: 'left' },
-  '^': { precedence: 3, assoc: 'right' },
+  '^': { precedence: 4, assoc: 'right' },
 };
+
+// Below '^' so that -2^2 is -(2^2), above '*' so that -2*3 is (-2)*3.
+const UNARY_PRECEDENCE = 3;
 
 function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
@@ -244,7 +247,10 @@ function tokenize(expr: string): Token[] {
     }
 
     if (OPERATORS[char]) {
-      tokens.push({ type: 'operator', value: char });
+      const prev = tokens[tokens.length - 1];
+      const isUnary = (char === '-' || char === '+') &&
+        (!prev || prev.type === 'operator' || prev.type === 'unary' || prev.type === 'lparen' || prev.type === 'comma');
+      tokens.push({ type: isUnary ? 'unary' : 'operator', value: char });
       i++;
       continue;
     }
@@ -274,12 +280,14 @@ function shuntingYard(tokens: Token[]): (Token | { type: 'function'; value: stri
       if (fnToken && 'argCount' in fnToken && fnToken.type === 'function') {
         fnToken.argCount++;
       }
+    } else if (token.type === 'unary') {
+      opStack.push(token);
     } else if (token.type === 'operator') {
       const o1 = OPERATORS[token.value];
       while (opStack.length > 0) {
         const top = opStack[opStack.length - 1] as Token;
-        if (top.type !== 'operator') break;
-        const o2 = OPERATORS[top.value];
+        if (top.type !== 'operator' && top.type !== 'unary') break;
+        const o2 = top.type === 'unary' ? { precedence: UNARY_PRECEDENCE } : OPERATORS[top.value];
         if (o2.precedence > o1.precedence || (o2.precedence === o1.precedence && o1.assoc === 'left')) {
           output.push(opStack.pop() as Token);
         } else {
@@ -333,6 +341,10 @@ function evaluateRPN(tokens: (Token | { type: 'function'; value: string; argCoun
         case '%': stack.push(a % b); break;
         case '^': stack.push(Math.pow(a, b)); break;
       }
+    } else if (token.type === 'unary') {
+      const a = stack.pop();
+      if (a === undefined) throw new Error('Invalid expression');
+      stack.push(token.value === '-' ? -a : a);
     } else if (token.type === 'function') {
       const fn = MATH_FUNCTIONS[token.value];
       const argCount = 'argCount' in token ? token.argCount : 1;
