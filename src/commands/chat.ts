@@ -150,7 +150,9 @@ async function setupE2EE(
 
     // Show success after attestation verified (unless quiet mode)
     if (!quiet) {
-      console.log(c.green('✓') + ' TEE attestation verified');
+      // Raw output must carry only the decrypted reply.
+      const status = format === 'pretty' ? console.log : console.error;
+      status(c.green('✓') + ' TEE attestation verified');
 
       if (showDetails && format === 'pretty') {
         console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
@@ -384,7 +386,6 @@ export function registerChatCommand(program: Command): void {
 
       const model = options.model || getDefaultModel();
       const format = detectOutputFormat(options.format);
-      const shouldStream = options.stream !== false && !isPiped() && format === 'pretty' && !responseFormat;
       const quietStatus = options.quiet || Boolean(responseFormat) || format === 'json';
 
       if (
@@ -508,6 +509,13 @@ export function registerChatCommand(program: Command): void {
         console.error(formatError('Structured output (--json / --json-schema) is not supported with E2EE. E2EE requires streaming.'));
         process.exit(1);
       }
+      if (useE2EE && options.stream === false) {
+        console.error(formatError(
+          '--no-stream is not supported with E2EE: responses can only be decrypted while streaming. ' +
+          'Remove --no-stream, or use --no-e2ee.'
+        ));
+        process.exit(1);
+      }
       if (
         useE2EE &&
         (
@@ -613,6 +621,12 @@ export function registerChatCommand(program: Command): void {
         promptCacheKey: options.promptCacheKey,
         promptCacheRetention,
       };
+
+      // E2EE responses can only be decrypted on the streaming path, so piped
+      // and non-pretty output must not fall back to nonStreamChat.
+      const shouldStream =
+        options.stream !== false &&
+        (useE2EE || (!isPiped() && format === 'pretty' && !responseFormat));
 
       try {
         if (shouldStream) {
@@ -871,7 +885,7 @@ export async function streamChat(
       const spinner = startSpinner(spinnerText);
 
       for await (const chunk of completionStream(messagesToSend, streamOptions)) {
-        if (chunk.reasoning_content && !stripThinking && !e2eeContext) {
+        if (chunk.reasoning_content && !stripThinking && !e2eeContext && format !== 'json') {
           if (spinner) clearSpinner();
           process.stdout.write(
             format === 'pretty' ? c.dim(chunk.reasoning_content) : chunk.reasoning_content
@@ -899,7 +913,7 @@ export async function streamChat(
           );
           thinkingState = newState;
 
-          if (output) {
+          if (output && format !== 'json') {
             process.stdout.write(output);
           }
           roundContent += displayContent;
@@ -921,7 +935,7 @@ export async function streamChat(
       clearSpinner();
 
       const remaining = flushThinkingState(thinkingState, { strip: stripThinking, format }, c);
-      if (remaining) {
+      if (remaining && format !== 'json') {
         process.stdout.write(remaining);
       }
 
@@ -930,6 +944,10 @@ export async function streamChat(
         finishReason === 'tool_calls' || hasToolCalls;
       if (!requestsToolExecution || e2eeContext) {
         appendAssistantReply(messages, roundContent);
+        if (format === 'json') {
+          const content = stripThinking ? stripThinkingForContext(roundContent) : roundContent;
+          console.log(JSON.stringify({ content }, null, 2));
+        }
         break;
       }
       if (!hasToolCalls) {
@@ -969,7 +987,11 @@ export async function streamChat(
       console.log('\n');
     }
 
-    console.log('\n');
+    if (format === 'pretty') {
+      console.log('\n');
+    } else if (format !== 'json') {
+      process.stdout.write('\n');
+    }
 
     // Show usage
     if (usage && format === 'pretty') {
@@ -1118,7 +1140,7 @@ export async function nonStreamChat(
 ): Promise<void> {
   // E2EE requires streaming for response decryption
   if (extras.e2eeContext) {
-    throw new Error('E2EE requires streaming mode. Remove --no-stream flag when using E2EE models.');
+    throw new Error('E2EE responses can only be decrypted in streaming mode.');
   }
 
   const chatOptions = buildRequestOptions(model, tools, extras);
