@@ -264,6 +264,42 @@ test('tts uses explicit format for the request and a mismatched output extension
   }
 });
 
+test('transcribe raw prints only the transcript while pretty keeps decorations', async () => {
+  const server = createServer(async (request, response) => {
+    if (request.url === '/audio/transcriptions') {
+      await readBody(request);
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        text: 'hello from the recording',
+        duration: 1.23,
+        timestamps: { segment: [{ text: 'hello from the recording', start: 0, end: 1.23 }] },
+      }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const apiBaseUrl = await listen(server);
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-transcribe-test-'));
+  const samplePath = join(homeDir, 'sample.wav');
+  writeFileSync(samplePath, 'recording-audio');
+
+  try {
+    for (const args of [['-f', 'raw'], ['-t', '-f', 'raw']]) {
+      const result = await runCli(['transcribe', samplePath, ...args], homeDir, apiBaseUrl);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'hello from the recording\n');
+    }
+
+    const pretty = await runCli(['transcribe', samplePath, '-t', '-f', 'pretty'], homeDir, apiBaseUrl);
+    assert.equal(pretty.status, 0, pretty.stderr);
+    assert.match(pretty.stdout, /Segments:/);
+    assert.match(pretty.stdout, /Duration: 1\.23s/);
+  } finally {
+    server.close();
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test('voices lists live model-specific voice data', async () => {
   const server = createServer((request, response) => {
     if (request.url === '/models?type=tts') {

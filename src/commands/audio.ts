@@ -138,6 +138,8 @@ export function registerAudioCommands(program: Command): void {
 
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
+        } else if (format === 'raw') {
+          console.log(result.text);
         } else {
           console.log(result.text);
           if (options.timestamps && result.timestamps) {
