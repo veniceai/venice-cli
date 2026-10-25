@@ -8,6 +8,7 @@ import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { getVersion } from './version.js';
 import { Readable } from 'stream';
+import { randomUUID } from 'crypto';
 import type {
   Message,
   ToolDefinition,
@@ -2138,15 +2139,29 @@ export async function listCryptoNetworks(): Promise<string[]> {
   return response.networks ?? [];
 }
 
+export function validateIdempotencyKey(key: string): void {
+  if (!/^[A-Za-z0-9_-]{1,255}$/.test(key)) {
+    throw new Error(
+      'Invalid idempotency key. Use 1-255 characters from A-Z, a-z, 0-9, "_" and "-".'
+    );
+  }
+}
+
 export async function cryptoRpc(
   network: string,
-  body: JsonRpcRequest | JsonRpcRequest[]
+  body: JsonRpcRequest | JsonRpcRequest[],
+  options: { idempotencyKey?: string } = {}
 ): Promise<CryptoRpcResult> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(network)) {
     throw new Error(
       'Invalid RPC network slug. Use "venice rpc networks" to list supported networks.'
     );
   }
+
+  // The server binds a key to one request body. A batch is a single POST; if
+  // batches are ever split across requests, each request needs its own key.
+  const idempotencyKey = options.idempotencyKey ?? randomUUID();
+  validateIdempotencyKey(idempotencyKey);
 
   let credits: string | undefined;
   let costUsd: string | undefined;
@@ -2158,6 +2173,7 @@ export async function cryptoRpc(
       method: 'POST',
       body,
       spinnerText: 'Sending RPC request...',
+      additionalHeaders: { 'Idempotency-Key': idempotencyKey },
       onHeaders: (headers) => {
         credits = headers.get('x-venice-rpc-credits') ?? undefined;
         costUsd = headers.get('x-venice-rpc-cost-usd') ?? undefined;

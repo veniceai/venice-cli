@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import {
   cryptoRpc,
   listCryptoNetworks,
+  validateIdempotencyKey,
   type CryptoRpcResult,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -26,6 +27,10 @@ export function registerRpcCommand(program: Command): void {
     .command('rpc [network] [method] [params...]')
     .description('Proxy JSON-RPC requests to blockchain nodes')
     .option('--batch <file>', 'JSON array of JSON-RPC requests (max 100 items, 1 MiB)')
+    .option(
+      '--idempotency-key <key>',
+      'Reuse a key ([A-Za-z0-9_-], max 255) to safely retry across invocations'
+    )
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .addHelpText(
       'after',
@@ -34,15 +39,24 @@ Examples:
   $ venice rpc networks
   $ venice rpc ethereum-mainnet eth_blockNumber
   $ venice rpc base-mainnet eth_getBalance 0x... latest
-  $ venice rpc ethereum-mainnet --batch reqs.json`
+  $ venice rpc ethereum-mainnet --batch reqs.json
+  $ venice rpc base-mainnet eth_sendRawTransaction 0x... --idempotency-key tx-42`
     )
     .action(async (network: string | undefined, method: string | undefined, params: string[], options) => {
       const format = detectOutputFormat(options.format);
 
       try {
+        if (options.idempotencyKey !== undefined) {
+          validateIdempotencyKey(options.idempotencyKey);
+        }
+
         if (!network || network === 'networks') {
           if (options.batch) {
             console.error(formatError('Network is required for --batch. Usage: venice rpc <network> --batch <file>'));
+            process.exit(1);
+          }
+          if (options.idempotencyKey !== undefined) {
+            console.error(formatError('--idempotency-key applies only to RPC calls, not "venice rpc networks".'));
             process.exit(1);
           }
           await printNetworks(format);
@@ -68,7 +82,9 @@ Examples:
           body = buildJsonRpcRequest(method, params);
         }
 
-        const result = await cryptoRpc(network, body);
+        const result = await cryptoRpc(network, body, {
+          idempotencyKey: options.idempotencyKey,
+        });
         printRpcResult(result, format);
 
         if (jsonRpcHasError(result.body)) {

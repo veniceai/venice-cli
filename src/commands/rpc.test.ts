@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   MAX_RPC_BATCH,
   MAX_RPC_BATCH_BYTES,
@@ -11,6 +15,145 @@ import {
   parseRpcParam,
   readBatchFile,
 } from './rpc.js';
+
+const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
+
+type RecordedRequest = {
+  method?: string;
+  url?: string;
+  headers: IncomingHttpHeaders;
+  body: string;
+};
+
+function runCli(
+  args: string[],
+  homeDir: string,
+  apiBaseUrl: string
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        NODE_ENV: 'test',
+        NO_COLOR: '1',
+        VENICE_API_KEY: 'test-key',
+        VENICE_API_BASE_URL: apiBaseUrl,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+test('rpc CLI sends idempotency keys that survive retries and honors --idempotency-key', async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-rpc-idempotency-'));
+  const requests: RecordedRequest[] = [];
+  let failNextRpc = true;
+
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) {
+      chunks.push(Buffer.from(chunk));
+    }
+    requests.push({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      body: Buffer.concat(chunks).toString('utf8'),
+    });
+
+    if (request.url === '/api/v1/crypto/rpc/networks') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ networks: ['ethereum-mainnet'] }));
+      return;
+    }
+
+    if (failNextRpc) {
+      failNextRpc = false;
+      response.writeHead(503, { 'Content-Type': 'text/plain' });
+      response.end('upstream unavailable');
+      return;
+    }
+
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x1' }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const apiBaseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+  try {
+    const retried = await runCli(['rpc', 'ethereum-mainnet', 'eth_blockNumber', '-f', 'json'], homeDir, apiBaseUrl);
+    assert.equal(retried.status, 0, retried.stderr);
+    assert.equal(requests.length, 2);
+    const firstKey = requests[0].headers['idempotency-key'];
+    assert.equal(typeof firstKey, 'string');
+    assert.match(firstKey as string, /^[A-Za-z0-9_-]{1,255}$/);
+    assert.equal(requests[1].headers['idempotency-key'], firstKey);
+    assert.equal(requests[1].body, requests[0].body);
+
+    const second = await runCli(['rpc', 'ethereum-mainnet', 'eth_blockNumber'], homeDir, apiBaseUrl);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(requests.length, 3);
+    assert.notEqual(requests[2].headers['idempotency-key'], firstKey);
+
+    const batchPath = join(homeDir, 'reqs.json');
+    writeFileSync(batchPath, JSON.stringify([
+      { jsonrpc: '2.0', method: 'eth_chainId', params: [], id: 1 },
+      { jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 2 },
+    ]));
+    const supplied = await runCli(
+      ['rpc', 'ethereum-mainnet', '--batch', batchPath, '--idempotency-key', 'batch_42-a'],
+      homeDir,
+      apiBaseUrl
+    );
+    assert.equal(supplied.status, 0, supplied.stderr);
+    assert.equal(requests.length, 4);
+    assert.equal(requests[3].headers['idempotency-key'], 'batch_42-a');
+    assert.equal(JSON.parse(requests[3].body).length, 2);
+
+    const invalid = await runCli(
+      ['rpc', 'ethereum-mainnet', 'eth_blockNumber', '--idempotency-key', 'not valid!'],
+      homeDir,
+      apiBaseUrl
+    );
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /Invalid idempotency key/);
+    assert.equal(requests.length, 4);
+
+    const networksWithKey = await runCli(
+      ['rpc', 'networks', '--idempotency-key', 'abc'],
+      homeDir,
+      apiBaseUrl
+    );
+    assert.equal(networksWithKey.status, 1);
+    assert.match(networksWithKey.stderr, /applies only to RPC calls/);
+    assert.equal(requests.length, 4);
+
+    const networks = await runCli(['rpc', 'networks', '-f', 'json'], homeDir, apiBaseUrl);
+    assert.equal(networks.status, 0, networks.stderr);
+    assert.equal(requests.length, 5);
+    assert.equal(requests[4].method, 'GET');
+    assert.equal(requests[4].headers['idempotency-key'], undefined);
+    assert.equal(requests[4].headers.authorization, undefined);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
 
 test('parseRpcParam keeps hex and tags as strings and parses JSON tokens', () => {
   assert.equal(parseRpcParam('0xabc'), '0xabc');
