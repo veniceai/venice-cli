@@ -35,21 +35,48 @@ export function loadConfig(): VeniceConfig {
   }
 
   assertRegularConfigFile();
+
+  let content: string;
   try {
-    const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch {
-    // Return empty config on error
+    content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    throw configFileError(`could not be read (${code})`);
   }
-  return {};
+
+  // The JSON.parse message can quote file contents, which include the API key.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw configFileError('is not valid JSON');
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw configFileError('must contain a JSON object');
+  }
+  return parsed as VeniceConfig;
+}
+
+function configFileError(reason: string): Error {
+  return new Error(
+    `Config file ${CONFIG_FILE} ${reason}.\n` +
+    'Fix or remove the file, then run "venice config set api_key" if needed.'
+  );
+}
+
+// For display-only settings read while formatting errors, so they must not throw.
+function loadConfigOrDefaults(): VeniceConfig {
+  try {
+    return loadConfig();
+  } catch {
+    return {};
+  }
 }
 
 export function saveConfig(config: VeniceConfig): void {
-  ensureConfigDir();
-
-  if (fs.existsSync(CONFIG_FILE)) {
-    assertRegularConfigFile();
-  }
+  // Refuse to replace a file we cannot parse, or its api_key would be lost.
+  loadConfig();
 
   const temporaryFile = path.join(
     CONFIG_DIR,
@@ -150,7 +177,7 @@ export function getOutputFormat(): string {
 }
 
 export function isColorEnabled(): boolean {
-  const config = loadConfig();
+  const config = loadConfigOrDefaults();
   // Disable color if no_color is set or NO_COLOR env is set or not a TTY
   if (config.no_color) return false;
   if (process.env.NO_COLOR) return false;
@@ -159,7 +186,7 @@ export function isColorEnabled(): boolean {
 }
 
 export function shouldShowUsage(): boolean {
-  const config = loadConfig();
+  const config = loadConfigOrDefaults();
   return config.show_usage ?? true;
 }
 
