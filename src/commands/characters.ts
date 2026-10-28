@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 import { getCharacter, getCharacterReviews, listCharacters } from '../lib/api.js';
 import { formatError, formatJson, getChalk, detectOutputFormat, terminalSafe } from '../lib/output.js';
+import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Character, CharacterReviewsPage } from '../types/index.js';
 
 export function registerCharactersCommand(program: Command): void {
@@ -90,7 +91,7 @@ export function registerCharactersCommand(program: Command): void {
           }
         }
 
-        console.log(c.dim(`Usage: venice chat -c ${terminalSafe(character.slug)} "Your message"`));
+        console.log(c.dim(`Usage: ${shellCommand`venice chat -c ${apiId(character.slug)} "Your message"`}`));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);

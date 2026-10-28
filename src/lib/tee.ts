@@ -1,4 +1,6 @@
 import { bytesToHex, parseHex, verifyKeyBinding, deriveSigningAddressFromKey } from './e2ee.js'
+import { formatJson } from './output.js'
+import { shellQuote } from './shell-quote.js'
 
 import type { TeeAttestationResponse } from './api.js'
 
@@ -401,4 +403,4 @@ export const assertE2EEAttestationPolicy = (attestation: TeeVerificationResult, 
  * Generate a curl command for manual NVIDIA GPU attestation verification.
  */
 export const buildGpuAttestationCurl = (payload: NvidiaPayload): string =>
-  `curl --request POST \\\n  --url ${NRAS_ATTEST_URL} \\\n  --header 'accept: application/json' \\\n  --header 'content-type: application/json' \\\n  --data '${JSON.stringify({ nonce: payload.nonce, evidence_list: payload.evidence_list, arch: payload.arch })}'`
+  `curl --request POST \\\n  --url ${NRAS_ATTEST_URL} \\\n  --header 'accept: application/json' \\\n  --header 'content-type: application/json' \\\n  --data ${shellQuote(formatJson({ nonce: payload.nonce, evidence_list: payload.evidence_list, arch: payload.arch }, 0))}`
