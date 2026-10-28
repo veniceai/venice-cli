@@ -119,14 +119,14 @@ cat error.log | venice chat "find the root cause"
 # Disable streaming
 venice chat --no-stream "Quick question"
 
-# E2EE encrypted chat (auto-enabled based on model capabilities)
+# E2EE chat (required for model IDs containing "e2ee"; the catalog must advertise E2EE)
 venice chat -m e2ee-qwen3-5-122b-a10b "This message is end-to-end encrypted"
 
-# TEE-only mode (attestation verified, no encryption)
-venice chat -m e2ee-qwen3-5-122b-a10b --no-e2ee "Verified but not encrypted"
+# TEE mode without E2EE (Venice's proxy can read the prompt; announced on stderr)
+venice chat -m e2ee-qwen3-5-122b-a10b --no-e2ee "This message is not end-to-end encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-qwen3-5-122b-a10b --tee-verify "Verify the secure enclave"
+venice chat -m e2ee-qwen3-5-122b-a10b --tee-verify "Show the attestation details"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
 venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like normal chat"
@@ -158,10 +158,10 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `--strip-thinking` | Strip thinking blocks from response |
 | `--no-venice-prompt` | Disable Venice system prompts |
 | `--search-results-in-stream` | Include search results in stream |
-| `--e2ee` | Enable E2EE encryption (auto-enabled for models with E2EE capability) |
-| `--no-e2ee` | Disable E2EE, use TEE-only mode (verifies attestation without encryption) |
+| `--e2ee` | Require E2EE (implied by model IDs containing `e2ee`; also used when the catalog advertises E2EE) |
+| `--no-e2ee` | Disable E2EE; private models fall back to TEE mode, where Venice's proxy can read the prompt (announced on stderr) |
 | `--tee-verify` | Show TEE attestation details |
-| `-q, --quiet` | Hide E2EE/TEE status messages (show only response) |
+| `-q, --quiet` | Hide E2EE/TEE status messages (show only response; a `--no-e2ee` downgrade is still announced) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
 Schema files are limited to 1 MiB and are compiled locally with strict JSON
@@ -740,7 +740,7 @@ Venice CLI is designed with privacy in mind:
 
 ### E2EE Models
 
-E2EE models provide the highest level of privacy. The CLI automatically detects E2EE support via model capabilities (not model names). When using an E2EE-capable model:
+E2EE is the strongest privacy mode the CLI offers. The CLI uses it when the model catalog advertises E2EE support (`supportsE2EE`). A model ID that contains `e2ee`, or the `--e2ee` flag, requires E2EE: if the catalog does not advertise it for that model, the CLI exits without sending the prompt. `--no-e2ee` turns E2EE off and falls back to TEE mode, and the CLI says so on stderr, even with `-q`. With E2EE on:
 
 1. The CLI fetches the server's attestation report and checks it (see [TEE Attestation](#tee-attestation))
 2. An ephemeral key pair is generated for the session
@@ -751,11 +751,11 @@ E2EE models provide the highest level of privacy. The CLI automatically detects 
 # List E2EE-capable models
 venice models --e2ee
 
-# Chat with E2EE (auto-enabled based on model capabilities)
+# Chat with E2EE
 venice chat -m <e2ee-capable-model> "Your private message here"
 
-# TEE-only mode: verify attestation without encryption
-venice chat -m <e2ee-capable-model> --no-e2ee "TEE verified, not encrypted"
+# TEE mode without E2EE: Venice's proxy can read the prompt
+venice chat -m <e2ee-capable-model> --no-e2ee "Not end-to-end encrypted"
 ```
 
 **Note:** E2EE mode disables tools and web search to maintain end-to-end encryption. Multimodal attachments (`--image`, `--file`, `--audio`, `--video`) are not supported with E2EE or TEE models.

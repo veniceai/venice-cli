@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
+import { decryptChunk, deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
 import type { Message, Model } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -182,6 +182,45 @@ test('E2EE chat prints the decrypted banner only after a complete reply', async 
   assert.match(result.stdout, /Server attestation report passed the CLI's consistency checks/);
   assert.match(result.stdout, /quote signature and enclave measurements are not verified client-side/);
   assert.doesNotMatch(result.stdout, /TEE attestation verified/);
+});
+
+test('an e2ee model id fails closed when the catalog does not advertise supportsE2EE', async () => {
+  const catalogs: Record<string, Model> = {
+    'TEE only': { id: MODEL, type: 'text', model_spec: { capabilities: { supportsTeeAttestation: true } } },
+    'supportsE2EE: false': { id: MODEL, type: 'text', model_spec: { capabilities: { supportsE2EE: false, supportsTeeAttestation: true } } },
+    'no capabilities': { id: MODEL, type: 'text' },
+  };
+
+  for (const [label, entry] of Object.entries(catalogs)) {
+    for (const extraArgs of [[], ['-q']]) {
+      const result = await runChat(['--model', MODEL, ...extraArgs, 'USER-SECRET'], {
+        models: (type) => (!type || type === 'text' ? [entry] : []),
+      });
+
+      assert.equal(result.status, 1, label);
+      assert.match(result.stderr, /does not support E2EE encryption/, label);
+      assert.equal(result.completions.length, 0, label);
+      assert.equal(result.attestationRequests, 0, label);
+      assert.equal(result.stdout, '', label);
+    }
+  }
+});
+
+test('E2EE stays on when the catalog types the model as something other than text', async () => {
+  const stubs: Record<string, Stub['models']> = {
+    'a non-text type': (type) => (!type || type === 'chat' ? [{ ...e2eeModel, type: 'chat' }] : []),
+    'a server that ignores ?type=': () => [e2eeModel],
+  };
+
+  for (const [label, models] of Object.entries(stubs)) {
+    const result = await runChat(['--model', MODEL, 'USER-SECRET'], { models });
+
+    assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+    assert.equal(result.completions.length, 1, label);
+    const [request] = result.completions;
+    assert.equal(request.body.venice_parameters?.enable_e2ee, true, label);
+    assert.equal(decryptChunk(String(request.body.messages.at(-1)?.content), enclave.privateKey), 'USER-SECRET', label);
+  }
 });
 
 const brokenAttestations: Array<[string, Record<string, unknown>, RegExp]> = [

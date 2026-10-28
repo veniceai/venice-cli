@@ -184,6 +184,21 @@ test('TEE-only status says what was checked and stays off stdout outside pretty 
   assert.deepEqual(JSON.parse(json.stdout), { content: REPLY });
 });
 
+test('--no-e2ee on an E2EE model announces the downgrade on stderr, even with -q', async () => {
+  for (const extraArgs of [[], ['-q']]) {
+    const result = await runChat(['--model', E2EE_MODEL, '--no-e2ee', ...extraArgs, 'hello']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${REPLY}\n`);
+    assert.match(result.stderr, /--no-e2ee: end-to-end encryption is off for this E2EE model/);
+    assert.equal(result.attestationRequests, 1);
+    assert.equal(result.completions.length, 1);
+    const [request] = result.completions;
+    assert.equal(request.body.venice_parameters?.enable_e2ee, false);
+    assert.equal(request.headers['x-venice-tee-client-pub-key'], undefined);
+  }
+});
+
 const nvidiaPayload = JSON.stringify({ arch: 'HOPPER', evidence_list: [] });
 
 const brokenAttestations: Array<[string, Record<string, unknown>, RegExp]> = [

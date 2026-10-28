@@ -232,8 +232,8 @@ export function registerChatCommand(program: Command): void {
     .option('--strip-thinking', 'Strip thinking blocks from response')
     .option('--no-venice-prompt', 'Disable Venice system prompts')
     .option('--search-results-in-stream', 'Include search results in stream (when web-search enabled)')
-    .option('--e2ee', 'Enable E2EE encryption (auto-enabled for E2EE models)')
-    .option('--no-e2ee', 'Disable E2EE even for E2EE models')
+    .option('--e2ee', 'Require E2EE encryption (implied by model ids containing "e2ee")')
+    .option('--no-e2ee', "Disable E2EE; E2EE models fall back to TEE mode, where Venice's proxy can read the prompt")
     .option('--tee-verify', 'Show TEE attestation details')
     .option('-q, --quiet', 'Hide E2EE/TEE status messages (show only response)')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
@@ -361,6 +361,9 @@ export function registerChatCommand(program: Command): void {
       if (privacyDecision.error) {
         console.error(formatError(privacyDecision.error));
         process.exit(1);
+      }
+      if (privacyDecision.notice) {
+        console.error(formatWarning(privacyDecision.notice));
       }
 
       useE2EE = privacyDecision.useE2EE;
@@ -1247,7 +1250,11 @@ export function restoreCharacterSlug(lastConv?: {
 
 export function modelIdImpliesPrivateMode(modelId: string): boolean {
   const id = modelId.toLowerCase();
-  return id.includes('e2ee') || id.startsWith('tee-') || id.includes('-tee');
+  return modelIdRequiresE2EE(id) || id.startsWith('tee-') || id.includes('-tee');
+}
+
+export function modelIdRequiresE2EE(modelId: string): boolean {
+  return modelId.toLowerCase().includes('e2ee');
 }
 
 export function modelImpliesPrivateHistory(modelId: string): boolean {
@@ -1299,7 +1306,7 @@ export function resolveChatPrivacyMode(input: {
   modelInfo?: Model;
   catalogFailed: boolean;
   e2eeFlag?: boolean;
-}): { useE2EE: boolean; useTEE: boolean; error?: string } {
+}): { useE2EE: boolean; useTEE: boolean; error?: string; notice?: string } {
   if (input.catalogFailed) {
     if (input.e2eeFlag === true || modelIdImpliesPrivateMode(input.modelId)) {
       return {
@@ -1329,6 +1336,22 @@ export function resolveChatPrivacyMode(input: {
   const supportsTEE = isTEEModel(input.modelInfo);
 
   if (
+    input.e2eeFlag === true ||
+    (input.e2eeFlag !== false && modelIdRequiresE2EE(input.modelId))
+  ) {
+    if (!supportsE2EE) {
+      return {
+        useE2EE: false,
+        useTEE: false,
+        error:
+          `Model "${input.modelId}" does not support E2EE encryption (the model catalog does not ` +
+          'advertise supportsE2EE for it); refusing to send this request in the clear.',
+      };
+    }
+    return { useE2EE: true, useTEE: false };
+  }
+
+  if (
     modelIdImpliesPrivateMode(input.modelId) &&
     !supportsE2EE &&
     !supportsTEE
@@ -1342,19 +1365,18 @@ export function resolveChatPrivacyMode(input: {
     };
   }
 
-  if (input.e2eeFlag === true) {
-    if (!supportsE2EE) {
+  if (input.e2eeFlag === false) {
+    const useTEE = supportsTEE || supportsE2EE;
+    if (useTEE && (supportsE2EE || modelIdRequiresE2EE(input.modelId))) {
       return {
         useE2EE: false,
-        useTEE: false,
-        error: `Model "${input.modelId}" does not support E2EE encryption.`,
+        useTEE,
+        notice:
+          '--no-e2ee: end-to-end encryption is off for this E2EE model. ' +
+          "The request uses TEE mode, so Venice's proxy can read the prompt.",
       };
     }
-    return { useE2EE: true, useTEE: false };
-  }
-
-  if (input.e2eeFlag === false) {
-    return { useE2EE: false, useTEE: supportsTEE || supportsE2EE };
+    return { useE2EE: false, useTEE };
   }
 
   if (supportsE2EE) {
