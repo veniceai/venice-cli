@@ -3,6 +3,7 @@ import * as path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import type { ReadableStreamReadResult } from 'stream/web';
+import { fetchDownload } from './download-guard.js';
 
 const MB = 1024 * 1024;
 
@@ -280,10 +281,7 @@ export async function downloadToFile(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-    }
+    const response = await fetchDownload(url, controller.signal);
 
     return await writeResponseToFile(
       options.leadingBytes ? withLeadingBytesCheck(response, options.leadingBytes) : response,
@@ -291,7 +289,7 @@ export async function downloadToFile(
       options
     );
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (controller.signal.aborted) {
       throw new Error(`Download timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
     }
 

@@ -154,6 +154,38 @@ test('video retrieve saves and completes an MP4 whose first box is free', { time
   }
 }));
 
+test('video retrieve refuses a download URL on another local server and keeps the remote copy', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const intranet = await startStub({
+    'GET /admin/backup.mp4': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(mp4Bytes('-internal'));
+    },
+  });
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response) => {
+      sendJson(response, { status: 'COMPLETED', video_url: `${intranet.origin}/admin/backup.mp4` });
+    },
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'out.mp4');
+  try {
+    const result = await runCli(
+      ['video', 'retrieve', 'q1', '-m', 'test-model', '-o', output, '--complete'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /Refusing to download from 127\.0\.0\.1:\d+: only https URLs are allowed/);
+    assert.equal(intranet.count('GET /admin/backup.mp4'), 0);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 0);
+    assert.equal(existsSync(output), false);
+  } finally {
+    await intranet.close();
+    await stub.close();
+  }
+}));
+
 test('video retrieve exits 2 while the job is processing and 1 when no video will come', { timeout: 30_000 }, () => withScratch(async (dir) => {
   const statuses: Record<string, unknown> = {
     'q-processing': { status: 'PROCESSING', execution_duration: 1000 },
