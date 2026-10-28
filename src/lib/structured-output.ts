@@ -10,6 +10,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import * as formatsModule from 'ajv-formats';
 
 export const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
+export const MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RESPONSE_FORMAT_NAME_LENGTH = 64;
 const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -202,6 +203,12 @@ function normalizeJsonSchemaWrapper(
 }
 
 export function parseStructuredContent(content: string): unknown {
+  if (Buffer.byteLength(content, 'utf8') > MAX_STRUCTURED_RESPONSE_BYTES) {
+    throw new Error(
+      `Model response exceeds the ${MAX_STRUCTURED_RESPONSE_BYTES}-byte (1 MiB) structured output limit.`
+    );
+  }
+
   const trimmed = content.trim();
   if (!trimmed) {
     throw new Error('Model returned an empty response; expected JSON.');
@@ -217,11 +224,20 @@ export function parseStructuredContent(content: string): unknown {
 }
 
 function extractJson(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    return fenced[1].trim();
+  const fence = '```';
+  const open = text.indexOf(fence);
+  if (open === -1) {
+    return text;
   }
-  return text;
+  let start = open + fence.length;
+  if (text.slice(start, start + 4).toLowerCase() === 'json') {
+    start += 4;
+  }
+  const close = text.indexOf(fence, start);
+  if (close === -1) {
+    return text;
+  }
+  return text.slice(start, close).trim() || text;
 }
 
 export function validateAgainstSchema(
