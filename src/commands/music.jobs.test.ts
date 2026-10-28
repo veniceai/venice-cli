@@ -169,7 +169,7 @@ test('music status --wait exits 1 when the job fails or ends in an unrecognised 
   }
 }));
 
-test('music status --wait accepts a --timeout beyond the 32-bit timer limit', { timeout: 20_000 }, () => withScratch(async (dir) => {
+test('music status --wait accepts the maximum --timeout of 24 hours', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const audio = Buffer.alloc(64, 0xff);
   const stub = await startStub({
     [RETRIEVE]: async (_request, response) => {
@@ -179,7 +179,7 @@ test('music status --wait accepts a --timeout beyond the 32-bit timer limit', { 
   });
   try {
     const result = await runCli(
-      ['music', 'status', 'mq1', '--wait', '--timeout', '2147484', '-f', 'json'],
+      ['music', 'status', 'mq1', '--wait', '--timeout', '86400', '-f', 'json'],
       dir,
       stub.origin
     );
