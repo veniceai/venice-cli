@@ -35,32 +35,22 @@ export const hexToBytes = (hex: string): Uint8Array => {
   return bytes
 }
 
-const normalizePublicKey = (hex: string): string => {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex
-  if (clean.length === 128) return '04' + clean
-  return clean
-}
-
-const normalizeUncompressedPublicKey = (signingKeyHex: string): Uint8Array | undefined => {
-  let keyBytes = parseHex(signingKeyHex)
+/**
+ * Decode an uncompressed secp256k1 public key from hex (optional 0x prefix, optional 04 prefix byte).
+ * Returns the 65-byte encoding, or undefined unless the key is a valid point on the curve.
+ */
+export const parseSecp256k1PublicKey = (publicKeyHex: string): Uint8Array | undefined => {
+  const keyBytes = parseHex(publicKeyHex)
   if (!keyBytes) return undefined
 
-  if (keyBytes.length === 64) {
-    const prefixed = new Uint8Array(65)
-    prefixed[0] = 0x04
-    prefixed.set(keyBytes, 1)
-    keyBytes = prefixed
-  }
-
-  if (keyBytes.length !== 65 || keyBytes[0] !== 0x04) return undefined
-
-  return keyBytes
+  const uncompressed = keyBytes.length === 64 ? Uint8Array.of(0x04, ...keyBytes) : keyBytes
+  return secp256k1.utils.isValidPublicKey(uncompressed, false) ? uncompressed : undefined
 }
 
 /**
  * Derive the AES-256-GCM key from the ECDH shared secret's X coordinate.
  */
-const deriveAesKey = (privateKey: Uint8Array, publicKey: Uint8Array | string): Uint8Array => {
+const deriveAesKey = (privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array => {
   const sharedPoint = secp256k1.getSharedSecret(privateKey, publicKey)
   const aesKey = hkdf(sha256, sharedPoint.subarray(1), undefined, HKDF_INFO, 32)
   zeroFill(sharedPoint)
@@ -80,11 +70,14 @@ export const generateEphemeralKeyPair = (): { privateKey: Uint8Array; publicKeyH
  * Encrypt plaintext for the model using ECDH + HKDF + AES-GCM.
  */
 export const encryptMessage = (plaintext: string, modelPublicKeyHex: string): string => {
-  const normalizedModelKey = normalizePublicKey(modelPublicKeyHex)
+  const modelPublicKey = parseSecp256k1PublicKey(modelPublicKeyHex)
+  if (!modelPublicKey) {
+    throw new Error('Model public key is not a valid uncompressed secp256k1 key')
+  }
 
   const ephemeralPrivateKey = secp256k1.utils.randomSecretKey()
   const ephemeralPublic = secp256k1.getPublicKey(ephemeralPrivateKey, false)
-  const aesKey = deriveAesKey(ephemeralPrivateKey, normalizedModelKey)
+  const aesKey = deriveAesKey(ephemeralPrivateKey, modelPublicKey)
   zeroFill(ephemeralPrivateKey)
 
   const nonce = randomBytes(NONCE_LENGTH)
@@ -132,9 +125,10 @@ export const decryptChunk = (ciphertextHex: string, ephemeralPrivateKey: Uint8Ar
 /**
  * Derive Ethereum address from an uncompressed secp256k1 public key.
  * Used to verify the signing key matches the attestation.
+ * Returns undefined unless the key is a valid point on the curve.
  */
 export const deriveSigningAddressFromKey = (signingKeyHex: string): string | undefined => {
-  const keyBytes = normalizeUncompressedPublicKey(signingKeyHex)
+  const keyBytes = parseSecp256k1PublicKey(signingKeyHex)
   if (!keyBytes) return undefined
 
   const hash = keccak_256(keyBytes.slice(1))

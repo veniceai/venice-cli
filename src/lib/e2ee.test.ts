@@ -5,7 +5,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decryptChunk, encryptMessage, generateEphemeralKeyPair, hexToBytes, parseHex, zeroFill } from './e2ee.js';
+import { keccak_256 } from '@noble/hashes/sha3';
+import {
+  decryptChunk,
+  deriveSigningAddressFromKey,
+  encryptMessage,
+  generateEphemeralKeyPair,
+  hexToBytes,
+  parseHex,
+  parseSecp256k1PublicKey,
+  verifyKeyBinding,
+  zeroFill,
+} from './e2ee.js';
+
+const OFF_CURVE_KEY = `04${'00'.repeat(31)}01${'00'.repeat(31)}01`;
 
 const KNOWN_ANSWERS = [
   {
@@ -95,6 +108,53 @@ test('decryptChunk decrypts known-answer ciphertexts in the E2EE wire format', (
   for (const { recipientPrivateKey, plaintext, ciphertext } of KNOWN_ANSWERS) {
     assert.equal(decryptChunk(ciphertext, hexToBytes(recipientPrivateKey)), plaintext);
   }
+});
+
+test('parseSecp256k1PublicKey accepts only valid uncompressed curve points', () => {
+  const reference = createECDH('secp256k1');
+  reference.generateKeys();
+  const key = reference.getPublicKey('hex', 'uncompressed');
+
+  for (const form of [key, key.slice(2), `0x${key}`, key.toUpperCase()]) {
+    assert.deepEqual(parseSecp256k1PublicKey(form), Uint8Array.from(Buffer.from(key, 'hex')), form);
+    assert.ok(deriveSigningAddressFromKey(form), form);
+  }
+
+  const invalid: Record<string, string> = {
+    'off the curve': OFF_CURVE_KEY,
+    'zero coordinates': `04${'00'.repeat(64)}`,
+    compressed: reference.getPublicKey('hex', 'compressed'),
+    'hybrid prefix': `06${key.slice(2)}`,
+    'inserted character': `${key.slice(0, 10)}+${key.slice(10)}`,
+    'odd length': key.slice(0, -1),
+    empty: '',
+  };
+  for (const [name, hex] of Object.entries(invalid)) {
+    assert.equal(parseSecp256k1PublicKey(hex), undefined, name);
+    assert.equal(deriveSigningAddressFromKey(hex), undefined, name);
+    assert.throws(() => encryptMessage('hi', hex), /not a valid uncompressed secp256k1 key/, name);
+  }
+});
+
+test('verifyKeyBinding rejects an off-curve signing key even when REPORTDATA holds its hash', () => {
+  const offCurveAddress = Buffer.from(keccak_256(Buffer.from(OFF_CURVE_KEY.slice(2), 'hex'))).subarray(12);
+  const reportData = Buffer.concat([offCurveAddress, Buffer.alloc(44)]).toString('hex');
+
+  assert.equal(verifyKeyBinding(OFF_CURVE_KEY, reportData), false);
+});
+
+test('the key-binding check and encryptMessage accept the same key strings', () => {
+  const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
+  const reportData = `${deriveSigningAddressFromKey(publicKeyHex)}${'00'.repeat(44)}`;
+
+  for (const form of [publicKeyHex, publicKeyHex.slice(2), `0x${publicKeyHex}`]) {
+    assert.equal(verifyKeyBinding(form, reportData), true, form);
+    assert.equal(decryptChunk(encryptMessage('bound', form), privateKey), 'bound', form);
+  }
+
+  const skewed = `${publicKeyHex.slice(0, 10)}+${publicKeyHex.slice(10)}`;
+  assert.equal(verifyKeyBinding(skewed, reportData), false);
+  assert.throws(() => encryptMessage('bound', skewed), /not a valid uncompressed secp256k1 key/);
 });
 
 test('E2EE key generation, encryption and decryption work without the WebCrypto global', () => {
