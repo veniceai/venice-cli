@@ -10,6 +10,7 @@ import * as os from 'os';
 import { randomUUID } from 'crypto';
 import type { Message, VeniceConfig } from '../types/index.js';
 import { sanitizeMessagesForHistory } from '../types/index.js';
+import { writeFileAtomic } from './safe-write.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.venice');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -200,31 +201,111 @@ export interface ConversationEntry {
   privacy?: 'plain' | 'e2ee' | 'tee';
 }
 
+/**
+ * A history or usage file that exists but cannot be used. A missing file
+ * loads as an empty list instead, so callers can tell the two apart.
+ */
+export class DataFileError extends Error {
+  constructor(readonly filePath: string, label: string, reason: string) {
+    super(`${label} file ${filePath} ${reason}.\nFix or remove the file.`);
+    this.name = 'DataFileError';
+  }
+}
+
+// Returns undefined when the file does not exist.
+function readDataFile(filePath: string, label: string): unknown {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    if (code === 'ENOENT') return undefined;
+    throw new DataFileError(filePath, label, `could not be read (${code})`);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new DataFileError(filePath, label, 'is not a regular file');
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    throw new DataFileError(filePath, label, `could not be read (${code})`);
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new DataFileError(filePath, label, 'is not valid JSON');
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function describeDataFileFailure(filePath: string, error: unknown): string {
+  if (error instanceof DataFileError) return error.message;
+  const message = error instanceof Error ? error.message : String(error);
+  return `Could not update ${filePath}: ${message}`;
+}
+
+function isConversationEntry(value: unknown): value is ConversationEntry {
+  return isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.model === 'string' &&
+    Array.isArray(value.messages) &&
+    value.messages.every((message) => isRecord(message) && typeof message.role === 'string');
+}
+
+function readHistoryFile(): ConversationEntry[] {
+  const parsed = readDataFile(HISTORY_FILE, 'History');
+  if (parsed === undefined) return [];
+
+  let history: ConversationEntry[] | undefined;
+  if (Array.isArray(parsed) && parsed.every(isConversationEntry)) {
+    try {
+      history = parsed.map(sanitizeConversationForHistory);
+    } catch {
+      // Message content in a shape this CLI never writes.
+    }
+  }
+  if (history === undefined) {
+    throw new DataFileError(HISTORY_FILE, 'History', 'must contain a JSON array of conversations');
+  }
+  return history;
+}
+
+function writeHistoryFile(history: ConversationEntry[]): void {
+  // Keep only last 100 conversations
+  const trimmed = history.slice(-100).map(sanitizeConversationForHistory);
+  writeFileAtomic(HISTORY_FILE, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+}
+
 export function loadHistory(): ConversationEntry[] {
   ensureConfigDir();
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      const parsed: ConversationEntry[] = JSON.parse(content);
-      return parsed.map(sanitizeConversationForHistory);
-    }
-  } catch {
-    // Return empty on error
-  }
-  return [];
+  return readHistoryFile();
 }
 
 export function saveHistory(history: ConversationEntry[]): void {
   ensureConfigDir();
-  // Keep only last 100 conversations
-  const trimmed = history.slice(-100).map(sanitizeConversationForHistory);
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+  // Refuse to replace a file we cannot parse, or its conversations would be lost.
+  readHistoryFile();
+  writeHistoryFile(history);
 }
 
+// Called after the reply was shown, so a history problem must not fail the chat.
 export function addConversation(entry: ConversationEntry): void {
-  const history = loadHistory();
-  history.push(sanitizeConversationForHistory(entry));
-  saveHistory(history);
+  try {
+    const history = loadHistory();
+    history.push(sanitizeConversationForHistory(entry));
+    saveHistory(history);
+  } catch (error) {
+    console.error(
+      `Warning: the conversation was not saved to history. ${describeDataFileFailure(HISTORY_FILE, error)}`
+    );
+  }
 }
 
 export function sanitizeConversationForHistory(
@@ -243,9 +324,7 @@ export function getLastConversation(): ConversationEntry | undefined {
 
 export function clearHistory(): void {
   ensureConfigDir();
-  if (fs.existsSync(HISTORY_FILE)) {
-    fs.unlinkSync(HISTORY_FILE);
-  }
+  fs.rmSync(HISTORY_FILE, { force: true });
 }
 
 // Usage tracking
@@ -258,36 +337,51 @@ export interface UsageEntry {
   total_tokens?: number;
 }
 
+function readUsageFile(): UsageEntry[] {
+  const parsed = readDataFile(USAGE_FILE, 'Usage');
+  if (parsed === undefined) return [];
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((entry) => isRecord(entry) && typeof entry.timestamp === 'string')
+  ) {
+    throw new DataFileError(USAGE_FILE, 'Usage', 'must contain a JSON array of usage records');
+  }
+  return parsed as UsageEntry[];
+}
+
 export function loadUsage(): UsageEntry[] {
   ensureConfigDir();
-  try {
-    if (fs.existsSync(USAGE_FILE)) {
-      const content = fs.readFileSync(USAGE_FILE, 'utf-8');
-      return JSON.parse(content);
-    }
-  } catch {
-    // Return empty on error
-  }
-  return [];
+  return readUsageFile();
 }
 
 export function saveUsage(usage: UsageEntry[]): void {
   ensureConfigDir();
+  // Refuse to replace a file we cannot parse, or its records would be lost.
+  readUsageFile();
   // Keep only last 30 days of usage
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
   const filtered = usage.filter(u => new Date(u.timestamp) > thirtyDaysAgo);
-  fs.writeFileSync(USAGE_FILE, JSON.stringify(filtered, null, 2), { mode: 0o600 });
+  writeFileAtomic(USAGE_FILE, JSON.stringify(filtered, null, 2), { mode: 0o600 });
 }
 
+let usageWarningShown = false;
+
+// Called after a paid response, so a usage problem must not fail the command.
 export function trackUsage(entry: Omit<UsageEntry, 'timestamp'>): void {
-  const usage = loadUsage();
-  usage.push({
-    ...entry,
-    timestamp: new Date().toISOString(),
-  });
-  saveUsage(usage);
+  try {
+    const usage = loadUsage();
+    usage.push({
+      ...entry,
+      timestamp: new Date().toISOString(),
+    });
+    saveUsage(usage);
+  } catch (error) {
+    if (usageWarningShown) return;
+    usageWarningShown = true;
+    console.error(`Warning: usage was not recorded. ${describeDataFileFailure(USAGE_FILE, error)}`);
+  }
 }
 
 export function getConfigDir(): string {
