@@ -248,6 +248,9 @@ To cut a release:
 
 ## Security Considerations
 
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in public issues or pull requests.
+
 - Never log API keys or tokens
 - Use restrictive file permissions for sensitive files
 - Validate all user input
