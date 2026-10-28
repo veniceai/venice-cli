@@ -47,6 +47,14 @@ function sendJson(response: ServerResponse, body: unknown): void {
   response.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
 
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+}
+
 function runCli(
   args: string[],
   dir: string,
@@ -111,6 +119,7 @@ test('video retrieve does not save a JSON status whose bytes 4-7 spell ftyp, or 
       stub.origin
     );
 
+    assert.equal(result.status, 1, result.stderr);
     assert.equal(existsSync(output), false, result.stdout);
     assert.equal(stub.count('POST /api/v1/video/complete'), 0);
     assert.equal(JSON.parse(result.stdout).status, 'FAILED');
@@ -140,6 +149,92 @@ test('video retrieve saves and completes an MP4 whose first box is free', { time
     assert.equal(readFileSync(output).equals(video), true);
     assert.equal(JSON.parse(result.stdout).deleted, true);
     assert.equal(stub.count('POST /api/v1/video/complete'), 1);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video retrieve exits 2 while the job is processing and 1 when no video will come', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const statuses: Record<string, unknown> = {
+    'q-processing': { status: 'PROCESSING', execution_duration: 1000 },
+    'q-failed': { status: 'FAILED', error: 'render failed' },
+    'q-no-url': { status: 'COMPLETED' },
+  };
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': async (request, response) => {
+      sendJson(response, statuses[String((await readJson(request)).queue_id)]);
+    },
+  });
+  const output = join(dir, 'out.mp4');
+  const cases: Array<[string, number, RegExp]> = [
+    ['q-processing', 2, /video not ready yet/],
+    ['q-failed', 1, /No video was returned \(status: FAILED\): render failed/],
+    ['q-no-url', 1, /No video was returned \(status: COMPLETED\)\./],
+  ];
+  try {
+    for (const [queueId, exitCode, prettyMessage] of cases) {
+      const json = await runCli(
+        ['video', 'retrieve', queueId, '-m', 'test-model', '-o', output, '-f', 'json'],
+        dir,
+        stub.origin
+      );
+      assert.equal(json.status, exitCode, `${queueId} json: ${json.stderr}`);
+      assert.deepEqual(JSON.parse(json.stdout), statuses[queueId]);
+
+      const pretty = await runCli(
+        ['video', 'retrieve', queueId, '-m', 'test-model', '-o', output, '-f', 'pretty'],
+        dir,
+        stub.origin
+      );
+      assert.equal(pretty.status, exitCode, `${queueId} pretty: ${pretty.stderr}`);
+      assert.match(pretty.stdout + pretty.stderr, prettyMessage);
+    }
+    assert.equal(existsSync(output), false);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video status --wait exits 1 unless the job completes, in every output format', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  let body: Record<string, string> = { status: 'failed', error: 'render failed' };
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, body),
+  });
+  const wait = ['video', 'status', 'q1', '-m', 'test-model', '--wait'];
+  try {
+    const json = await runCli([...wait, '-f', 'json'], dir, stub.origin);
+    assert.equal(json.status, 1, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), body);
+
+    const pretty = await runCli([...wait, '-f', 'pretty'], dir, stub.origin);
+    assert.equal(pretty.status, 1);
+    assert.match(pretty.stdout, /Status: failed/);
+    assert.match(pretty.stderr, /Error:.*render failed/);
+
+    const once = await runCli(['video', 'status', 'q1', '-m', 'test-model', '-f', 'json'], dir, stub.origin);
+    assert.equal(once.status, 0, once.stderr);
+
+    body = { status: 'MYSTERY' };
+    const unknown = await runCli([...wait, '-f', 'pretty'], dir, stub.origin);
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /Video generation ended with status "MYSTERY"/);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video complete exits 1 when Venice reports success: false, in every output format', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: false }),
+  });
+  try {
+    const json = await runCli(['video', 'complete', 'q1', '-m', 'test-model', '-f', 'json'], dir, stub.origin);
+    assert.equal(json.status, 1, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), { success: false });
+
+    const pretty = await runCli(['video', 'complete', 'q1', '-m', 'test-model', '-f', 'pretty'], dir, stub.origin);
+    assert.equal(pretty.status, 1);
+    assert.match(pretty.stderr, /Video cleanup did not succeed/);
   } finally {
     await stub.close();
   }

@@ -233,12 +233,20 @@ export function registerMusicCommands(program: Command): void {
       try {
         const result = await retrieveGeneratedAudio(queueId, options.model);
         if (result.kind === 'processing') {
+          const notReady = classifyJobStatus(result.status.status) === 'processing';
+          const exitCode = notReady ? 2 : 1;
+
           if (format === 'json') {
             console.log(JSON.stringify(result.status, null, 2));
           } else {
             printProcessingStatus(result.status);
-            console.log(c.yellow('Audio is not ready yet.'));
+            if (notReady) {
+              console.log(c.yellow('Audio is not ready yet.'));
+            } else {
+              console.error(formatError('No audio was returned.'));
+            }
           }
+          process.exitCode = exitCode;
           return;
         }
 
@@ -301,14 +309,16 @@ export function registerMusicCommands(program: Command): void {
 
       try {
         const result = await completeAudioGeneration(queueId, options.model);
+        const exitCode = result.success ? 0 : 1;
+
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
         } else if (result.success) {
           console.log(formatSuccess('Generated audio removed from remote storage.'));
         } else {
           console.error(formatError('Remote audio cleanup did not complete. Please retry.'));
-          process.exitCode = 1;
         }
+        process.exitCode = exitCode;
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);

@@ -300,7 +300,13 @@ export function registerVideoCommands(program: Command): void {
               );
             }
           );
+          const exitCode = classifyVideoStatus(status.status) === 'completed' ? 0 : 1;
+
           printStatus(status);
+          if (exitCode !== 0 && format !== 'json' && !status.error) {
+            console.error(formatError(`Video generation ended with status "${status.status}".`));
+          }
+          process.exitCode = exitCode;
         } else {
           printStatus(await getVideoStatus(queueId, options.model));
         }
@@ -336,14 +342,20 @@ export function registerVideoCommands(program: Command): void {
           const downloadUrl = videoUrlFromStatus(status);
 
           if (!downloadUrl) {
+            const notReady = classifyVideoStatus(status.status) === 'processing';
+            const exitCode = notReady ? 2 : 1;
+
             if (format === 'json') {
               console.log(JSON.stringify(status, null, 2));
-            } else if (status.status) {
+            } else if (notReady) {
               console.log(`${c.dim('Status:')} ${c.yellow(status.status)} — video not ready yet.`);
               console.log(`${c.dim('Try again with:')} venice video retrieve ${queueId} -m ${options.model}`);
             } else {
-              console.error(formatError('No video returned. The video may still be processing.'));
+              console.error(formatError(
+                `No video was returned (status: ${status.status})${status.error ? `: ${status.error}` : '.'}`
+              ));
             }
+            process.exitCode = exitCode;
             return;
           }
 
@@ -392,13 +404,16 @@ export function registerVideoCommands(program: Command): void {
       const format = detectOutputFormat(options.format);
       try {
         const result = await completeVideo(queueId, options.model);
+        const exitCode = result.success ? 0 : 1;
+
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
         } else if (result.success) {
           console.log(formatSuccess('Video cleaned up from storage.'));
         } else {
-          throw new Error('Video cleanup did not succeed.');
+          console.error(formatError('Video cleanup did not succeed.'));
         }
+        process.exitCode = exitCode;
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
