@@ -145,6 +145,28 @@ test('video retrieve saves and completes an MP4 whose first box is free', { time
   }
 }));
 
+test('video status --wait accepts a --timeout beyond the 32-bit timer limit', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': async (_request, response) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      sendJson(response, { status: 'completed' });
+    },
+  });
+  try {
+    const result = await runCli(
+      ['video', 'status', 'q1', '-m', 'test-model', '--wait', '--timeout', '2147484'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Status: completed/);
+    assert.doesNotMatch(result.stderr, /TimeoutOverflowWarning|Timed out/);
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('video retrieve refuses a downloaded body that is not an MP4 and keeps the remote copy', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'POST /api/v1/video/retrieve': (_request, response, self) => {

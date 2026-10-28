@@ -8,6 +8,8 @@ type StatusColors = Record<'blue' | 'green' | 'red' | 'yellow', (text: string) =
 
 export const DEFAULT_JOB_WAIT_TIMEOUT_SECONDS = 600;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
+// setTimeout fires almost immediately for delays above this.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 export function classifyJobStatus(status: string): JobStatusPhase {
   const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -41,6 +43,20 @@ export function jobPollIntervalMs(): number {
   return override > 0 ? override : DEFAULT_POLL_INTERVAL_MS;
 }
 
+function onDeadline(deadline: number, callback: () => void): () => void {
+  let timeoutId: NodeJS.Timeout | undefined;
+  const arm = () => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      callback();
+      return;
+    }
+    timeoutId = setTimeout(arm, Math.min(remainingMs, MAX_TIMER_DELAY_MS));
+  };
+  arm();
+  return () => clearTimeout(timeoutId);
+}
+
 export async function waitForJobStatus<T extends { status: string }>(
   fetchStatus: () => Promise<T>,
   options: {
@@ -61,18 +77,16 @@ export async function waitForJobStatus<T extends { status: string }>(
       throw timeoutError();
     }
 
-    let timeoutId: NodeJS.Timeout | undefined;
+    let cancelTimer: (() => void) | undefined;
     try {
       return await Promise.race([
         fetchStatus(),
         new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => reject(timeoutError()), remainingMs);
+          cancelTimer = onDeadline(deadline, () => reject(timeoutError()));
         }),
       ]);
     } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      cancelTimer?.();
     }
   };
 
@@ -84,7 +98,9 @@ export async function waitForJobStatus<T extends { status: string }>(
     if (remainingMs <= 0) {
       throw timeoutError();
     }
-    await new Promise(resolve => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
+    await new Promise(resolve =>
+      setTimeout(resolve, Math.min(pollIntervalMs, remainingMs, MAX_TIMER_DELAY_MS))
+    );
     status = await fetchBeforeDeadline();
   }
 

@@ -77,6 +77,39 @@ test('waitForJobStatus names the job when it times out', { timeout: 5_000 }, asy
   assert.ok(sequence.calls() >= 2);
 });
 
+test('waitForJobStatus accepts a timeout beyond the 32-bit timer limit', { timeout: 5_000 }, async () => {
+  const result = await waitForJobStatus(
+    () => new Promise<{ status: string }>((resolve) => {
+      setTimeout(() => resolve({ status: 'COMPLETED' }), 50);
+    }),
+    { label: 'test job', timeoutMs: 2_147_484_000 }
+  );
+
+  assert.equal(result.status, 'COMPLETED');
+});
+
+test('waitForJobStatus still times out when the deadline needs more than one timer', { timeout: 5_000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const maxTimerDelayMs = 2 ** 31 - 1;
+  let settled = false;
+  const waiting = waitForJobStatus(() => new Promise<{ status: string }>(() => undefined), {
+    label: 'test job',
+    timeoutMs: maxTimerDelayMs + 60_000,
+  });
+  waiting.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  t.mock.timers.tick(maxTimerDelayMs);
+  await flush();
+  assert.equal(settled, false);
+
+  t.mock.timers.tick(60_000);
+  await assert.rejects(waiting, /Timed out waiting for test job/);
+});
+
 test('waitForJobStatus times out when a status request never settles', { timeout: 5_000 }, async () => {
   await assert.rejects(
     waitForJobStatus(() => new Promise<{ status: string }>(() => undefined), {

@@ -160,6 +160,29 @@ test('music status --wait exits 1 when the job fails or ends in an unrecognised 
   }
 }));
 
+test('music status --wait accepts a --timeout beyond the 32-bit timer limit', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const audio = Buffer.alloc(64, 0xff);
+  const stub = await startStub({
+    [RETRIEVE]: async (_request, response) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      sendAudio(response, audio);
+    },
+  });
+  try {
+    const result = await runCli(
+      ['music', 'status', 'mq1', '--wait', '--timeout', '2147484', '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).status, 'COMPLETED');
+    assert.doesNotMatch(result.stderr, /TimeoutOverflowWarning|Timed out/);
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('music status without --wait reports a failed job and exits 0', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     [RETRIEVE]: (_request, response) => sendJson(response, { status: 'FAILED', error: 'generation failed' }),
