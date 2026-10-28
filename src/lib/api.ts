@@ -1740,8 +1740,7 @@ async function retrieveVideoResponse(
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        throw VeniceApiError.fromResponse(response.status, errorBody);
+        throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
       }
 
       const inspected = await inspectVideoRetrieveResponse(response);

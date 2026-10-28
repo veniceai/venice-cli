@@ -386,6 +386,48 @@ test('video retrieve enforces streaming size limits and cleans temporary files',
   }
 });
 
+test('video retrieve reads at most 64 KiB of an error body', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const outputDir = mkdtempSync(join(tmpdir(), 'venice-api-video-'));
+  const outputPath = join(outputDir, 'video.mp4');
+  let bytesPulled = 0;
+  let bodyCancelled = false;
+  process.env.VENICE_API_KEY = 'test-key';
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (bytesPulled >= 8 * 1024 * 1024) {
+        controller.close();
+        return;
+      }
+      const chunk = new Uint8Array(16 * 1024).fill(0x41);
+      bytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      bodyCancelled = true;
+    },
+  }), { status: 400, headers: { 'Content-Type': 'text/html' } })) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      retrieveVideo('q1', 'test-model', { outputPath }),
+      (error: Error) => {
+        assert.equal(error.message, `${'A'.repeat(1000)}… (truncated)`);
+        return true;
+      }
+    );
+    assert.ok(bytesPulled <= 128 * 1024, `pulled ${bytesPulled} bytes`);
+    assert.equal(bodyCancelled, true);
+    assert.equal(readdirSync(outputDir).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(outputDir, { recursive: true, force: true });
+    if (originalApiKey === undefined) delete process.env.VENICE_API_KEY;
+    else process.env.VENICE_API_KEY = originalApiKey;
+  }
+});
+
 test('video retrieve rejects invalid bodies even when classified as video', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
