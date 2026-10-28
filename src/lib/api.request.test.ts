@@ -519,6 +519,8 @@ test('API requests refuse redirects instead of following them', async () => {
       /answered with a redirect/
     );
     await assert.rejects(api.textToSpeech('SECRET TEXT'), /answered with a redirect/);
+    await assert.rejects(api.getVideoStatus('q1', 'redirect-model'), /answered with a redirect/);
+    assert.equal(count('POST', '/video/retrieve'), 1);
     assert.deepEqual(redirected, []);
   } finally {
     elsewhere.closeAllConnections();

@@ -1737,6 +1737,7 @@ async function retrieveVideoResponse(
         headers: getHeaders(),
         body: JSON.stringify(body),
         signal: controller.signal,
+        redirect: 'error',
       });
 
       if (!response.ok) {
@@ -1782,6 +1783,10 @@ async function retrieveVideoResponse(
       if (spinner) stopSpinner(true);
       return { kind: 'video', ...saved };
     } catch (error) {
+      if (isNetworkError(error) && isRedirectError(error)) {
+        if (spinner) stopSpinner(false);
+        throw new Error(REDIRECT_REFUSED);
+      }
       const retryable =
         !fileWriteStarted &&
         attempt < MAX_RETRIES &&
