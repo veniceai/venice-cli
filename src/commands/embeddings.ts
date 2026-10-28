@@ -9,6 +9,7 @@ import { writeOutputFile } from '../lib/safe-write.js';
 import {
   formatSuccess,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
 } from '../lib/output.js';
@@ -62,7 +63,7 @@ export function registerEmbeddingsCommand(program: Command): void {
         }
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
           return;
         }
 

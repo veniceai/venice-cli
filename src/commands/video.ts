@@ -38,8 +38,10 @@ import {
 import {
   formatSuccess,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
@@ -171,11 +173,11 @@ export function registerVideoCommands(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else {
           console.log(formatSuccess('Video generation queued!'));
-          console.log(`\n${c.dim('Queue ID:')} ${c.cyan(result.queue_id)}`);
-          console.log(`${c.dim('Model:')} ${result.model}`);
+          console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(result.queue_id))}`);
+          console.log(`${c.dim('Model:')} ${terminalSafe(result.model)}`);
           console.log(`\n${c.dim('Check status with:')} ${shellCommand`venice video status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`);
         }
       } catch (error) {
@@ -213,7 +215,7 @@ export function registerVideoCommands(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
           return;
         }
 
@@ -222,7 +224,7 @@ export function registerVideoCommands(program: Command): void {
         console.log(`${c.dim('Duration:')} ${options.duration}`);
         if (options.aspectRatio) console.log(`${c.dim('Aspect ratio:')} ${options.aspectRatio}`);
         if (prompt) console.log(`${c.dim('Prompt:')} ${prompt}`);
-        console.log(`${c.dim('Price:')} ${c.cyan(`$${result.quote}`)}`);
+        console.log(`${c.dim('Price:')} ${c.cyan(`$${terminalSafe(result.quote)}`)}`);
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -247,7 +249,7 @@ export function registerVideoCommands(program: Command): void {
 
       const printStatus = (result: VideoStatusResult): void => {
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
           return;
         }
 
@@ -259,7 +261,7 @@ export function registerVideoCommands(program: Command): void {
         };
 
         const colorFn = statusColors[classifyVideoStatus(result.status)];
-        console.log(`${c.dim('Status:')} ${colorFn(result.status)}`);
+        console.log(`${c.dim('Status:')} ${colorFn(terminalSafe(result.status))}`);
 
         if (result.average_execution_time) {
           const remainMs = Math.max(0, result.average_execution_time - (result.execution_duration || 0));
@@ -268,14 +270,14 @@ export function registerVideoCommands(program: Command): void {
 
         const videoUrl = videoUrlFromStatus(result);
         if (videoUrl) {
-          console.log(`\n${c.dim('Video URL:')} ${c.cyan(videoUrl)}`);
+          console.log(`\n${c.dim('Video URL:')} ${c.cyan(terminalSafe(videoUrl))}`);
         }
         if (classifyVideoStatus(result.status) === 'completed') {
           console.log(`\n${c.dim('Download with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
         }
 
         if (result.error) {
-          console.error(`\n${c.red('Error:')} ${result.error}`);
+          console.error(`\n${c.red('Error:')} ${terminalSafe(result.error, process.stderr)}`);
         }
       };
 
@@ -296,7 +298,7 @@ export function registerVideoCommands(program: Command): void {
                 ? `${Math.ceil(currentStatus.execution_duration / 1000)}s`
                 : '';
               console.log(
-                `Status: ${currentStatus.status}${elapsed ? ` (${elapsed} elapsed)` : ''} - waiting...`
+                `Status: ${terminalSafe(currentStatus.status)}${elapsed ? ` (${elapsed} elapsed)` : ''} - waiting...`
               );
             }
           );
@@ -346,9 +348,9 @@ export function registerVideoCommands(program: Command): void {
             const exitCode = notReady ? 2 : 1;
 
             if (format === 'json') {
-              console.log(JSON.stringify(status, null, 2));
+              console.log(formatJson(status));
             } else if (notReady) {
-              console.log(`${c.dim('Status:')} ${c.yellow(status.status)} — video not ready yet.`);
+              console.log(`${c.dim('Status:')} ${c.yellow(terminalSafe(status.status))} — video not ready yet.`);
               console.log(`${c.dim('Try again with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
             } else {
               console.error(formatError(
@@ -372,7 +374,7 @@ export function registerVideoCommands(program: Command): void {
         }
 
         if (format === 'json') {
-          console.log(JSON.stringify({
+          console.log(formatJson({
             status: 'completed',
             output: options.output,
             model: options.model,
@@ -380,7 +382,7 @@ export function registerVideoCommands(program: Command): void {
               ? { bytes: result.bytesWritten, content_type: result.contentType }
               : {}),
             ...(shouldComplete ? { deleted } : {}),
-          }, null, 2));
+          }));
           return;
         }
 
@@ -407,7 +409,7 @@ export function registerVideoCommands(program: Command): void {
         const exitCode = result.success ? 0 : 1;
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else if (result.success) {
           console.log(formatSuccess('Video cleaned up from storage.'));
         } else {
@@ -430,13 +432,13 @@ export function registerVideoCommands(program: Command): void {
       try {
         const result = await transcribeVideo(requirePublicVideoUrl(url));
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else if (format === 'raw') {
-          console.log(result.transcript);
+          console.log(terminalSafe(result.transcript));
         } else {
           console.log(formatSuccess('Video transcribed'));
-          if (result.lang) console.log(`${c.dim('Language:')} ${result.lang}`);
-          console.log(`\n${result.transcript}`);
+          if (result.lang) console.log(`${c.dim('Language:')} ${terminalSafe(result.lang)}`);
+          console.log(`\n${terminalSafe(result.transcript)}`);
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -481,11 +483,11 @@ export function registerVideoCommands(program: Command): void {
         });
         if (options.wait === false) {
           if (format === 'json') {
-            console.log(JSON.stringify(queued, null, 2));
+            console.log(formatJson(queued));
           } else {
             console.log(formatSuccess('Video upscale queued!'));
-            console.log(`\n${c.dim('Queue ID:')} ${c.cyan(queued.queue_id)}`);
-            console.log(`${c.dim('Model:')} ${queued.model}`);
+            console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(queued.queue_id))}`);
+            console.log(`${c.dim('Model:')} ${terminalSafe(queued.model)}`);
           }
           return;
         }
@@ -495,7 +497,7 @@ export function registerVideoCommands(program: Command): void {
           DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS * 1000,
           jobPollIntervalMs(),
           format === 'json' ? undefined : current => {
-            console.log(`Status: ${current.status} - waiting...`);
+            console.log(`Status: ${terminalSafe(current.status)} - waiting...`);
           }
         );
         if (classifyVideoStatus(status.status) !== 'completed') {
@@ -523,16 +525,16 @@ export function registerVideoCommands(program: Command): void {
         }
 
         if (format === 'json') {
-          console.log(JSON.stringify({
+          console.log(formatJson({
             ...queued,
             output: options.output,
             upscale_factor: factor,
             deleted,
-          }, null, 2));
+          }));
         } else {
           console.log(formatSuccess(`Upscaled video saved to ${options.output}`));
-          console.log(`${c.dim('Queue ID:')} ${queued.queue_id}`);
-          console.log(`${c.dim('Model:')} ${queued.model}`);
+          console.log(`${c.dim('Queue ID:')} ${terminalSafe(queued.queue_id)}`);
+          console.log(`${c.dim('Model:')} ${terminalSafe(queued.model)}`);
           console.log(`${c.dim('Factor:')} ${factor}x`);
           if (deleted) {
             console.log(`${c.dim('Cleanup:')} media deleted after download`);
@@ -569,10 +571,10 @@ export function registerVideoCommands(program: Command): void {
       }
 
       if (format === 'json') {
-        console.log(JSON.stringify({
+        console.log(formatJson({
           models,
           source: usedFallback ? 'fallback' : 'api',
-        }, null, 2));
+        }));
         return;
       }
 
@@ -593,7 +595,7 @@ export function registerVideoCommands(program: Command): void {
           : model.type === 'upscale'
             ? c.magenta
             : c.blue;
-        console.log(`${c.cyan(model.id.padEnd(idWidth))} ${typeColor(model.type)}`);
+        console.log(`${c.cyan(terminalSafe(model.id).padEnd(idWidth))} ${typeColor(model.type)}`);
       }
 
       console.log(`\n${c.dim('T2V = Text-to-Video, I2V = Image-to-Video')}`);

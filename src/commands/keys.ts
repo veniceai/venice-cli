@@ -28,10 +28,12 @@ import {
 import { onInterrupt } from '../lib/interrupt.js';
 import {
   detectOutputFormat,
+  formatJson,
   formatSuccess,
   formatTable,
   formatWarning,
   getChalk,
+  terminalSafe,
 } from '../lib/output.js';
 import { parseDecimalOption } from '../lib/options.js';
 import { assertApiKeyList, assertApiKeyRateLimits } from '../lib/response-checks.js';
@@ -57,7 +59,7 @@ export function registerKeysCommand(program: Command): void {
       const apiKeys = await listApiKeys();
       assertApiKeyList(apiKeys);
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify(apiKeys.map(toSafeApiKeyMetadata), null, 2));
+        console.log(formatJson(apiKeys.map(toSafeApiKeyMetadata)));
         return;
       }
 
@@ -158,15 +160,15 @@ export function registerKeysCommand(program: Command): void {
       }
 
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify({
+        console.log(formatJson({
           ...toSafeApiKeyMetadata(created),
           secretFile: secretFile.path,
-        }, null, 2));
+        }));
         return;
       }
 
       console.log(formatSuccess(`Created ${created.apiKeyType} API key "${created.description ?? description}"`));
-      console.log(`ID: ${created.id}`);
+      console.log(`ID: ${terminalSafe(created.id)}`);
       console.log(`Secret saved to: ${secretFile.path}`);
       console.error(formatWarning('The API key secret is never printed and Venice will not show it again.'));
     });
@@ -200,7 +202,7 @@ export function registerKeysCommand(program: Command): void {
 
       await deleteApiKey(normalizedId);
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify({ success: true, id: normalizedId }));
+        console.log(formatJson({ success: true, id: normalizedId }, 0));
       } else {
         console.log(formatSuccess(`Deleted API key ${normalizedId}`));
       }
@@ -214,19 +216,19 @@ export function registerKeysCommand(program: Command): void {
       const limits = await getApiKeyRateLimits();
       assertApiKeyRateLimits(limits);
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify(limits, null, 2));
+        console.log(formatJson(limits));
         return;
       }
 
       const c = getChalk();
       console.log(c.bold('\nAPI Key Access\n'));
       console.log(`Access permitted: ${limits.accessPermitted ? c.green('yes') : c.red('no')}`);
-      console.log(`Tier: ${limits.apiTier.id}`);
+      console.log(`Tier: ${terminalSafe(limits.apiTier.id)}`);
       console.log(`Charged: ${limits.apiTier.isCharged ? 'yes' : 'no'}`);
-      console.log(`USD balance: ${limits.balances.USD}`);
-      console.log(`DIEM balance: ${limits.balances.DIEM}`);
-      console.log(`Key expiration: ${limits.keyExpiration ?? 'never'}`);
-      console.log(`Next epoch: ${limits.nextEpochBegins}`);
+      console.log(`USD balance: ${terminalSafe(limits.balances.USD)}`);
+      console.log(`DIEM balance: ${terminalSafe(limits.balances.DIEM)}`);
+      console.log(`Key expiration: ${terminalSafe(limits.keyExpiration ?? 'never')}`);
+      console.log(`Next epoch: ${terminalSafe(limits.nextEpochBegins)}`);
 
       const rows = limits.rateLimits.flatMap((model) =>
         model.rateLimits.map((limit) => ({
