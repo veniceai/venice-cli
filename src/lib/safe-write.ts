@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { Writable } from 'stream';
+import { onInterrupt } from './interrupt.js';
 
 const MAX_UNIQUE_NAME_ATTEMPTS = 1000;
 
@@ -43,6 +44,7 @@ export function createTemporaryFile(
     options.mode ?? replacedFileMode(destination)
   );
   let finished = false;
+  const stopInterruptCleanup = onInterrupt(() => discard());
 
   function requireDescriptor(): number {
     if (descriptor === undefined) {
@@ -54,6 +56,7 @@ export function createTemporaryFile(
   function discard(): void {
     if (finished) return;
     finished = true;
+    stopInterruptCleanup();
     if (descriptor !== undefined) {
       try {
         fs.closeSync(descriptor);
@@ -100,6 +103,7 @@ export function createTemporaryFile(
       fs.closeSync(fd);
       fs.renameSync(temporaryPath, destination);
       finished = true;
+      stopInterruptCleanup();
     },
     discard,
   };

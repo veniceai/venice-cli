@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
+import { runInterruptCleanups } from './interrupt.js';
 import {
   createTemporaryFile,
   writeFileAtomic,
@@ -132,6 +133,21 @@ test('createTemporaryFile streams into a hidden file that replaces the destinati
 
     assert.equal(readFileSync(destination, 'utf8'), 'new video');
     assert.deepEqual(readdirSync(dir), ['video.mp4']);
+  }));
+
+test('an interrupt removes temporary files that are still open but not committed ones', () =>
+  withTempDir((dir) => {
+    const committed = createTemporaryFile(join(dir, 'done.mp3'));
+    committed.write('complete');
+    committed.commit();
+    const pending = createTemporaryFile(join(dir, 'pending.mp3'));
+    pending.write('partial');
+
+    runInterruptCleanups();
+
+    assert.deepEqual(readdirSync(dir), ['done.mp3']);
+    assert.equal(readFileSync(join(dir, 'done.mp3'), 'utf8'), 'complete');
+    assert.throws(() => pending.commit(), /closed/);
   }));
 
 test('createTemporaryFile discard removes the file and leaves the destination alone', () =>

@@ -25,6 +25,7 @@ import {
   getApiKeyRateLimits,
   listApiKeys,
 } from '../lib/account-api.js';
+import { onInterrupt } from '../lib/interrupt.js';
 import {
   detectOutputFormat,
   formatSuccess,
@@ -104,37 +105,44 @@ export function registerKeysCommand(program: Command): void {
       if (options.expires !== undefined) validateExpiration(options.expires);
 
       const secretFile = prepareSecretFile(String(options.output));
+      const stopInterruptNotice = onInterrupt(() => {
+        console.error(formatWarning(keyMayExistNotice(description)));
+      });
       let created: Awaited<ReturnType<typeof createApiKey>>;
-      try {
-        created = await createApiKey({
-          apiKeyType,
-          description,
-          ...(options.expires ? { expiresAt: options.expires } : {}),
-          ...(Object.keys(consumptionLimit).length > 0
-            ? { consumptionLimit, limitPeriod }
-            : {}),
-        });
-      } catch (error) {
-        const failure = cleanUpAfterFailure(secretFile, error, '');
-        if (!(error instanceof ApiKeyCreationError)) {
-          throw new Error(failure);
-        }
-        if (error.keyId === undefined) {
-          throw new Error(`${failure}\n${keyMayExistNotice(description)}`);
-        }
-        throw await deleteUnsavedKey(error.keyId, failure, '');
-      }
-
       let saveWarning: string | undefined;
       try {
-        saveWarning = secretFile.commit(created.apiKey);
-      } catch (saveError) {
-        const saveFailure = cleanUpAfterFailure(secretFile, saveError, created.apiKey);
-        throw await deleteUnsavedKey(
-          created.id,
-          `Failed to save the API key secret (${saveFailure})`,
-          created.apiKey
-        );
+        try {
+          created = await createApiKey({
+            apiKeyType,
+            description,
+            ...(options.expires ? { expiresAt: options.expires } : {}),
+            ...(Object.keys(consumptionLimit).length > 0
+              ? { consumptionLimit, limitPeriod }
+              : {}),
+          });
+        } catch (error) {
+          const failure = cleanUpAfterFailure(secretFile, error, '');
+          if (!(error instanceof ApiKeyCreationError)) {
+            throw new Error(failure);
+          }
+          if (error.keyId === undefined) {
+            throw new Error(`${failure}\n${keyMayExistNotice(description)}`);
+          }
+          throw await deleteUnsavedKey(error.keyId, failure, '');
+        }
+
+        try {
+          saveWarning = secretFile.commit(created.apiKey);
+        } catch (saveError) {
+          const saveFailure = cleanUpAfterFailure(secretFile, saveError, created.apiKey);
+          throw await deleteUnsavedKey(
+            created.id,
+            `Failed to save the API key secret (${saveFailure})`,
+            created.apiKey
+          );
+        }
+      } finally {
+        stopInterruptNotice();
       }
 
       if (saveWarning !== undefined) {
@@ -309,7 +317,7 @@ function prepareSecretFile(output: string): {
   let open = true;
   let committed = false;
 
-  return {
+  const secretFile = {
     path: destination,
     commit(secret: string) {
       writeFileSync(descriptor, `${secret}\n`, { encoding: 'utf8' });
@@ -318,6 +326,7 @@ function prepareSecretFile(output: string): {
       open = false;
       linkSync(temporary, destination);
       committed = true;
+      stopInterruptCleanup();
 
       try {
         unlinkSync(temporary);
@@ -345,6 +354,7 @@ function prepareSecretFile(output: string): {
     },
     cleanup() {
       if (committed) return;
+      stopInterruptCleanup();
       const failures: string[] = [];
       if (open) {
         try {
@@ -366,6 +376,8 @@ function prepareSecretFile(output: string): {
       }
     },
   };
+  const stopInterruptCleanup = onInterrupt(() => secretFile.cleanup());
+  return secretFile;
 }
 
 // Removes the unused secret file and describes `error`, plus any cleanup failure.
