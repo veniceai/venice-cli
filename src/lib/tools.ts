@@ -5,9 +5,13 @@
  */
 
 import type { ToolDefinition } from '../types/index.js';
+import { Ajv, type ValidateFunction } from 'ajv';
 import { randomInt, randomUUID } from 'crypto';
 import { escapeInvisible, getChalk } from './output.js';
 import { confirm } from './prompt.js';
+
+export const MAX_TOOL_ARGUMENTS_BYTES = 64 * 1024;
+export const MAX_TOOL_RESULT_BYTES = 64 * 1024;
 
 // Built-in tool definitions
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
@@ -514,8 +518,25 @@ const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<s
 
 export function getToolDefinitions(toolNames: string[]): ToolDefinition[] {
   return toolNames
-    .map(name => BUILTIN_TOOLS[name])
-    .filter(Boolean);
+    .filter(name => Object.hasOwn(BUILTIN_TOOLS, name))
+    .map(name => BUILTIN_TOOLS[name]);
+}
+
+let toolArgumentsAjv: Ajv | undefined;
+const toolArgumentValidators = new Map<string, ValidateFunction>();
+
+function describeInvalidToolArguments(name: string, args: unknown): string | undefined {
+  let validate = toolArgumentValidators.get(name);
+  if (!validate) {
+    toolArgumentsAjv ??= new Ajv({ strict: true, allErrors: false });
+    validate = toolArgumentsAjv.compile(BUILTIN_TOOLS[name].function.parameters);
+    toolArgumentValidators.set(name, validate);
+  }
+  if (validate(args)) {
+    return undefined;
+  }
+  const error = validate.errors?.[0];
+  return error ? `${error.instancePath || 'arguments'} ${error.message}` : 'arguments are invalid';
 }
 
 export function listAvailableTools(): string[] {
@@ -540,9 +561,14 @@ export async function executeTool(
     }
   }
 
-  const executor = toolExecutors[name];
+  const executor = Object.hasOwn(toolExecutors, name) ? toolExecutors[name] : undefined;
   if (!executor) {
     return `Unknown tool: ${name}`;
+  }
+
+  const argumentsError = describeInvalidToolArguments(name, args);
+  if (argumentsError) {
+    return `Tool error: invalid arguments for ${name}: ${argumentsError}`;
   }
 
   // Interactive approval mode
@@ -553,11 +579,16 @@ export async function executeTool(
     }
   }
 
+  let result: string;
   try {
-    return await executor(args as Record<string, unknown>);
+    result = await executor(args as Record<string, unknown>);
   } catch (error) {
     return `Tool error: ${error}`;
   }
+  if (Buffer.byteLength(result, 'utf8') > MAX_TOOL_RESULT_BYTES) {
+    return `Tool error: ${name} returned more than the ${MAX_TOOL_RESULT_BYTES}-byte limit`;
+  }
+  return result;
 }
 
 async function promptForApproval(name: string, args: unknown): Promise<boolean> {

@@ -19,6 +19,7 @@ import {
   getToolDefinitions,
   executeTool,
   formatToolsHelp,
+  MAX_TOOL_ARGUMENTS_BYTES,
 } from '../lib/tools.js';
 import {
   formatUsage,
@@ -1069,7 +1070,19 @@ function reconstructStreamToolCalls(toolCallDeltas: StreamToolCallDelta[]): Tool
 }
 
 function parseToolCallArguments(toolCall: ToolCall): Record<string, unknown> {
-  const rawArgs = toolCall.function.arguments?.trim();
+  const raw: unknown = toolCall.function.arguments;
+  if (raw !== undefined && raw !== null && typeof raw !== 'string') {
+    throw new Error(
+      `Invalid arguments for tool "${toolCall.function.name}" (id: ${toolCall.id}): expected a JSON string`
+    );
+  }
+  if (raw && Buffer.byteLength(raw, 'utf8') > MAX_TOOL_ARGUMENTS_BYTES) {
+    throw new Error(
+      `Arguments for tool "${toolCall.function.name}" (id: ${toolCall.id}) exceed the ` +
+      `${MAX_TOOL_ARGUMENTS_BYTES}-byte limit`
+    );
+  }
+  const rawArgs = raw?.trim();
   if (!rawArgs) {
     return {};
   }
