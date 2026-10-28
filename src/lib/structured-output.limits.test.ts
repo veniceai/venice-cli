@@ -189,3 +189,53 @@ test('schemas over the size, depth, or enum limits are rejected before compiling
   });
   assert.ok(ms < 1500, `compiling schemas at the limits took ${ms.toFixed(0)} ms`);
 });
+
+test('a reply that fails a schema with many alternatives yields a short error list', () => {
+  const anyOfFive = {
+    type: 'array',
+    items: {
+      anyOf: [{ type: 'string' }, { type: 'boolean' }, { type: 'object' }, { type: 'array' }, { type: 'null' }],
+    },
+  };
+  const reply = Array.from({ length: 50_000 }, () => 1);
+  let errors: string[] = [];
+  const ms = elapsedMs(() => {
+    errors = validateAgainstSchema(reply, anyOfFive);
+  });
+  assert.equal(errors.length, 6, `${errors.length} errors`);
+  assert.deepEqual(errors, [
+    '$/0: must be string',
+    '$/0: must be boolean',
+    '$/0: must be object',
+    '$/0: must be array',
+    '$/0: must be null',
+    '$/0: must match a schema in anyOf',
+  ]);
+  assert.ok(ms < 250, `validation took ${ms.toFixed(0)} ms`);
+
+  const manyBranches = { anyOf: Array.from({ length: 30 }, (_, i) => ({ const: i })) };
+  const lines = validateAgainstSchema(-1, manyBranches);
+  assert.equal(lines.length, 21);
+  assert.equal(lines.at(-1), '(11 more errors not shown)');
+});
+
+test('reply-derived text in error messages is escaped and shortened', () => {
+  const closed = { type: 'object', properties: {}, additionalProperties: false };
+  assert.deepEqual(
+    validateAgainstSchema({ '\u001b]0;title\u0007': 1 }, closed),
+    ['$: unexpected property "\\u001b]0;title\\u0007"']
+  );
+  assert.deepEqual(
+    validateAgainstSchema({ 'a\u009bb\u202e': 'x' }, { type: 'object', additionalProperties: { type: 'integer' } }),
+    ['$/a\\u009bb\\u202e: must be integer']
+  );
+
+  const [line] = validateAgainstSchema({ [`${'k'.repeat(10_000)}\u001b`]: 1 }, closed);
+  assert.ok(line.length < 300, `${line.length} characters`);
+  assert.doesNotMatch(line, /\u001b/);
+
+  assert.throws(
+    () => parseStructuredContent('\u001b]0;x\u0007 not json'),
+    (error: Error) => /\\u001b\]0;x\\u0007/.test(error.message) && !/[\u0000-\u001f]/.test(error.message)
+  );
+});

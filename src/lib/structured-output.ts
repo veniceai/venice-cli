@@ -22,6 +22,9 @@ export const MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RESPONSE_FORMAT_NAME_LENGTH = 64;
 const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const URL_FORMAT_PROTOCOLS = new Set(['http:', 'https:', 'ftp:']);
+const MAX_REPORTED_SCHEMA_ERRORS = 20;
+const MAX_ERROR_DETAIL_LENGTH = 200;
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 
 // Keyed by schema object: loading the schema, building each request and
 // validating the reply all pass the same object, so a run compiles it once.
@@ -232,7 +235,7 @@ export function parseStructuredContent(content: string): unknown {
     return JSON.parse(extracted);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Model response was not valid JSON: ${reason}`);
+    throw new Error(`Model response was not valid JSON: ${displayText(reason)}`);
   }
 }
 
@@ -273,7 +276,7 @@ function compileSchema(
 
   const schemaUri = typeof schema.$schema === 'string' ? schema.$schema : '';
   const options = {
-    allErrors: true,
+    allErrors: false,
     strict: true,
     validateSchema: true,
     allowUnionTypes: true,
@@ -394,16 +397,32 @@ function canonicalJson(value: unknown): string {
 }
 
 function formatValidationErrors(errors: ErrorObject[] | null | undefined): string[] {
-  return (errors ?? []).map((error) => {
-    const path = error.instancePath ? `$${error.instancePath}` : '$';
+  const all = errors ?? [];
+  const lines = all.slice(0, MAX_REPORTED_SCHEMA_ERRORS).map((error) => {
+    const path = displayText(error.instancePath ? `$${error.instancePath}` : '$');
     if (error.keyword === 'required') {
-      return `${path}: missing required property "${String(error.params.missingProperty)}"`;
+      return `${path}: missing required property "${displayText(String(error.params.missingProperty))}"`;
     }
     if (error.keyword === 'additionalProperties') {
-      return `${path}: unexpected property "${String(error.params.additionalProperty)}"`;
+      return `${path}: unexpected property "${displayText(String(error.params.additionalProperty))}"`;
     }
-    return `${path}: ${error.message ?? `failed ${error.keyword} validation`}`;
+    return `${path}: ${displayText(error.message ?? `failed ${error.keyword} validation`)}`;
   });
+  if (all.length > MAX_REPORTED_SCHEMA_ERRORS) {
+    lines.push(`(${all.length - MAX_REPORTED_SCHEMA_ERRORS} more errors not shown)`);
+  }
+  return lines;
+}
+
+// Paths, property names and parser messages can carry text from the reply.
+function displayText(value: string): string {
+  const shortened = value.length > MAX_ERROR_DETAIL_LENGTH
+    ? `${value.slice(0, MAX_ERROR_DETAIL_LENGTH)}…`
+    : value;
+  return shortened.replace(
+    UNSAFE_DISPLAY_CHARACTERS,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
 }
 
 function schemaSizeError(filePath: string): Error {
