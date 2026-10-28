@@ -27,6 +27,7 @@ import { registerMusicCommands } from './music.js';
 import { registerRpcCommand } from './rpc.js';
 import { registerSearchCommand } from './search.js';
 import { registerTeeCommand } from './tee.js';
+import { registerUpdateCommand } from './update.js';
 import { registerUsageCommand } from './usage.js';
 import { registerVideoCommands } from './video.js';
 
@@ -65,6 +66,7 @@ function buildProgram(): Command {
     registerBillingCommand,
     registerKeysCommand,
     registerAugmentCommands,
+    registerUpdateCommand,
   ]) {
     register(program);
   }
