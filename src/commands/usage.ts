@@ -108,8 +108,9 @@ function summarizeUsage(usage: UsageEntry[]): UsageSummary {
     prompt_tokens: 0,
     completion_tokens: 0,
     total_calls: usage.length,
-    by_command: {},
-    by_model: {},
+    // usage.json keys such as "__proto__" must not reach Object.prototype.
+    by_command: Object.create(null),
+    by_model: Object.create(null),
   };
 
   for (const entry of usage) {
@@ -143,7 +144,7 @@ function tokenCount(value: unknown): number {
 }
 
 function groupByDay(usage: UsageEntry[]): Record<string, UsageEntry[]> {
-  const groups: Record<string, UsageEntry[]> = {};
+  const groups: Record<string, UsageEntry[]> = Object.create(null);
 
   for (const entry of usage) {
     const day = entry.timestamp.split('T')[0];
