@@ -5,6 +5,7 @@
  */
 
 import type { ToolDefinition } from '../types/index.js';
+import { randomInt, randomUUID } from 'crypto';
 import { escapeInvisible, getChalk } from './output.js';
 import { confirm } from './prompt.js';
 
@@ -87,11 +88,11 @@ export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
             description: 'Type of random value to generate',
           },
           min: {
-            type: 'number',
+            type: 'integer',
             description: 'Minimum value (for number type)',
           },
           max: {
-            type: 'number',
+            type: 'integer',
             description: 'Maximum value (for number type)',
           },
           choices: {
@@ -454,24 +455,26 @@ const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<s
 
     switch (type) {
       case 'number': {
+        if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) {
+          return 'Error: min and max must be safe integers';
+        }
         if (min > max) return 'Error: min cannot be greater than max';
-        const result = Math.floor(Math.random() * (max - min + 1)) + min;
+        // crypto.randomInt draws from [min, max) and needs max - min < 2^48.
+        if (max - min >= 2 ** 48 - 1) {
+          return 'Error: max - min must be less than 2^48 - 1';
+        }
+        const result = randomInt(min, max + 1);
         return `Random number between ${min} and ${max}: ${result}`;
       }
       case 'choice': {
         if (!choices?.length) {
           return 'Error: No choices provided';
         }
-        const choice = choices[Math.floor(Math.random() * choices.length)];
+        const choice = choices[randomInt(choices.length)];
         return `Random choice: ${choice}`;
       }
       case 'uuid': {
-        const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-          const r = Math.random() * 16 | 0;
-          const v = c === 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-        });
-        return `UUID: ${uuid}`;
+        return `UUID: ${randomUUID()}`;
       }
       default:
         return `Unknown random type: ${type}`;
