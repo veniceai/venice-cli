@@ -21,6 +21,7 @@ import type { OutputFormat } from '../types/index.js';
 
 export const MAX_RPC_BATCH = 100;
 export const MAX_RPC_BATCH_BYTES = 1024 * 1024;
+export const MAX_RPC_JSON_DEPTH = 32;
 
 export function registerRpcCommand(program: Command): void {
   program
@@ -125,10 +126,10 @@ async function printNetworks(format: OutputFormat): Promise<void> {
 export function parseRpcParam(token: string): unknown {
   const trimmed = token.trim();
   if (!looksLikeJson(trimmed)) {
-    return token;
+    return trimmed;
   }
 
-  validateRawJsonNumbers(trimmed, 'parameter');
+  validateRawJson(trimmed, 'parameter');
 
   let parsed: unknown;
   try {
@@ -140,11 +141,13 @@ export function parseRpcParam(token: string): unknown {
   return parsed;
 }
 
-function validateRawJsonNumbers(json: string, context: 'parameter' | 'batch file'): void {
+function validateRawJson(json: string, context: 'parameter' | 'batch file'): void {
   const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  let depth = 0;
 
   for (let index = 0; index < json.length;) {
-    if (json[index] === '"') {
+    const char = json[index];
+    if (char === '"') {
       index++;
       while (index < json.length) {
         if (json[index] === '\\') {
@@ -159,6 +162,20 @@ function validateRawJsonNumbers(json: string, context: 'parameter' | 'batch file
       continue;
     }
 
+    if (char === '[' || char === '{') {
+      depth++;
+      if (depth > MAX_RPC_JSON_DEPTH) {
+        throw new Error(`JSON ${context} is nested more than ${MAX_RPC_JSON_DEPTH} levels deep.`);
+      }
+      index++;
+      continue;
+    }
+    if (char === ']' || char === '}') {
+      depth--;
+      index++;
+      continue;
+    }
+
     numberPattern.lastIndex = index;
     const match = numberPattern.exec(json);
     if (!match) {
@@ -167,11 +184,7 @@ function validateRawJsonNumbers(json: string, context: 'parameter' | 'batch file
     }
 
     const literal = match[0];
-    const value = Number(literal);
-    if (
-      !Number.isFinite(value) ||
-      exceedsSafeIntegerMagnitude(literal)
-    ) {
+    if (!isExactJsonNumber(literal) || exceedsSafeIntegerMagnitude(literal)) {
       throw new Error(
         `Unsafe numeric literal in JSON ${context}: ${literal}. ` +
         'Quote it as a string or use a chain-native hex quantity.'
@@ -179,6 +192,31 @@ function validateRawJsonNumbers(json: string, context: 'parameter' | 'batch file
     }
     index += literal.length;
   }
+}
+
+// JSON.stringify writes the shortest decimal that round-trips the parsed
+// double, so a literal is sent unchanged only if that decimal has its value.
+function isExactJsonNumber(literal: string): boolean {
+  const value = Number(literal);
+  return Number.isFinite(value) && decimalValueKey(String(value)) === decimalValueKey(literal);
+}
+
+function decimalValueKey(literal: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(literal);
+  if (!match) {
+    return literal;
+  }
+  const [, sign, integerPart, fractionPart = '', exponentText = '0'] = match;
+  const digits = integerPart + fractionPart;
+  let start = 0;
+  while (start < digits.length && digits[start] === '0') start++;
+  if (start === digits.length) {
+    return '0';
+  }
+  let end = digits.length;
+  while (digits[end - 1] === '0') end--;
+  const exponent = Number(exponentText) - fractionPart.length + (digits.length - end);
+  return `${sign}${digits.slice(start, end)}e${exponent}`;
 }
 
 function exceedsSafeIntegerMagnitude(literal: string): boolean {
@@ -280,7 +318,7 @@ export function readBatchFile(filePath: string): JsonRpcRequest[] {
     fs.closeSync(descriptor);
   }
 
-  validateRawJsonNumbers(rawJson, 'batch file');
+  validateRawJson(rawJson, 'batch file');
 
   let parsed: unknown;
   try {
