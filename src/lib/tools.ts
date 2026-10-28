@@ -152,30 +152,50 @@ export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
   },
 };
 
-// Safe math expression evaluator without eval/Function
+export const MAX_CALCULATOR_EXPRESSION_LENGTH = 1024;
+
+// Safe math expression evaluator without eval/Function. Grammar, loosest first:
+//   expression := term (('+' | '-') term)*
+//   term       := unary (('*' | '/' | '%') unary)*
+//   unary      := ('+' | '-') unary | power
+//   power      := primary ('^' unary)?
+//   primary    := number | constant | function '(' expression (',' expression)* ')' | '(' expression ')'
+// so -2^2 is -(2^2), 2^-2 is 2^(-2), and ^ is right-associative.
 function safeEvaluateMath(expression: string): number {
-  const tokens = tokenize(expression);
-  const rpn = shuntingYard(tokens);
-  return evaluateRPN(rpn);
+  if (expression.length > MAX_CALCULATOR_EXPRESSION_LENGTH) {
+    throw new Error(
+      `Expression exceeds the ${MAX_CALCULATOR_EXPRESSION_LENGTH}-character limit`
+    );
+  }
+  return new MathParser(tokenize(expression)).parse();
 }
 
-type Token = { type: 'number'; value: number } | { type: 'operator'; value: string } | { type: 'unary'; value: string } | { type: 'function'; value: string } | { type: 'lparen' } | { type: 'rparen' } | { type: 'comma' };
+type Token =
+  | { type: 'number'; value: number; text: string }
+  | { type: 'name'; value: string }
+  | { type: 'symbol'; value: string };
 
-const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
-  sqrt: (args) => Math.sqrt(args[0]),
-  sin: (args) => Math.sin(args[0]),
-  cos: (args) => Math.cos(args[0]),
-  tan: (args) => Math.tan(args[0]),
-  log: (args) => Math.log(args[0]),
-  log10: (args) => Math.log10(args[0]),
-  exp: (args) => Math.exp(args[0]),
-  abs: (args) => Math.abs(args[0]),
-  pow: (args) => Math.pow(args[0], args[1]),
-  floor: (args) => Math.floor(args[0]),
-  ceil: (args) => Math.ceil(args[0]),
-  round: (args) => Math.round(args[0]),
-  min: (args) => Math.min(...args),
-  max: (args) => Math.max(...args),
+interface MathFunction {
+  // Omitted for functions that take one or more arguments.
+  arity?: number;
+  apply: (args: number[]) => number;
+}
+
+const MATH_FUNCTIONS: Record<string, MathFunction> = {
+  sqrt: { arity: 1, apply: ([x]) => Math.sqrt(x) },
+  sin: { arity: 1, apply: ([x]) => Math.sin(x) },
+  cos: { arity: 1, apply: ([x]) => Math.cos(x) },
+  tan: { arity: 1, apply: ([x]) => Math.tan(x) },
+  log: { arity: 1, apply: ([x]) => Math.log(x) },
+  log10: { arity: 1, apply: ([x]) => Math.log10(x) },
+  exp: { arity: 1, apply: ([x]) => Math.exp(x) },
+  abs: { arity: 1, apply: ([x]) => Math.abs(x) },
+  pow: { arity: 2, apply: ([x, y]) => Math.pow(x, y) },
+  floor: { arity: 1, apply: ([x]) => Math.floor(x) },
+  ceil: { arity: 1, apply: ([x]) => Math.ceil(x) },
+  round: { arity: 1, apply: ([x]) => Math.round(x) },
+  min: { apply: (args) => args.reduce((a, b) => Math.min(a, b)) },
+  max: { apply: (args) => args.reduce((a, b) => Math.max(a, b)) },
 };
 
 const MATH_CONSTANTS: Record<string, number> = {
@@ -183,74 +203,43 @@ const MATH_CONSTANTS: Record<string, number> = {
   e: Math.E,
 };
 
-const OPERATORS: Record<string, { precedence: number; assoc: 'left' | 'right' }> = {
-  '+': { precedence: 1, assoc: 'left' },
-  '-': { precedence: 1, assoc: 'left' },
-  '*': { precedence: 2, assoc: 'left' },
-  '/': { precedence: 2, assoc: 'left' },
-  '%': { precedence: 2, assoc: 'left' },
-  '^': { precedence: 4, assoc: 'right' },
-};
+const NUMBER_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+const SYMBOLS = new Set(['+', '-', '*', '/', '%', '^', '(', ')', ',']);
 
-// Below '^' so that -2^2 is -(2^2), above '*' so that -2*3 is (-2)*3.
-const UNARY_PRECEDENCE = 3;
-
-function tokenize(expr: string): Token[] {
+function tokenize(expression: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
-  const s = expr.replace(/\s+/g, '');
 
-  while (i < s.length) {
-    const char = s[i];
+  while (i < expression.length) {
+    const char = expression[i];
+
+    if (/\s/.test(char)) {
+      i++;
+      continue;
+    }
 
     if (/[0-9.]/.test(char)) {
-      let num = '';
-      while (i < s.length && /[0-9.]/.test(s[i])) {
-        num += s[i++];
+      let end = i + 1;
+      while (end < expression.length && /[0-9.]/.test(expression[end])) end++;
+      const text = expression.slice(i, end);
+      if (!NUMBER_PATTERN.test(text)) {
+        throw new Error(`Invalid number: ${text}`);
       }
-      tokens.push({ type: 'number', value: parseFloat(num) });
+      tokens.push({ type: 'number', value: Number(text), text });
+      i = end;
       continue;
     }
 
-    if (/[a-zA-Z_]/.test(char)) {
-      let name = '';
-      while (i < s.length && /[a-zA-Z0-9_]/.test(s[i])) {
-        name += s[i++];
-      }
-      const lower = name.toLowerCase();
-      if (MATH_CONSTANTS[lower] !== undefined) {
-        tokens.push({ type: 'number', value: MATH_CONSTANTS[lower] });
-      } else if (MATH_FUNCTIONS[lower]) {
-        tokens.push({ type: 'function', value: lower });
-      } else {
-        throw new Error(`Unknown identifier: ${name}`);
-      }
+    if (/[A-Za-z_]/.test(char)) {
+      let end = i + 1;
+      while (end < expression.length && /[A-Za-z0-9_]/.test(expression[end])) end++;
+      tokens.push({ type: 'name', value: expression.slice(i, end) });
+      i = end;
       continue;
     }
 
-    if (char === '(') {
-      tokens.push({ type: 'lparen' });
-      i++;
-      continue;
-    }
-
-    if (char === ')') {
-      tokens.push({ type: 'rparen' });
-      i++;
-      continue;
-    }
-
-    if (char === ',') {
-      tokens.push({ type: 'comma' });
-      i++;
-      continue;
-    }
-
-    if (OPERATORS[char]) {
-      const prev = tokens[tokens.length - 1];
-      const isUnary = (char === '-' || char === '+') &&
-        (!prev || prev.type === 'operator' || prev.type === 'unary' || prev.type === 'lparen' || prev.type === 'comma');
-      tokens.push({ type: isUnary ? 'unary' : 'operator', value: char });
+    if (SYMBOLS.has(char)) {
+      tokens.push({ type: 'symbol', value: char });
       i++;
       continue;
     }
@@ -261,105 +250,140 @@ function tokenize(expr: string): Token[] {
   return tokens;
 }
 
-function shuntingYard(tokens: Token[]): (Token | { type: 'function'; value: string; argCount: number })[] {
-  const output: (Token | { type: 'function'; value: string; argCount: number })[] = [];
-  const opStack: (Token | (Token & { argCount: number }))[] = [];
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-
-    if (token.type === 'number') {
-      output.push(token);
-    } else if (token.type === 'function') {
-      opStack.push({ ...token, argCount: 1 });
-    } else if (token.type === 'comma') {
-      while (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type !== 'lparen') {
-        output.push(opStack.pop() as Token);
-      }
-      const fnToken = opStack[opStack.length - 2];
-      if (fnToken && 'argCount' in fnToken && fnToken.type === 'function') {
-        fnToken.argCount++;
-      }
-    } else if (token.type === 'unary') {
-      opStack.push(token);
-    } else if (token.type === 'operator') {
-      const o1 = OPERATORS[token.value];
-      while (opStack.length > 0) {
-        const top = opStack[opStack.length - 1] as Token;
-        if (top.type !== 'operator' && top.type !== 'unary') break;
-        const o2 = top.type === 'unary' ? { precedence: UNARY_PRECEDENCE } : OPERATORS[top.value];
-        if (o2.precedence > o1.precedence || (o2.precedence === o1.precedence && o1.assoc === 'left')) {
-          output.push(opStack.pop() as Token);
-        } else {
-          break;
-        }
-      }
-      opStack.push(token);
-    } else if (token.type === 'lparen') {
-      opStack.push(token);
-    } else if (token.type === 'rparen') {
-      while (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type !== 'lparen') {
-        output.push(opStack.pop() as Token);
-      }
-      if (opStack.length === 0) throw new Error('Mismatched parentheses');
-      opStack.pop();
-      if (opStack.length > 0 && (opStack[opStack.length - 1] as Token).type === 'function') {
-        output.push(opStack.pop() as Token & { argCount: number });
-      }
-    }
-  }
-
-  while (opStack.length > 0) {
-    const top = opStack.pop() as Token;
-    if (top.type === 'lparen' || top.type === 'rparen') {
-      throw new Error('Mismatched parentheses');
-    }
-    output.push(top);
-  }
-
-  return output;
+function describeToken(token: Token): string {
+  return token.type === 'number' ? token.text : token.value;
 }
 
-function evaluateRPN(tokens: (Token | { type: 'function'; value: string; argCount: number })[]): number {
-  const stack: number[] = [];
+class MathParser {
+  private position = 0;
 
-  for (const token of tokens) {
-    if (token.type === 'number') {
-      stack.push(token.value);
-    } else if (token.type === 'operator') {
-      const b = stack.pop();
-      const a = stack.pop();
-      if (a === undefined || b === undefined) throw new Error('Invalid expression');
-      switch (token.value) {
-        case '+': stack.push(a + b); break;
-        case '-': stack.push(a - b); break;
-        case '*': stack.push(a * b); break;
-        case '/': 
-          if (b === 0) throw new Error('Division by zero');
-          stack.push(a / b); 
-          break;
-        case '%': stack.push(a % b); break;
-        case '^': stack.push(Math.pow(a, b)); break;
-      }
-    } else if (token.type === 'unary') {
-      const a = stack.pop();
-      if (a === undefined) throw new Error('Invalid expression');
-      stack.push(token.value === '-' ? -a : a);
-    } else if (token.type === 'function') {
-      const fn = MATH_FUNCTIONS[token.value];
-      const argCount = 'argCount' in token ? token.argCount : 1;
-      const args: number[] = [];
-      for (let i = 0; i < argCount; i++) {
-        const arg = stack.pop();
-        if (arg === undefined) throw new Error(`Not enough arguments for ${token.value}`);
-        args.unshift(arg);
-      }
-      stack.push(fn(args));
+  constructor(private readonly tokens: Token[]) {}
+
+  parse(): number {
+    const value = this.parseExpression();
+    const extra = this.tokens[this.position];
+    if (extra) {
+      throw new Error(`Unexpected "${describeToken(extra)}"`);
     }
+    return value;
   }
 
-  if (stack.length !== 1) throw new Error('Invalid expression');
-  return stack[0];
+  private parseExpression(): number {
+    let value = this.parseTerm();
+    while (this.peekSymbol('+') || this.peekSymbol('-')) {
+      const operator = this.next().value;
+      const right = this.parseTerm();
+      value = operator === '+' ? value + right : value - right;
+    }
+    return value;
+  }
+
+  private parseTerm(): number {
+    let value = this.parseUnary();
+    while (this.peekSymbol('*') || this.peekSymbol('/') || this.peekSymbol('%')) {
+      const operator = this.next().value;
+      const right = this.parseUnary();
+      if (operator === '*') {
+        value *= right;
+      } else if (operator === '/') {
+        if (right === 0) throw new Error('Division by zero');
+        value /= right;
+      } else {
+        value %= right;
+      }
+    }
+    return value;
+  }
+
+  private parseUnary(): number {
+    if (this.peekSymbol('-')) {
+      this.position++;
+      return -this.parseUnary();
+    }
+    if (this.peekSymbol('+')) {
+      this.position++;
+      return this.parseUnary();
+    }
+    return this.parsePower();
+  }
+
+  private parsePower(): number {
+    const base = this.parsePrimary();
+    if (this.peekSymbol('^')) {
+      this.position++;
+      return Math.pow(base, this.parseUnary());
+    }
+    return base;
+  }
+
+  private parsePrimary(): number {
+    const token = this.next();
+
+    if (token.type === 'number') {
+      return token.value;
+    }
+
+    if (token.type === 'name') {
+      const name = token.value.toLowerCase();
+      if (Object.hasOwn(MATH_FUNCTIONS, name)) {
+        return this.parseCall(name);
+      }
+      if (Object.hasOwn(MATH_CONSTANTS, name)) {
+        return MATH_CONSTANTS[name];
+      }
+      throw new Error(`Unknown identifier: ${token.value}`);
+    }
+
+    if (token.value === '(') {
+      const value = this.parseExpression();
+      this.expectSymbol(')');
+      return value;
+    }
+
+    throw new Error(`Unexpected "${token.value}"`);
+  }
+
+  private parseCall(name: string): number {
+    this.expectSymbol('(');
+    const args = [this.parseExpression()];
+    while (this.peekSymbol(',')) {
+      this.position++;
+      args.push(this.parseExpression());
+    }
+    this.expectSymbol(')');
+
+    const fn = MATH_FUNCTIONS[name];
+    if (fn.arity !== undefined && args.length !== fn.arity) {
+      throw new Error(
+        `${name} takes ${fn.arity} argument${fn.arity === 1 ? '' : 's'}, got ${args.length}`
+      );
+    }
+    return fn.apply(args);
+  }
+
+  private peekSymbol(symbol: string): boolean {
+    const token = this.tokens[this.position];
+    return token?.type === 'symbol' && token.value === symbol;
+  }
+
+  private expectSymbol(symbol: string): void {
+    const token = this.tokens[this.position];
+    if (token?.type !== 'symbol' || token.value !== symbol) {
+      throw new Error(
+        token ? `Expected "${symbol}" but found "${describeToken(token)}"` : `Expected "${symbol}"`
+      );
+    }
+    this.position++;
+  }
+
+  private next(): Token {
+    const token = this.tokens[this.position];
+    if (!token) {
+      throw new Error('Unexpected end of expression');
+    }
+    this.position++;
+    return token;
+  }
 }
 
 // Tool execution functions
