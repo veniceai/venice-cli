@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach } from 'node:test';
 import { clearModelsCache, listModels } from './api.js';
-import type { Model } from '../types/index.js';
+import { isE2EEModel, type Model } from '../types/index.js';
 
 const e2eeModel: Model = {
   id: 'e2ee-catalog-model',
@@ -11,9 +11,11 @@ const e2eeModel: Model = {
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.VENICE_API_KEY;
+let requestedUrls: URL[] = [];
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
+    status,
     headers: { 'Content-Type': 'application/json' },
   });
 }
@@ -21,11 +23,13 @@ function jsonResponse(body: unknown): Response {
 function serveCatalog(respond: (type: string | null) => Response): void {
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    requestedUrls.push(url);
     return respond(url.searchParams.get('type'));
   }) as typeof fetch;
 }
 
 beforeEach(() => {
+  requestedUrls = [];
   clearModelsCache();
   process.env.VENICE_API_KEY = 'test-key';
 });
@@ -35,6 +39,54 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalApiKey === undefined) delete process.env.VENICE_API_KEY;
   else process.env.VENICE_API_KEY = originalApiKey;
+});
+
+test('a server that ignores ?type= cannot re-type text models', async () => {
+  serveCatalog(() => jsonResponse({ data: [e2eeModel, { id: 'image-model', type: 'image' }] }));
+
+  const models = await listModels({ showSpinner: false });
+  const model = models.find((candidate) => candidate.id === e2eeModel.id);
+
+  assert.equal(model?.type, 'text');
+  assert.equal(isE2EEModel(model as Model), true);
+  assert.equal(models.find((candidate) => candidate.id === 'image-model')?.type, 'image');
+});
+
+test('a model the base list returned as text keeps that type when a typed list repeats it', async () => {
+  serveCatalog((type) => jsonResponse({
+    data: type === null || type === 'embedding' ? [e2eeModel] : [],
+  }));
+
+  const models = await listModels({ showSpinner: false });
+
+  assert.equal(models.length, 1);
+  assert.equal(models[0].type, 'text');
+  assert.equal(isE2EEModel(models[0]), true);
+});
+
+test('a model listed only under a typed query takes the queried type', async () => {
+  serveCatalog((type) => jsonResponse({
+    data: type === 'embedding' ? [{ id: 'embedding-model', type: 'text' }] : [],
+  }));
+
+  const models = await listModels({ showSpinner: false });
+
+  assert.deepEqual(models, [{ id: 'embedding-model', type: 'embedding' }]);
+});
+
+test('the catalog is one base request plus one unretried request per non-text type', async () => {
+  serveCatalog((type) => type === null
+    ? jsonResponse({ data: [e2eeModel] })
+    : jsonResponse({ error: { message: 'unavailable' } }, 503));
+
+  const models = await listModels({ showSpinner: false });
+
+  assert.deepEqual(models.map((model) => model.id), [e2eeModel.id]);
+  assert.equal(requestedUrls.length, 9);
+  assert.equal(requestedUrls.filter((url) => !url.searchParams.has('type')).length, 1);
+  const types = requestedUrls.map((url) => url.searchParams.get('type')).filter(Boolean);
+  assert.equal(new Set(types).size, 8);
+  assert.equal(types.includes('text'), false);
 });
 
 test('the catalog accepts responses larger than the default JSON limit', async () => {
