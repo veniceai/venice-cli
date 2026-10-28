@@ -863,7 +863,7 @@ export async function generateImage(
 
   const response = await apiRequest<{
     id: string;
-    images: string[];
+    images: unknown;
   }>('/image/generate', {
     method: 'POST',
     body,
@@ -876,7 +876,15 @@ export async function generateImage(
     model: options.model || 'flux-2-pro',
   });
 
-  return response.images;
+  const images = response.images;
+  if (
+    !Array.isArray(images) ||
+    images.length === 0 ||
+    !images.every((image): image is string => typeof image === 'string')
+  ) {
+    throw new Error('Image generation response did not contain any base64 image strings.');
+  }
+  return images;
 }
 
 type ImageEditOptions = {
@@ -1098,7 +1106,7 @@ export async function upscaleImage(
 
     const contentType = response.headers.get('content-type') || '';
 
-    if (!isImageContentType(contentType) && !looksLikeImageBytes(bytes)) {
+    if (!isImageContentType(contentType) || !looksLikeImageBytes(bytes)) {
       const preview = bytes.subarray(0, 200).toString('utf-8');
       throw new Error(
         `Upscale did not return an image (content-type: ${contentType || 'unknown'}). ` +
