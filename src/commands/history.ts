@@ -3,8 +3,7 @@
  */
 
 import { Command } from 'commander';
-import * as fs from 'fs';
-import * as path from 'path';
+import { writeOutputFile } from '../lib/safe-write.js';
 import {
   loadHistory,
   clearHistory,
@@ -200,8 +199,7 @@ export function registerHistoryCommand(program: Command): void {
       try {
         const conversations = loadHistory();
 
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(conversations, null, 2));
+        writeOutputFile(file, JSON.stringify(conversations, null, 2), { mode: 0o600 });
         console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
