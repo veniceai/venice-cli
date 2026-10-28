@@ -9,11 +9,12 @@ import {
   editImage,
   generateImage,
   listImageStyles,
+  looksLikeImageBytes,
   multiEditImage,
   removeImageBackground,
   upscaleImage,
 } from '../lib/api.js';
-import { writeBufferToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
+import { formatBytes, writeBufferToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
 import { getDefaultImageModel } from '../lib/config.js';
 import type {
   ImageGenerationOptions,
@@ -213,7 +214,7 @@ export function registerImageCommand(program: Command): void {
         }
 
         for (let i = 0; i < images.length; i++) {
-          const imageData = Buffer.from(images[i], 'base64');
+          const imageData = decodeGeneratedImage(images[i]);
 
           let outputPath = options.output || `image_${Date.now()}.png`;
           if (images.length > 1) {
@@ -382,6 +383,26 @@ export function registerImageCommand(program: Command): void {
         process.exit(1);
       }
     });
+}
+
+export function decodeGeneratedImage(base64: string): Buffer {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  const decodedBytes = Math.floor((base64.length * 3) / 4) - padding;
+  if (decodedBytes > MAX_IMAGE_DOWNLOAD_BYTES) {
+    throw new Error(
+      `Generated image is too large (${formatBytes(decodedBytes)}). ` +
+      `Maximum allowed size is ${formatBytes(MAX_IMAGE_DOWNLOAD_BYTES)}.`
+    );
+  }
+
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length === 0) {
+    throw new Error('Generated image response was empty.');
+  }
+  if (!looksLikeImageBytes(bytes)) {
+    throw new Error('Generated image did not contain a supported PNG, JPEG, or WebP image.');
+  }
+  return bytes;
 }
 
 function writeImageResult(
