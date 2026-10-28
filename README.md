@@ -745,13 +745,15 @@ that limit is exceeded.
 | `markdown` | Markdown formatted | Documentation |
 | `raw` | Plain text, no decoration | Pipes, simple output |
 
-The CLI automatically detects when output is being piped and switches to `raw` format.
+Each command's `--help` lists the formats it supports. An unknown `--format` value is an error. Commands without a separate `markdown` or `raw` form print their `pretty` output for those values.
+
+When output is piped or redirected and no `--format` is given, the CLI turns off colors and spinners and selects `raw`. Commands that print a single result, such as `chat`, `search`, `transcribe`, and `parse`, then print only that result; most other commands print the same text as `pretty`. Use `-f json` when a script needs to parse the output.
 
 ```bash
 # Explicit format
 venice chat -f json "List items" | jq '.'
 
-# Auto-detected raw format when piped
+# Raw output is selected automatically when piped
 venice chat "Generate code" | pbcopy
 ```
 
@@ -764,7 +766,7 @@ Venice CLI is designed with privacy in mind:
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI sends no analytics or usage data and never checks for updates in the background. It connects only to the Venice API, to attachment URLs you give it, to download links the API returns, and to registry.npmjs.org when you run `venice update --check`
 - **Local configuration**: API key stored locally with restricted permissions
-- **Transparent**: You can see exactly what's being sent to the API
+- **Open source**: The code is public, so you can read exactly what the CLI sends to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
 
 ### E2EE Models
