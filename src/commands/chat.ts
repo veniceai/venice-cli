@@ -88,6 +88,7 @@ interface E2EEContext {
 
 export const MAX_TOOL_ROUNDS = 10;
 export const MAX_CHAT_STDIN_BYTES = 1024 * 1024;
+export const MAX_CONTEXT_REPLY_CHARS = 1024 * 1024;
 type ChatCompletionFn = typeof chatCompletion;
 type ChatCompletionStreamFn = typeof chatCompletionStream;
 
@@ -1182,13 +1183,30 @@ export async function nonStreamChat(
  * mid-thought) is dropped too.
  */
 export function stripThinkingForContext(content: string): string {
-  return content
-    .replace(/<think>[\s\S]*?<\/think>/g, '')
-    .replace(/<think>[\s\S]*$/, '');
+  const open = '<think>';
+  const close = '</think>';
+  let kept = '';
+  let index = 0;
+  while (index < content.length) {
+    const start = content.indexOf(open, index);
+    if (start === -1) {
+      return kept + content.slice(index);
+    }
+    kept += content.slice(index, start);
+    const end = content.indexOf(close, start + open.length);
+    if (end === -1) {
+      return kept;
+    }
+    index = end + close.length;
+  }
+  return kept;
 }
 
 function appendAssistantReply(messages: Message[], content: string): void {
-  const reply = stripThinkingForContext(content).trim();
+  let reply = stripThinkingForContext(content).trim();
+  if (reply.length > MAX_CONTEXT_REPLY_CHARS) {
+    reply = `${reply.slice(0, MAX_CONTEXT_REPLY_CHARS)}\n[reply truncated]`;
+  }
   if (reply) {
     messages.push({ role: 'assistant', content: reply });
   }
