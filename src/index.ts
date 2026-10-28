@@ -10,7 +10,6 @@
  */
 
 import { Command } from 'commander';
-import updateNotifier from 'update-notifier';
 import { registerChatCommand } from './commands/chat.js';
 import { registerSearchCommand } from './commands/search.js';
 import { registerImageCommand } from './commands/image.js';
@@ -28,16 +27,10 @@ import { registerTeeCommand } from './commands/tee.js';
 import { registerRpcCommand } from './commands/rpc.js';
 import { registerBillingCommand } from './commands/billing.js';
 import { registerKeysCommand } from './commands/keys.js';
+import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
 import { formatError, getChalk } from './lib/output.js';
 import { getVersion } from './lib/version.js';
-
-// Check for updates in the background (non-blocking, checks once per day)
-const pkg = { name: 'veniceai-cli', version: getVersion() };
-updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({
-  isGlobal: true,
-  message: 'Update available {currentVersion} → {latestVersion}\nRun {updateCommand} to update',
-});
 
 async function main() {
   const program = new Command();
@@ -78,6 +71,7 @@ async function main() {
   registerBillingCommand(program);
   registerKeysCommand(program);
   registerAugmentCommands(program);
+  registerUpdateCommand(program);
 
   // Handle errors gracefully
   program.exitOverride();
