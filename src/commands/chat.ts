@@ -322,6 +322,13 @@ export function registerChatCommand(program: Command): void {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
+      if (options.interactiveTools && !process.stdin.isTTY) {
+        console.error(formatError(
+          '--interactive-tools asks for approval on the terminal, but stdin is not a terminal. ' +
+          'Run the command in a terminal without piped input, or omit --interactive-tools.'
+        ));
+        process.exit(1);
+      }
       let pipedInput = '';
 
       if (!process.stdin.isTTY) {

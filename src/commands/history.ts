@@ -10,6 +10,7 @@ import {
   type ConversationEntry,
 } from '../lib/config.js';
 import { messageContentToText } from '../types/index.js';
+import { confirm } from '../lib/prompt.js';
 import {
   formatSuccess,
   formatError,
@@ -173,18 +174,14 @@ export function registerHistoryCommand(program: Command): void {
       const c = getChalk();
 
       if (!options.yes) {
-        const readline = await import('readline');
-        const rl = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-
-        const answer = await new Promise<string>((resolve) => {
-          rl.question(c.yellow('Are you sure you want to clear all history? [y/N] '), resolve);
-        });
-        rl.close();
-
-        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+        if (!process.stdin.isTTY) {
+          throw new Error(
+            'Refusing to clear history without confirmation: stdin is not a terminal. ' +
+            'Run "venice history clear --yes" to clear it.'
+          );
+        }
+        const confirmed = await confirm(c.yellow('Are you sure you want to clear all history? [y/N] '));
+        if (!confirmed) {
           console.log('Cancelled.');
           return;
         }
