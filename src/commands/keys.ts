@@ -33,10 +33,12 @@ import {
   formatWarning,
   getChalk,
 } from '../lib/output.js';
+import { parseDecimalOption } from '../lib/options.js';
 import { assertApiKeyList, assertApiKeyRateLimits } from '../lib/response-checks.js';
 
 const KEY_TYPES = ['INFERENCE', 'ADMIN'] as const;
 const LIMIT_PERIODS = ['EPOCH', 'MONTH', 'LIFETIME'] as const;
+const CONSUMPTION_LIMIT_RANGE = { min: 0, max: 9_999_999_999 };
 
 export function registerKeysCommand(program: Command): void {
   const keys = program
@@ -103,10 +105,10 @@ export function registerKeysCommand(program: Command): void {
       const limitPeriod = parseEnum(options.limitPeriod, LIMIT_PERIODS, 'limit-period');
       const consumptionLimit: ConsumptionLimits = {};
       if (options.usdLimit !== undefined) {
-        consumptionLimit.usd = parseLimit(options.usdLimit, 'usd-limit');
+        consumptionLimit.usd = parseDecimalOption(options.usdLimit, '--usd-limit', CONSUMPTION_LIMIT_RANGE);
       }
       if (options.diemLimit !== undefined) {
-        consumptionLimit.diem = parseLimit(options.diemLimit, 'diem-limit');
+        consumptionLimit.diem = parseDecimalOption(options.diemLimit, '--diem-limit', CONSUMPTION_LIMIT_RANGE);
       }
       if (options.expires !== undefined) validateExpiration(options.expires);
 
@@ -253,15 +255,6 @@ function parseEnum<const T extends readonly string[]>(
     throw new Error(`${label} must be one of: ${allowed.join(', ')}`);
   }
   return normalized as T[number];
-}
-
-function parseLimit(value: string, label: string): number {
-  if (String(value).trim() === '') throw new Error(`${label} must be a number`);
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 9_999_999_999) {
-    throw new Error(`${label} must be between 0 and 9999999999`);
-  }
-  return parsed;
 }
 
 function validateExpiration(value: string): void {

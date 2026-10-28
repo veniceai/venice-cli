@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 import { getCharacter, getCharacterReviews, listCharacters } from '../lib/api.js';
 import { formatError, formatJson, getChalk, detectOutputFormat, terminalSafe } from '../lib/output.js';
+import { parseIntegerOption } from '../lib/options.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Character, CharacterReviewsPage } from '../types/index.js';
 
@@ -23,8 +24,8 @@ export function registerCharactersCommand(program: Command): void {
       try {
         const results = await listCharacters({
           search: options.search,
-          limit: parseInt(options.limit, 10),
-          offset: parseInt(options.offset, 10),
+          limit: parseIntegerOption(options.limit, '--limit', { min: 1, max: 100 }),
+          offset: parseIntegerOption(options.offset, '--offset', { min: 0 }),
         });
 
         if (format === 'json') {

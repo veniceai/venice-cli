@@ -20,6 +20,7 @@ import {
   waitForJobStatus,
 } from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeResponseToFile } from '../lib/media.js';
+import { parseIntegerOption } from '../lib/options.js';
 import { detectOutputFormat, formatError, formatSuccess, getChalk } from '../lib/output.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
@@ -27,16 +28,6 @@ import type { Model } from '../types/index.js';
 const DEFAULT_MUSIC_MODEL = 'elevenlabs-music';
 
 type MusicJobStatus = AudioProcessingStatus & { content_type?: string; size_bytes?: number };
-
-function positiveInteger(value: string | undefined, label: string): number | undefined {
-  if (value === undefined) return undefined;
-
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return parsed;
-}
 
 function extensionForContentType(contentType: string): string {
   const extensions: Record<string, string> = {
@@ -94,7 +85,7 @@ export function registerMusicCommands(program: Command): void {
 
         const result = await queueAudioGeneration(promptParts.join(' '), {
           model: options.model,
-          durationSeconds: positiveInteger(options.duration, 'Duration'),
+          durationSeconds: parseIntegerOption(options.duration, '--duration', { min: 1 }),
           lyricsPrompt,
           forceInstrumental: options.instrumental || undefined,
         });
@@ -129,8 +120,8 @@ export function registerMusicCommands(program: Command): void {
 
       try {
         const result = await quoteAudioGeneration(options.model, {
-          durationSeconds: positiveInteger(options.duration, 'Duration'),
-          characterCount: positiveInteger(options.characterCount, 'Character count'),
+          durationSeconds: parseIntegerOption(options.duration, '--duration', { min: 1 }),
+          characterCount: parseIntegerOption(options.characterCount, '--character-count', { min: 1 }),
         });
 
         if (format === 'json') {

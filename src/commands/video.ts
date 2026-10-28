@@ -40,6 +40,7 @@ import {
   getChalk,
   detectOutputFormat,
 } from '../lib/output.js';
+import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
 
@@ -53,6 +54,7 @@ export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: stri
 ];
 
 const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = DEFAULT_JOB_WAIT_TIMEOUT_SECONDS;
+const MAX_VIDEO_STATUS_TIMEOUT_SECONDS = 24 * 60 * 60;
 
 export function isPublicHttpUrl(value: string): boolean {
   try {
@@ -71,11 +73,7 @@ export function requirePublicVideoUrl(value: string): string {
 }
 
 export function parseUpscaleFactor(value: string | number | undefined): number {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? '2'), 10);
-  if (![1, 2, 4].includes(parsed)) {
-    throw new Error('Upscale factor must be 1, 2, or 4.');
-  }
-  return parsed;
+  return parseIntegerOption(String(value ?? '2'), '--factor', { allowed: [1, 2, 4] });
 }
 
 export function videoModelKind(id: string): string {
@@ -209,7 +207,7 @@ export function registerVideoCommands(program: Command): void {
           duration: options.duration,
           aspectRatio: options.aspectRatio,
           resolution: options.resolution,
-          upscaleFactor: options.factor ? parseUpscaleFactor(options.factor) : undefined,
+          upscaleFactor: options.factor !== undefined ? parseUpscaleFactor(options.factor) : undefined,
           audio: options.audio,
           videoUrl: options.videoUrl,
         });
@@ -283,10 +281,11 @@ export function registerVideoCommands(program: Command): void {
 
       try {
         if (options.wait) {
-          const timeoutSeconds = Number(options.timeout);
-          if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-            throw new Error('--timeout must be a positive number of seconds.');
-          }
+          const timeoutSeconds = parseDecimalOption(options.timeout, '--timeout', {
+            min: 0,
+            exclusiveMin: true,
+            max: MAX_VIDEO_STATUS_TIMEOUT_SECONDS,
+          });
 
           const status = await waitForVideoStatus(
             () => getVideoStatus(queueId, options.model),

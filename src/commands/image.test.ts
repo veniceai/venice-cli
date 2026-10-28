@@ -119,26 +119,26 @@ test('validates enum and numeric generation options', () => {
   );
   assert.throws(
     () => parseImageGenerationOptions({ ...baseOptions, cfgScale: '21' }),
-    /CFG scale must be/
+    /--cfg-scale must be/
   );
   assert.throws(
     () => parseImageGenerationOptions({ ...baseOptions, cfgScale: '0' }),
-    /CFG scale must be/
+    /--cfg-scale must be/
   );
   assert.throws(
     () => parseImageGenerationOptions({ ...baseOptions, cfgScale: '-1' }),
-    /CFG scale must be/
+    /--cfg-scale must be/
   );
   assert.throws(
     () => parseImageGenerationOptions({ ...baseOptions, seed: '1.5' }),
-    /Seed must be an integer/
+    /--seed must be an integer/
   );
   assert.throws(
     () => parseImageGenerationOptions({
       ...baseOptions,
       styleReference: ['https://example.com/style.png::2'],
     }),
-    /Style reference strength must be/
+    /--style-reference strength must be/
   );
 });
 
