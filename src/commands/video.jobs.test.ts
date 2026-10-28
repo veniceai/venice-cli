@@ -145,6 +145,54 @@ test('video retrieve saves and completes an MP4 whose first box is free', { time
   }
 }));
 
+test('video commands fail clearly on a 200 response of the wrong shape', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, {}),
+    'POST /api/v1/video/quote': (_request, response) => sendJson(response, {}),
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, {}),
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, {}),
+  });
+  const output = join(dir, 'out.mp4');
+  const cases: Array<[string[], string]> = [
+    [['video', 'generate', 'a cat'], '/video/queue'],
+    [['video', 'quote', '-m', 'test-model', 'a cat'], '/video/quote'],
+    [['video', 'status', 'q1', '-m', 'test-model'], '/video/retrieve'],
+    [['video', 'retrieve', 'q1', '-m', 'test-model', '-o', output], '/video/retrieve'],
+    [['video', 'complete', 'q1', '-m', 'test-model', '-f', 'json'], '/video/complete'],
+  ];
+  try {
+    for (const [args, endpoint] of cases) {
+      const result = await runCli(args, dir, stub.origin);
+      const label = args.join(' ');
+
+      assert.equal(result.status, 1, `${label}: ${result.stdout}`);
+      assert.ok(
+        result.stderr.includes(`Unexpected response from Venice (${endpoint})`),
+        `${label}: ${result.stderr}`
+      );
+      assert.doesNotMatch(result.stdout, /undefined|queued!/, label);
+    }
+    assert.equal(existsSync(output), false);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate falls back to the requested model when the queue response omits it', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1' }),
+  });
+  try {
+    const result = await runCli(['video', 'generate', 'a cat', '-m', 'test-model'], dir, stub.origin);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Queue ID: q1/);
+    assert.match(result.stdout, /Model: test-model/);
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('video status --wait accepts a --timeout beyond the 32-bit timer limit', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'POST /api/v1/video/retrieve': async (_request, response) => {

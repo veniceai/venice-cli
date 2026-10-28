@@ -3,7 +3,17 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { retrieveVideo } from './api.js';
+import {
+  completeAudioGeneration,
+  completeVideo,
+  getVideoStatus,
+  queueAudioGeneration,
+  queueVideoGeneration,
+  quoteAudioGeneration,
+  quoteVideoGeneration,
+  retrieveGeneratedAudio,
+  retrieveVideo,
+} from './api.js';
 
 function mp4Bytes(tail = ''): Buffer {
   const header = Buffer.alloc(24);
@@ -22,6 +32,12 @@ function chunkedResponse(chunks: Buffer[], contentType: string): Response {
     },
   }, { highWaterMark: 0 }), {
     headers: { 'Content-Type': contentType },
+  });
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -82,4 +98,113 @@ test('retrieveVideo saves an MP4 whose ftyp box follows a free box and arrives i
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('queue responses need a queue_id and fall back to the requested model', async () => {
+  const queues = [
+    { endpoint: '/video/queue', queue: () => queueVideoGeneration('a cat', { model: 'test-video-model' }) },
+    { endpoint: '/audio/queue', queue: () => queueAudioGeneration('a song', { model: 'test-audio-model' }) },
+  ];
+
+  for (const { endpoint, queue } of queues) {
+    for (const body of [{}, [], 'null', { queue_id: '' }, { queue_id: 7 }, { queue_id: 'q1', model: 7 }]) {
+      await assert.rejects(
+        withFetch(() => jsonResponse(body), queue),
+        (error: Error) => error.message.startsWith(`Unexpected response from Venice (${endpoint})`),
+        `${endpoint} ${JSON.stringify(body)}`
+      );
+    }
+  }
+
+  assert.deepEqual(
+    await withFetch(() => jsonResponse({ queue_id: 'q1' }), queues[0].queue),
+    { queue_id: 'q1', model: 'test-video-model' }
+  );
+  assert.deepEqual(
+    await withFetch(() => jsonResponse({ queue_id: 'q2', model: 'm2', status: 'QUEUED' }), queues[1].queue),
+    { queue_id: 'q2', model: 'm2', status: 'QUEUED' }
+  );
+});
+
+test('quote responses need a non-negative number', async () => {
+  const quotes = [
+    { endpoint: '/video/quote', quote: () => quoteVideoGeneration({ model: 'm', duration: '5s' }) },
+    { endpoint: '/audio/quote', quote: () => quoteAudioGeneration('m') },
+  ];
+
+  for (const { endpoint, quote } of quotes) {
+    for (const body of [{}, { quote: '0.5' }, { quote: -1 }, { quote: null }]) {
+      await assert.rejects(
+        withFetch(() => jsonResponse(body), quote),
+        (error: Error) => error.message.startsWith(`Unexpected response from Venice (${endpoint})`),
+        `${endpoint} ${JSON.stringify(body)}`
+      );
+    }
+    assert.deepEqual(await withFetch(() => jsonResponse({ quote: 0.25 }), quote), { quote: 0.25 });
+  }
+});
+
+test('complete responses need a boolean success flag', async () => {
+  const completes = [
+    { endpoint: '/video/complete', complete: () => completeVideo('q1', 'm') },
+    { endpoint: '/audio/complete', complete: () => completeAudioGeneration('q1', 'm') },
+  ];
+
+  for (const { endpoint, complete } of completes) {
+    for (const body of [{}, { success: 'true' }, { success: 1 }]) {
+      await assert.rejects(
+        withFetch(() => jsonResponse(body), complete),
+        (error: Error) => error.message.startsWith(`Unexpected response from Venice (${endpoint})`),
+        `${endpoint} ${JSON.stringify(body)}`
+      );
+    }
+    assert.deepEqual(await withFetch(() => jsonResponse({ success: false }), complete), { success: false });
+  }
+});
+
+test('video status responses need a status string and typed fields, and are not retried', async () => {
+  const bodies = [
+    {},
+    { status: 5 },
+    { status: '  ' },
+    { status: 'COMPLETED', video_url: 5 },
+    { status: 'FAILED', error: { message: 'nested' } },
+    { status: 'PROCESSING', execution_duration: '10s' },
+    '{"status": "PROCESSING"',
+  ];
+
+  for (const body of bodies) {
+    let requests = 0;
+    await assert.rejects(
+      withFetch(() => {
+        requests++;
+        return jsonResponse(body);
+      }, () => getVideoStatus('q1', 'm')),
+      /^Error: Unexpected response from Venice \(\/video\/retrieve\)/,
+      JSON.stringify(body)
+    );
+    assert.equal(requests, 1, JSON.stringify(body));
+  }
+
+  const status = await withFetch(
+    () => jsonResponse({ status: 'PROCESSING', video_url: null, error: null }),
+    () => getVideoStatus('q1', 'm')
+  );
+  assert.equal(status.status, 'PROCESSING');
+});
+
+test('music status responses need a status string and typed fields', async () => {
+  for (const body of [{}, { status: 5 }, { status: 'PROCESSING', average_execution_time: 'soon' }, 'nope']) {
+    await assert.rejects(
+      withFetch(() => jsonResponse(body), () => retrieveGeneratedAudio('q1', 'm')),
+      /^Error: Unexpected response from Venice \(\/audio\/retrieve\)/,
+      JSON.stringify(body)
+    );
+  }
+
+  const result = await withFetch(
+    () => jsonResponse({ status: 'QUEUED', average_execution_time: 1000 }),
+    () => retrieveGeneratedAudio('q1', 'm')
+  );
+  assert.equal(result.kind === 'processing' && result.status.status, 'QUEUED');
 });
