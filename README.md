@@ -828,6 +828,11 @@ npm run dev -- chat "Hello"
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Security
+
+To report a vulnerability, follow [SECURITY.md](SECURITY.md). Please don't
+open a public issue.
+
 ## License
 
 MIT © Venice AI
