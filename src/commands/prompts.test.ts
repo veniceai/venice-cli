@@ -97,6 +97,7 @@ test('config init on a terminal saves its answers without echoing the key', () =
   `);
 
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /raw modes: \[true,false\]/);
   assert.match(result.stdout, /Configuration complete!/);
   assert.ok(!result.stdout.includes(KEY) && !result.stderr.includes(KEY));
   const config = JSON.parse(readFileSync(join(home, '.venice', 'config.json'), 'utf8'));
