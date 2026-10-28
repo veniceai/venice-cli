@@ -435,11 +435,15 @@ venice tee attestation --verbose tee-qwen3-5-122b-a10b
 # Check the attestation report against the E2EE policy
 venice tee verify tee-qwen3-5-122b-a10b
 
-# Verify a response signature (requires completion ID from a previous request)
+# Show a response signature (requires the completion ID of a previous request)
 venice tee signature e2ee-qwen3-5-122b-a10b <completion-id>
 
-# Verify signature matches expected signer address
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123...
+# Check the signature against the exact reply text you received; the expected
+# signer comes from a fresh attestation that must pass the E2EE policy
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --expect-content reply.txt
+
+# Or compare with the reply's SHA-256 and a signer address you already trust
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --expect-sha256 <sha256> --verify-signer 0x123...
 ```
 
 **TEE Commands:**
@@ -448,7 +452,9 @@ venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x12
 |---------|-------------|
 | `attestation <model>` | Fetch and display the server's TEE attestation report |
 | `verify <model>` | Check the server's attestation report against the E2EE policy (internal consistency only) |
-| `signature <model> <id>` | Fetch and verify TEE response signature |
+| `signature <model> <id>` | Fetch a TEE response signature and check it with `--expect-content`, `--expect-sha256`, or `--verify-signer` |
+
+`tee signature` exits non-zero when the response is for a different request ID or when any requested check fails. `--expect-content` compares the file byte for byte with the signed response, so a trailing newline counts. Without `--verify-signer`, the expected signer is the signing key of a fresh attestation that passes the same policy as `tee verify`. With `--verify-signer` alone, the CLI checks only who signed the text, not what the text says.
 
 ### Models
 
