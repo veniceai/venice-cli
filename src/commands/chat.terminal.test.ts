@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { streamChat } from './chat.js';
+import { getToolDefinitions } from '../lib/tools.js';
 import type { Message } from '../types/index.js';
 
 process.env.NO_COLOR = '1';
@@ -15,8 +16,12 @@ async function captureStdout(isTTY: boolean, run: () => Promise<void>): Promise<
   const originalLog = console.log;
   const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
   Object.defineProperty(process.stdout, 'isTTY', { value: isTTY, configurable: true });
-  process.stdout.write = ((chunk: string | Uint8Array) => {
-    writes.push(chunk.toString());
+  // The test runner reports through stdout with binary writes; let those through.
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    if (typeof chunk !== 'string') {
+      return (originalWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+    }
+    writes.push(chunk);
     return true;
   }) as typeof process.stdout.write;
   console.log = (...args: unknown[]) => {
@@ -70,4 +75,52 @@ test('streamed chat writes model text unchanged when stdout is not a terminal', 
   assert.ok(output.startsWith('thinking \x1b]52;c;Zm9v\x07 more'), JSON.stringify(output));
   assert.ok(output.includes('plan \x1b]0;title\x07done'), JSON.stringify(output));
   assert.ok(output.includes('Hello \u009b2Jworld \x1b[31mred\u202e'), JSON.stringify(output));
+});
+
+test('streamed chat shows only enabled tools and sanitises their results on a terminal', async () => {
+  const decoded = `before\x1b]52;c;${Buffer.from('echo copied').toString('base64')}\x07after`;
+  const disabledName = 'calc\x1b]0;title\x07';
+  let round = 0;
+  const completionStream: CompletionStream = async function* () {
+    round++;
+    if (round === 1) {
+      yield {
+        tool_calls: [
+          {
+            index: 0,
+            id: 'call-enabled',
+            type: 'function',
+            function: {
+              name: 'base64',
+              arguments: JSON.stringify({ action: 'decode', text: Buffer.from(decoded).toString('base64') }),
+            },
+          },
+          { index: 1, id: 'call-disabled', type: 'function', function: { name: disabledName, arguments: '{}' } },
+        ],
+        done: false,
+      };
+      yield { finish_reason: 'tool_calls', done: false };
+      yield { done: true };
+      return;
+    }
+    yield { content: 'final answer', done: false };
+    yield { done: true };
+  };
+  const messages: Message[] = [{ role: 'user', content: 'hi' }];
+
+  const output = await captureStdout(true, () =>
+    streamChat(messages, 'test-model', getToolDefinitions(['base64']), false, 'pretty', {
+      quiet: true,
+      completionStream,
+    })
+  );
+
+  assert.doesNotMatch(output, UNSAFE, JSON.stringify(output));
+  assert.match(output, /\[Tool: base64\]\nbeforeafter\n/);
+  assert.doesNotMatch(output, /calc|Tool not enabled/);
+  assert.match(output, /final answer/);
+  assert.deepEqual(
+    messages.filter((message) => message.role === 'tool').map((message) => message.content),
+    [decoded, `Tool not enabled: ${disabledName}`]
+  );
 });

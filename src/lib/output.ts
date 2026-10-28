@@ -298,6 +298,20 @@ export function formatJson(value: unknown, indent = 2): string {
   return String(JSON.stringify(value, null, indent)).replace(JSON_RAW_CONTROLS, unicodeEscape);
 }
 
+// Controls, format and private-use characters, unassigned code points,
+// separators other than the space, variation selectors, the combining
+// grapheme joiner and the blank Hangul fillers.
+const INVISIBLE_CHARACTERS =
+  /(?![\n ])[\p{C}\p{Z}\u034f\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+
+/**
+ * Escapes every character that does not render visibly (except newline and
+ * space) as \uXXXX, so text shown for review matches what will be used.
+ */
+export function escapeInvisible(value: string): string {
+  return value.replace(INVISIBLE_CHARACTERS, (char) => char.split('').map(unicodeEscape).join(''));
+}
+
 // Error formatting
 export function formatError(error: Error | string): string {
   const c = getChalk();
