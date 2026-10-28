@@ -80,6 +80,8 @@ export interface ApiKeyRateLimits {
 const API_KEY_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const MAX_BILLING_USAGE_PAGES = 100;
+
 export function assertApiKeyId(id: string): void {
   if (!API_KEY_ID_PATTERN.test(id)) {
     throw new Error(
@@ -103,8 +105,16 @@ export async function getBillingUsage(options: {
   const entries: BillingUsageEntry[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
+  let pages = 0;
 
   do {
+    if (++pages > MAX_BILLING_USAGE_PAGES) {
+      throw new Error(
+        `Usage history has more than ${MAX_BILLING_USAGE_PAGES} pages; refusing to fetch more. ` +
+        'Use a shorter --days range.'
+      );
+    }
+
     const params = new URLSearchParams();
     if (cursor) {
       if (seenCursors.has(cursor)) {
