@@ -525,3 +525,22 @@ test('API requests refuse redirects instead of following them', async () => {
     elsewhere.close();
   }
 });
+
+test('a 403 shows the server reason; only a 401 suggests replacing the key', async () => {
+  handler = (_request, response) =>
+    sendJson(response, 403, { error: { message: 'ADMIN-KEY-REQUIRED' } });
+  await assert.rejects(api.apiRequest('/api_keys', { showSpinner: false }), (error: Error) => {
+    assert.equal(error.message, 'Permission denied: ADMIN-KEY-REQUIRED');
+    return true;
+  });
+  assert.equal(count('GET', '/api_keys'), 1);
+
+  handler = (_request, response) => sendJson(response, 401, { error: { message: 'bad key' } });
+  await assert.rejects(api.apiRequest('/api_keys', { showSpinner: false }), (error: Error) => {
+    assert.equal(
+      error.message,
+      'Authentication failed. Please check your API key.\nUpdate with: venice config set api_key'
+    );
+    return true;
+  });
+});
