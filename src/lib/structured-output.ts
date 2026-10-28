@@ -4,7 +4,12 @@
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
+import {
+  Ajv,
+  type ErrorObject,
+  type SchemaValidateFunction,
+  type ValidateFunction,
+} from 'ajv';
 import { Ajv2019 } from 'ajv/dist/2019.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import * as formatsModule from 'ajv-formats';
@@ -13,6 +18,7 @@ export const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
 export const MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RESPONSE_FORMAT_NAME_LENGTH = 64;
 const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const URL_FORMAT_PROTOCOLS = new Set(['http:', 'https:', 'ftp:']);
 
 export const REASONING_EFFORTS = [
   'none',
@@ -267,12 +273,71 @@ function compileSchema(
   const addFormats = formatsModule.default as unknown as
     (instance: typeof ajv) => typeof ajv;
   addFormats(ajv);
+  // ajv-formats' "url" regex and ajv's pairwise uniqueItems are quadratic in
+  // the reply. The replacement keyword also covers the meta-schema's check
+  // that enum values are unique.
+  ajv.addFormat('url', isUrl);
+  ajv.removeKeyword('uniqueItems');
+  ajv.addKeyword({
+    keyword: 'uniqueItems',
+    type: 'array',
+    schemaType: 'boolean',
+    validate: validateUniqueItems,
+  });
 
   try {
     return ajv.compile(schema);
   } catch (error) {
     throw new Error(`Invalid or unsupported JSON schema in "${source}": ${errorMessage(error)}`);
   }
+}
+
+function isUrl(value: string): boolean {
+  if (/\s/.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return URL_FORMAT_PROTOCOLS.has(url.protocol) && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+const validateUniqueItems: SchemaValidateFunction = (unique: boolean, data: unknown[]) => {
+  validateUniqueItems.errors = undefined;
+  if (!unique) {
+    return true;
+  }
+  const seen = new Map<string, number>();
+  for (const [i, item] of data.entries()) {
+    const key = canonicalJson(item);
+    const j = seen.get(key);
+    if (j !== undefined) {
+      validateUniqueItems.errors = [{
+        keyword: 'uniqueItems',
+        message: `must NOT have duplicate items (items ## ${j} and ${i} are identical)`,
+        params: { i, j },
+      }];
+      return false;
+    }
+    seen.set(key, i);
+  }
+  return true;
+};
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const members = Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+    return `{${members.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
 }
 
 function formatValidationErrors(errors: ErrorObject[] | null | undefined): string[] {
