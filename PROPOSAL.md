@@ -183,7 +183,7 @@ The CLI uses the Venice AI REST API:
 2. **No cookies or localStorage**: No persistent tracking mechanisms
 3. **Local configuration**: API key stored locally with restricted permissions (0600)
 4. **No telemetry**: CLI doesn't phone home (except to Venice API)
-5. **Transparent requests**: Users can see exactly what's being sent
+5. **Open source**: Users can read the code to see exactly what is sent
 6. **Pipe-friendly**: Output can be processed without leaving traces
 
 ### Documentation Emphasis
@@ -327,8 +327,11 @@ echo "Text from pipe" | venice tts -o output.mp3
 # Initialize interactively
 venice config init
 
-# Set API key
-venice config set api_key vn-xxxxxxxx
+# Set API key (prompts without echoing it)
+venice config set api_key
+
+# Or read it from standard input
+printf '%s' "$VENICE_API_KEY" | venice config set api_key --stdin
 
 # Set default model
 venice config set default_model kimi-k2-5
