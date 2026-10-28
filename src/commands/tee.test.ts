@@ -82,7 +82,9 @@ async function runTee(args: string[], handle: StubHandler): Promise<CliResult> {
 }
 
 function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(632);
+  const quote = Buffer.alloc(48 + 584 + 4);
+  quote.writeUInt16LE(4, 0);
+  quote.writeUInt16LE(2, 2);
   quote.writeUInt32LE(0x81, 4);
   Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
   return quote.toString('hex');

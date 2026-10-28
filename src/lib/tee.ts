@@ -1,4 +1,4 @@
-import { verifyKeyBinding, deriveSigningAddressFromKey } from './e2ee.js'
+import { bytesToHex, parseHex, verifyKeyBinding, deriveSigningAddressFromKey } from './e2ee.js'
 
 export const NRAS_ATTEST_URL = 'https://nras.attestation.nvidia.com/v3/attest/gpu'
 
@@ -92,60 +92,78 @@ export type TeePolicyEvaluation = {
 }
 
 const TDX_TEE_TYPE = 0x81
-const TDX_BODY_OFFSET = 48
-const TDX_MIN_QUOTE_BYTES = 632
+const TDX_QUOTE_HEADER_BYTES = 48
+const TDX_V5_BODY_DESCRIPTOR_BYTES = 6
+const TDX_SIGNATURE_LENGTH_BYTES = 4
+const TD_REPORT_V10_BYTES = 584
+// Quote v5 body types: 2 is a TDX 1.0 TD report, 3 is a TDX 1.5 TD report that extends the 1.0 layout.
+const TDX_V5_BODY_BYTES = new Map([
+  [2, TD_REPORT_V10_BYTES],
+  [3, 648],
+])
+const TD_ATTRIBUTES_DEBUG = 0x01
 
 /**
  * Check if TDX is in debug mode by examining tdAttributes.
- * Debug mode provides no confidentiality guarantees.
+ * Debug mode provides no confidentiality guarantees, so malformed attributes count as debug mode.
  */
 export const isTdDebugMode = (tdAttributes: string): boolean => {
-  if (tdAttributes.length < 2) return false
-  const lsb = parseInt(tdAttributes.slice(0, 2), 16)
-  return (lsb & 0x01) !== 0
+  if (!/^[0-9a-fA-F]{16}$/.test(tdAttributes)) return true
+  return (parseInt(tdAttributes.slice(0, 2), 16) & TD_ATTRIBUTES_DEBUG) !== 0
 }
 
 /**
- * Parse Intel TDX quote structure from hex string.
+ * Parse an Intel TDX quote (version 4, or version 5 with a TDX 1.0 or 1.5 TD report) from a hex string.
+ * Returns undefined unless the whole string is exactly one well-formed TDX quote.
  */
 export const parseTdxQuote = (hexQuote: string): ParsedTdxQuote | undefined => {
-  const hex = hexQuote.startsWith('0x') ? hexQuote.slice(2) : hexQuote
-  if (hex.length < TDX_MIN_QUOTE_BYTES * 2) return undefined
+  const quote = parseHex(hexQuote)
+  if (!quote || quote.length < TDX_QUOTE_HEADER_BYTES) return undefined
 
-  try {
-    const readHex = (byteOffset: number, byteLength: number) => hex.slice(byteOffset * 2, (byteOffset + byteLength) * 2)
-    const readUint16LE = (byteOffset: number) => {
-      const h = readHex(byteOffset, 2)
-      return parseInt(h.slice(2, 4) + h.slice(0, 2), 16)
-    }
-    const readUint32LE = (byteOffset: number) => {
-      const h = readHex(byteOffset, 4)
-      return parseInt(h.slice(6, 8) + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2), 16)
-    }
+  const view = new DataView(quote.buffer, quote.byteOffset, quote.byteLength)
+  const version = view.getUint16(0, true)
+  const attestationKeyType = view.getUint16(2, true)
+  const teeType = view.getUint32(4, true)
+  if (teeType !== TDX_TEE_TYPE) return undefined
 
-    const b = TDX_BODY_OFFSET
-    return {
-      version: readUint16LE(0),
-      attestationKeyType: readUint16LE(2),
-      teeType: readUint32LE(4),
-      teeTcbSvn: readHex(b, 16),
-      mrSeam: readHex(b + 16, 48),
-      mrSignerSeam: readHex(b + 64, 48),
-      seamAttributes: readHex(b + 112, 8),
-      tdAttributes: readHex(b + 120, 8),
-      xfam: readHex(b + 128, 8),
-      mrtd: readHex(b + 136, 48),
-      mrConfigId: readHex(b + 184, 48),
-      mrOwner: readHex(b + 232, 48),
-      mrOwnerConfig: readHex(b + 280, 48),
-      rtmr0: readHex(b + 328, 48),
-      rtmr1: readHex(b + 376, 48),
-      rtmr2: readHex(b + 424, 48),
-      rtmr3: readHex(b + 472, 48),
-      reportData: readHex(b + 520, 64),
-    }
-  } catch {
+  let bodyOffset = TDX_QUOTE_HEADER_BYTES
+  let bodyLength = TD_REPORT_V10_BYTES
+  if (version === 5) {
+    bodyOffset = TDX_QUOTE_HEADER_BYTES + TDX_V5_BODY_DESCRIPTOR_BYTES
+    if (quote.length < bodyOffset) return undefined
+    bodyLength = view.getUint32(TDX_QUOTE_HEADER_BYTES + 2, true)
+    if (bodyLength !== TDX_V5_BODY_BYTES.get(view.getUint16(TDX_QUOTE_HEADER_BYTES, true))) return undefined
+  } else if (version !== 4) {
     return undefined
+  }
+
+  const signatureLengthOffset = bodyOffset + bodyLength
+  if (quote.length < signatureLengthOffset + TDX_SIGNATURE_LENGTH_BYTES) return undefined
+  const signatureLength = view.getUint32(signatureLengthOffset, true)
+  if (quote.length !== signatureLengthOffset + TDX_SIGNATURE_LENGTH_BYTES + signatureLength) return undefined
+
+  const readHex = (offset: number, length: number) =>
+    bytesToHex(quote.subarray(bodyOffset + offset, bodyOffset + offset + length))
+
+  return {
+    version,
+    attestationKeyType,
+    teeType,
+    teeTcbSvn: readHex(0, 16),
+    mrSeam: readHex(16, 48),
+    mrSignerSeam: readHex(64, 48),
+    seamAttributes: readHex(112, 8),
+    tdAttributes: readHex(120, 8),
+    xfam: readHex(128, 8),
+    mrtd: readHex(136, 48),
+    mrConfigId: readHex(184, 48),
+    mrOwner: readHex(232, 48),
+    mrOwnerConfig: readHex(280, 48),
+    rtmr0: readHex(328, 48),
+    rtmr1: readHex(376, 48),
+    rtmr2: readHex(424, 48),
+    rtmr3: readHex(472, 48),
+    reportData: readHex(520, 64),
   }
 }
 

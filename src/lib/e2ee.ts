@@ -11,18 +11,29 @@ const HKDF_INFO = 'ecdsa_encryption'
 const EPHEMERAL_PUB_LENGTH = 65
 const NONCE_LENGTH = 12
 const AES_GCM_TAG_LENGTH = 16
-const MIN_REPORT_DATA_HEX_LENGTH = 40
+const ADDRESS_LENGTH = 20
+const HEX_BYTES_PATTERN = /^(?:[0-9a-fA-F]{2})*$/
 
 export const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
-export const hexToBytes = (hex: string): Uint8Array => {
+/**
+ * Decode a hex string with an optional 0x prefix.
+ * Returns undefined unless the rest is an even number of hex digits.
+ */
+export const parseHex = (hex: string): Uint8Array | undefined => {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex
-  const len = h.length >>> 1
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) {
+  if (!HEX_BYTES_PATTERN.test(h)) return undefined
+  const bytes = new Uint8Array(h.length / 2)
+  for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(h.substring(i * 2, i * 2 + 2), 16)
   }
+  return bytes
+}
+
+export const hexToBytes = (hex: string): Uint8Array => {
+  const bytes = parseHex(hex)
+  if (!bytes) throw new Error('Invalid hex string')
   return bytes
 }
 
@@ -33,7 +44,8 @@ const normalizePublicKey = (hex: string): string => {
 }
 
 const normalizeUncompressedPublicKey = (signingKeyHex: string): Uint8Array | undefined => {
-  let keyBytes = hexToBytes(signingKeyHex)
+  let keyBytes = parseHex(signingKeyHex)
+  if (!keyBytes) return undefined
 
   if (keyBytes.length === 64) {
     const prefixed = new Uint8Array(65)
@@ -144,11 +156,10 @@ export const verifyKeyBinding = (signingKeyHex: string, reportDataHex: string): 
   const address = deriveSigningAddressFromKey(signingKeyHex)
   if (!address) return false
 
-  const reportData = reportDataHex.startsWith('0x') ? reportDataHex.slice(2) : reportDataHex
-  if (reportData.length < MIN_REPORT_DATA_HEX_LENGTH) return false
-  const reportAddress = reportData.slice(0, 40).toLowerCase()
+  const reportData = parseHex(reportDataHex)
+  if (!reportData || reportData.length < ADDRESS_LENGTH) return false
 
-  return address === reportAddress
+  return address === bytesToHex(reportData.subarray(0, ADDRESS_LENGTH))
 }
 
 /**
