@@ -1,0 +1,177 @@
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
+
+type Route = (request: IncomingMessage, response: ServerResponse, stub: Stub) => void | Promise<void>;
+type Stub = {
+  origin: string;
+  count: (route: string) => number;
+  close: () => Promise<void>;
+};
+
+async function startStub(routes: Record<string, Route>): Promise<Stub> {
+  const seen: string[] = [];
+  const server = createServer(async (request, response) => {
+    const route = `${request.method} ${request.url}`;
+    seen.push(route);
+    const handler = routes[route];
+    if (!handler) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    await handler(request, response, stub);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub: Stub = {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    count: (route) => seen.filter((entry) => entry === route).length,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.closeAllConnections();
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+  return stub;
+}
+
+function sendJson(response: ServerResponse, body: unknown): void {
+  response.writeHead(200, { 'Content-Type': 'application/json' });
+  response.end(typeof body === 'string' ? body : JSON.stringify(body));
+}
+
+function runCli(
+  args: string[],
+  dir: string,
+  apiOrigin: string
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        HOME: dir,
+        NODE_ENV: 'test',
+        NO_COLOR: '1',
+        VENICE_API_KEY: 'test-key',
+        VENICE_API_BASE_URL: `${apiOrigin}/api/v1`,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+function mp4Bytes(tail = ''): Buffer {
+  const header = Buffer.alloc(24);
+  header.writeUInt32BE(header.length, 0);
+  header.write('ftypisom', 4, 'latin1');
+  header.write('isommp41', 16, 'latin1');
+  return Buffer.concat([header, Buffer.from(tail)]);
+}
+
+async function withScratch(run: (dir: string) => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-video-jobs-'));
+  try {
+    await run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('video retrieve does not save a JSON status whose bytes 4-7 spell ftyp, or delete the remote copy', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response) => {
+      sendJson(response, '{  "ftyp":1,"status":"FAILED","error":"quota"}');
+    },
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'out.mp4');
+  try {
+    const result = await runCli(
+      ['video', 'retrieve', 'q1', '-m', 'test-model', '-o', output, '--complete', '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(existsSync(output), false, result.stdout);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 0);
+    assert.equal(JSON.parse(result.stdout).status, 'FAILED');
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video retrieve saves and completes an MP4 whose first box is free', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const video = Buffer.concat([Buffer.from([0, 0, 0, 8]), Buffer.from('free'), mp4Bytes('-frames')]);
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(video);
+    },
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'out.mp4');
+  try {
+    const result = await runCli(
+      ['video', 'retrieve', 'q1', '-m', 'test-model', '-o', output, '--complete', '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output).equals(video), true);
+    assert.equal(JSON.parse(result.stdout).deleted, true);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 1);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video retrieve refuses a downloaded body that is not an MP4 and keeps the remote copy', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response, self) => {
+      sendJson(response, { status: 'COMPLETED', video_url: `${self.origin}/media/clip.mp4` });
+    },
+    'GET /media/clip.mp4': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end('{"error":"link expired"}');
+    },
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'out.mp4');
+  writeFileSync(output, 'existing video');
+  try {
+    const result = await runCli(
+      ['video', 'retrieve', 'q1', '-m', 'test-model', '-o', output, '--complete'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /not a valid MP4/);
+    assert.equal(stub.count('GET /media/clip.mp4'), 1);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 0);
+    assert.equal(readFileSync(output, 'utf8'), 'existing video');
+    assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.part')), []);
+  } finally {
+    await stub.close();
+  }
+}));

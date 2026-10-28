@@ -26,6 +26,7 @@ import {
   MAX_VIDEO_REFERENCE_IMAGE_BYTES,
   MAX_VIDEO_UPSCALE_BYTES,
 } from '../lib/media.js';
+import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
 import {
   formatSuccess,
   formatError,
@@ -139,6 +140,27 @@ export async function waitForVideoStatus(
   }
 
   return status;
+}
+
+function downloadVideoFromUrl(url: string, outputPath: string) {
+  return downloadToFile(url, outputPath, {
+    maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+    expectedContentTypePrefixes: ['video/'],
+    leadingBytes: {
+      check: checkMp4Header,
+      invalidMessage: 'Downloaded video is not a valid MP4 file.',
+    },
+  });
+}
+
+async function completeSavedVideo(queueId: string, model: string, outputPath: string): Promise<void> {
+  if (!fileHasMp4Header(outputPath)) {
+    throw new Error(`${outputPath} is not a valid MP4 file, so the remote media was kept.`);
+  }
+  const completion = await completeVideo(queueId, model);
+  if (!completion.success) {
+    throw new Error('Video cleanup did not succeed.');
+  }
 }
 
 export function registerVideoCommands(program: Command): void {
@@ -369,18 +391,12 @@ export function registerVideoCommands(program: Command): void {
           if (format !== 'json') {
             console.log(`${c.dim('Downloading video...')}`);
           }
-          await downloadToFile(downloadUrl, options.output, {
-            maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
-            expectedContentTypePrefixes: ['video/'],
-          });
+          await downloadVideoFromUrl(downloadUrl, options.output);
         }
 
         let deleted = false;
         if (shouldComplete) {
-          const completion = await completeVideo(queueId, options.model);
-          if (!completion.success) {
-            throw new Error('Video cleanup did not succeed.');
-          }
+          await completeSavedVideo(queueId, options.model, options.output);
           deleted = true;
         }
 
@@ -523,18 +539,12 @@ export function registerVideoCommands(program: Command): void {
               result.status.error || 'Video upscale completed but no video URL was returned.'
             );
           }
-          await downloadToFile(downloadUrl, options.output, {
-            maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
-            expectedContentTypePrefixes: ['video/'],
-          });
+          await downloadVideoFromUrl(downloadUrl, options.output);
         }
 
         let deleted = false;
         if (options.complete) {
-          const completion = await completeVideo(queued.queue_id, queued.model);
-          if (!completion.success) {
-            throw new Error('Video cleanup did not succeed.');
-          }
+          await completeSavedVideo(queued.queue_id, queued.model, options.output);
           deleted = true;
         }
 
