@@ -10,7 +10,7 @@ import {
   deleteConfigValue,
   getConfigPath,
 } from '../lib/config.js';
-import { formatSuccess, formatError, getChalk } from '../lib/output.js';
+import { formatSuccess, formatError, getChalk, detectOutputFormat } from '../lib/output.js';
 import { askHidden, question } from '../lib/prompt.js';
 import type { VeniceConfig } from '../types/index.js';
 
@@ -53,10 +53,11 @@ export function registerConfigCommand(program: Command): void {
     .description('Show current configuration')
     .option('--format <format>', 'Output format (pretty|json)', 'pretty')
     .action((options) => {
+      const format = detectOutputFormat(options.format);
       const cfg = loadConfig();
       const c = getChalk();
       
-      if (options.format === 'json') {
+      if (format === 'json') {
         const maskedCfg: VeniceConfig = { ...cfg };
         if (typeof maskedCfg.api_key === 'string' && maskedCfg.api_key.length > 0) {
           maskedCfg.api_key = maskApiKey(maskedCfg.api_key);
