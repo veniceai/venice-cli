@@ -15,7 +15,7 @@
     "lint": "eslint \"src/**/*.ts\"",
     "check:package": "node scripts/check-package.mjs",
     "clean": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "node -e \"console.error('Releases are published by CI when a version tag is pushed. See CONTRIBUTING.md.'); process.exit(1)\""
   },
   "files": [
     "dist",

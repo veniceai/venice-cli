@@ -217,6 +217,35 @@ export function registerExampleCommand(program: Command): void {
 3. Update the shell completions
 4. Document in README.md
 
+## Releasing
+
+Releases are published to npm only by the
+[Publish to npm](.github/workflows/publish.yml) workflow, from a version tag.
+Never publish from a workstation; `npm publish` in a checkout fails on purpose.
+
+To cut a release:
+
+1. In a pull request, set the new version with
+   `npm version <version> --no-git-tag-version`, which updates `package.json`
+   and `package-lock.json`, and add release notes to `CHANGELOG.md`. Merge the
+   pull request into `main` once CI passes.
+2. Tag the merged commit on `main` and push the tag:
+   ```bash
+   git switch main
+   git pull --ff-only
+   git tag -a v2.2.0 -m "v2.2.0"
+   git push origin v2.2.0
+   ```
+3. The workflow checks that the tag is `v` followed by the `package.json`
+   version and that it points to a commit on `main`, then builds, lints,
+   tests, checks the package contents and packs the tarball. A tag that fails
+   these checks publishes nothing.
+4. A maintainer approves the run in the `npm-publish` environment, and the
+   workflow publishes the tarball using npm trusted publishing, with a
+   provenance attestation. Versions with a prerelease suffix, such as
+   `2.2.0-beta.1`, are published under the `next` dist-tag instead of
+   `latest`.
+
 ## Security Considerations
 
 - Never log API keys or tokens
