@@ -7,7 +7,14 @@ import {
   getBillingUsage,
   MAX_BILLING_USAGE_PAGE_SIZE,
 } from '../lib/account-api.js';
-import { detectOutputFormat, formatOutput, formatTable, getChalk } from '../lib/output.js';
+import {
+  detectOutputFormat,
+  formatJson,
+  formatOutput,
+  formatTable,
+  getChalk,
+  terminalSafe,
+} from '../lib/output.js';
 import { parseIntegerOption } from '../lib/options.js';
 
 const CURRENCIES = ['USD', 'DIEM', 'BUNDLED_CREDITS'] as const;
@@ -24,14 +31,14 @@ export function registerBillingCommand(program: Command): void {
     .action(async (options) => {
       const balance = await getBillingBalance();
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify(balance, null, 2));
+        console.log(formatJson(balance));
         return;
       }
 
       const c = getChalk();
       console.log(c.bold('\nVenice Balance\n'));
       console.log(`Can consume: ${balance.canConsume ? c.green('yes') : c.red('no')}`);
-      console.log(`Consumption currency: ${balance.consumptionCurrency ?? 'none'}`);
+      console.log(`Consumption currency: ${terminalSafe(balance.consumptionCurrency ?? 'none')}`);
       console.log(`USD: ${formatAmount(balance.balances.usd)}`);
       console.log(`DIEM: ${formatAmount(balance.balances.diem)}`);
       console.log(`DIEM epoch allocation: ${formatAmount(balance.diemEpochAllocation)}`);
@@ -65,7 +72,7 @@ export function registerBillingCommand(program: Command): void {
       });
 
       if (detectOutputFormat(options.format) === 'json') {
-        console.log(JSON.stringify(entries, null, 2));
+        console.log(formatJson(entries));
         return;
       }
 

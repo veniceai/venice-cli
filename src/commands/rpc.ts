@@ -14,9 +14,12 @@ import {
 } from '../lib/api.js';
 import {
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
   sanitizeTerminalText,
+  terminalSafe,
+  terminalSafeJson,
 } from '../lib/output.js';
 import type { OutputFormat } from '../types/index.js';
 
@@ -110,12 +113,12 @@ async function printNetworks(format: OutputFormat): Promise<void> {
   const c = getChalk();
 
   if (format === 'json') {
-    console.log(JSON.stringify({ networks }, null, 2));
+    console.log(formatJson({ networks }));
     return;
   }
 
   if (format === 'raw') {
-    console.log(networks.join('\n'));
+    console.log(terminalSafe(networks.join('\n')));
     return;
   }
 
@@ -126,7 +129,7 @@ async function printNetworks(format: OutputFormat): Promise<void> {
 
   console.log(c.bold(`\nSupported RPC networks (${networks.length})\n`));
   for (const slug of networks) {
-    console.log(`  ${c.cyan(slug)}`);
+    console.log(`  ${c.cyan(terminalSafe(slug))}`);
   }
 }
 
@@ -476,7 +479,8 @@ function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
   const c = getChalk();
 
   if (format === 'json' || format === 'raw') {
-    process.stdout.write(result.text.endsWith('\n') ? result.text : `${result.text}\n`);
+    const text = terminalSafeJson(result.text);
+    process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
     return;
   }
 
@@ -497,13 +501,13 @@ function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
     }
 
     const item = entry as Record<string, unknown>;
-    const label = multiple ? `${c.dim(`[${item.id ?? index + 1}]`)} ` : '';
+    const label = multiple ? `${c.dim(`[${sanitizeTerminalText(String(item.id ?? index + 1))}]`)} ` : '';
     const error = item.error;
     if (error !== undefined && error !== null) {
       console.error(`${label}${c.red('error:')} ${describeRpcError(error)}`);
       const data = typeof error === 'object' ? (error as Partial<JsonRpcErrorObject>).data : undefined;
       if (data !== undefined) {
-        console.error(c.dim(JSON.stringify(data, null, 2)));
+        console.error(c.dim(formatJson(data)));
       }
       continue;
     }
@@ -517,19 +521,19 @@ function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
 
     const value = item.result;
     if (value !== null && typeof value === 'object') {
-      const json = JSON.stringify(value, null, 2);
+      const json = formatJson(value);
       console.log(multiple ? `${label}\n${json}` : json);
     } else {
-      console.log(`${label}${String(value)}`);
+      console.log(`${label}${terminalSafe(value)}`);
     }
   }
 
   const costParts: string[] = [];
   if (result.credits) {
-    costParts.push(`${c.dim('Credits:')} ${result.credits}`);
+    costParts.push(`${c.dim('Credits:')} ${terminalSafe(result.credits)}`);
   }
   if (result.costUsd) {
-    costParts.push(`${c.dim('Cost:')} $${result.costUsd}`);
+    costParts.push(`${c.dim('Cost:')} $${terminalSafe(result.costUsd)}`);
   }
   if (costParts.length > 0) {
     console.log(`\n${costParts.join('  ')}`);

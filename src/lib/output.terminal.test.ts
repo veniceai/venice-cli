@@ -4,9 +4,11 @@ import {
   TerminalTextSanitizer,
   formatError,
   formatJson,
+  formatWarning,
   sanitizeTerminalText,
   terminalFilter,
   terminalSafe,
+  terminalSafeJson,
 } from './output.js';
 
 const OSC52 = `\x1b]52;c;${Buffer.from('echo copied').toString('base64')}\x07`;
@@ -118,6 +120,21 @@ test('formatJson escapes C1, bidi and separator characters without changing pars
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`));
 
   assert.equal(formatJson({ a: '\u009b' }, 0), '{"a":"\\u009b"}');
+});
+
+test('terminalSafeJson escapes the same characters in JSON text, only for terminal streams', () => {
+  const json = `{"result":"x${C1_OSC}${BIDI}\u2028\x7f","big":123456789012345678901234567890}`;
+  const escaped = terminalSafeJson(json, { isTTY: true });
+
+  assert.doesNotMatch(escaped, /[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/);
+  assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
+  assert.match(escaped, /"big":123456789012345678901234567890}$/);
+  assert.equal(terminalSafeJson(json, { isTTY: false }), json);
+});
+
+test('formatWarning sanitises the message for the stream it is printed on', () => {
+  assert.equal(formatWarning(`saved ${OSC52}${BIDI}`, { isTTY: true }), '⚠ saved safetxt.exe');
+  assert.equal(formatWarning(`saved ${OSC52}`, { isTTY: false }), `⚠ saved ${OSC52}`);
 });
 
 test('formatError sanitises the message when stderr is a terminal', () => {
