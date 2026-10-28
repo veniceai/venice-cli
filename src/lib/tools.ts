@@ -6,7 +6,7 @@
 
 import type { ToolDefinition } from '../types/index.js';
 import * as readline from 'readline';
-import { getChalk } from './output.js';
+import { escapeInvisible, getChalk } from './output.js';
 
 // Built-in tool definitions
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
@@ -537,8 +537,8 @@ async function promptForApproval(name: string, args: unknown): Promise<boolean> 
   const c = getChalk();
   
   console.log('\n' + c.yellow('⚡ Tool Call Request'));
-  console.log(`${c.cyan('Tool:')} ${name}`);
-  console.log(`${c.cyan('Args:')} ${JSON.stringify(args, null, 2)}`);
+  console.log(`${c.cyan('Tool:')} ${escapeInvisible(name)}`);
+  console.log(`${c.cyan('Args:')} ${escapeInvisible(String(JSON.stringify(args, null, 2)))}`);
   
   const rl = readline.createInterface({
     input: process.stdin,

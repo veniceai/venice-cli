@@ -932,8 +932,10 @@ export async function streamChat(
           allowedTools,
           interactiveTools
         );
-        console.log(c.dim(`\n[Tool: ${toolCall.function.name}]`));
-        console.log(result);
+        if (allowedTools.has(toolCall.function.name)) {
+          console.log(c.dim(`\n[Tool: ${toolCall.function.name}]`));
+          console.log(terminalSafe(result));
+        }
         messages.push({
           role: 'tool',
           content: result,
