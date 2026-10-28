@@ -4,8 +4,8 @@
 
 import { Command } from 'commander';
 import * as fs from 'fs';
-import * as path from 'path';
 import { generateEmbeddings } from '../lib/api.js';
+import { writeOutputFile } from '../lib/safe-write.js';
 import {
   formatSuccess,
   formatError,
@@ -53,8 +53,7 @@ export function registerEmbeddingsCommand(program: Command): void {
         });
 
         if (options.output) {
-          fs.mkdirSync(path.dirname(options.output), { recursive: true });
-          fs.writeFileSync(options.output, JSON.stringify(result, null, 2));
+          writeOutputFile(options.output, JSON.stringify(result, null, 2));
           console.log(formatSuccess(`Saved embeddings to ${options.output}`));
           console.log(c.dim(`Dimension: ${result[0]?.embedding?.length || 0}`));
           return;
