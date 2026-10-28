@@ -203,7 +203,7 @@ export async function createApiKey(input: {
   return created as ApiKeyMetadata & { apiKey: string };
 }
 
-// apiRequest reports 401 and 403 as a plain Error without the status code.
+// apiRequest reports a 401 as a plain Error without the status code.
 function wasRefused(error: unknown): boolean {
   if (error instanceof VeniceApiError) {
     return error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;

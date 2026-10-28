@@ -127,7 +127,11 @@ export class VeniceApiError extends Error {
   }
 
   isAuthError(): boolean {
-    return this.statusCode === 401 || this.statusCode === 403;
+    return this.statusCode === 401;
+  }
+
+  isForbidden(): boolean {
+    return this.statusCode === 403;
   }
 
   isRateLimited(): boolean {
@@ -403,6 +407,11 @@ export async function apiRequest<T>(
             'Authentication failed. Please check your API key.\n' +
             'Update with: venice config set api_key'
           );
+        }
+
+        if (error.isForbidden()) {
+          if (spinner) stopSpinner(false, 'Permission denied');
+          throw new VeniceApiError(`Permission denied: ${error.message}`, 403, error.code);
         }
 
         const retryable = error.isRateLimited() || (idempotent && error.isRetryable());

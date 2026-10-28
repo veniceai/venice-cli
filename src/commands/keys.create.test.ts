@@ -124,7 +124,7 @@ test('keys create says the key may exist after a server error', async () => {
 });
 
 test('keys create does not suggest the key exists when Venice refuses the request', async () => {
-  for (const [status, message] of [[400, 'description is invalid'], [401, 'bad key']] as const) {
+  for (const [status, message] of [[400, 'description is invalid'], [401, 'bad key'], [403, 'not an admin key']] as const) {
     const result = await createKey((_request, response) => {
       sendJson(response, status, { error: { message } });
     });
