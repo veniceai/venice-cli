@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { Ajv } from 'ajv';
 import {
+  loadResponseFormat,
+  MAX_SCHEMA_DEPTH,
+  MAX_SCHEMA_ENUM_VALUES,
+  MAX_SCHEMA_NODES,
   MAX_STRUCTURED_RESPONSE_BYTES,
+  normalizeResponseFormat,
   parseStructuredContent,
   validateAgainstSchema,
 } from './structured-output.js';
@@ -103,4 +112,80 @@ test('enum values must still be unique in draft-07 schemas', () => {
     () => validateAgainstSchema('a', { enum: ['a', 'b', 'a'] }),
     /enum must NOT have duplicate items/
   );
+});
+
+test('a schema file is compiled once for loading, every request, and validation', () => {
+  const core = Object.getPrototypeOf(Ajv.prototype) as { compile: (...args: unknown[]) => unknown };
+  const originalCompile = core.compile;
+  let compiles = 0;
+  core.compile = function (this: unknown, ...args: unknown[]) {
+    compiles++;
+    return originalCompile.apply(this, args);
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'venice-schema-once-'));
+  try {
+    const schemaPath = join(dir, 'schema.json');
+    writeFileSync(schemaPath, JSON.stringify({
+      type: 'object',
+      properties: { n: { type: 'integer' } },
+      required: ['n'],
+    }));
+
+    const format = loadResponseFormat(schemaPath);
+    normalizeResponseFormat(format, 'response format');
+    normalizeResponseFormat(format, 'response format');
+    const schema = format.json_schema?.schema ?? {};
+    assert.deepEqual(validateAgainstSchema({ n: 1 }, schema), []);
+    assert.deepEqual(validateAgainstSchema({ n: 'x' }, schema), ['$/n: must be integer']);
+    assert.equal(compiles, 1);
+  } finally {
+    core.compile = originalCompile;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a definition referenced from many places is not inlined at each reference', () => {
+  const definition = { type: 'object', properties: {} as Record<string, unknown> };
+  const schema = { $defs: { s: definition }, type: 'object', properties: {} as Record<string, unknown> };
+  for (let i = 0; i < 200; i++) {
+    definition.properties[`a${i}`] = { type: 'string' };
+    schema.properties[`p${i}`] = { $ref: '#/$defs/s' };
+  }
+  const ms = elapsedMs(() => normalizeResponseFormat(schema, 'refs'));
+  assert.ok(ms < 400, `compiling took ${ms.toFixed(0)} ms`);
+});
+
+test('schemas over the size, depth, or enum limits are rejected before compiling', () => {
+  const properties = (count: number) => Object.fromEntries(
+    Array.from({ length: count }, (_, i) => [`p${i}`, { type: 'string' }])
+  );
+  const nested = (levels: number) => {
+    let schema: Record<string, unknown> = { type: 'string' };
+    for (let i = 0; i < levels; i++) schema = { type: 'array', items: schema };
+    return schema;
+  };
+  const enumOf = (count: number) => ({
+    type: 'string',
+    enum: Array.from({ length: count }, (_, i) => `v${i}`),
+  });
+
+  assert.throws(
+    () => normalizeResponseFormat({ type: 'object', properties: properties(MAX_SCHEMA_NODES) }, 'wide'),
+    /JSON schema in "wide" has more than 1000 objects and arrays/
+  );
+  assert.throws(
+    () => normalizeResponseFormat(nested(MAX_SCHEMA_DEPTH), 'deep'),
+    /JSON schema in "deep" is nested more than 64 levels deep/
+  );
+  assert.throws(
+    () => normalizeResponseFormat(enumOf(MAX_SCHEMA_ENUM_VALUES + 1), 'enum'),
+    /JSON schema in "enum" has an enum with more than 1000 values/
+  );
+
+  const ms = elapsedMs(() => {
+    normalizeResponseFormat({ type: 'object', properties: properties(MAX_SCHEMA_NODES - 2) }, 'wide');
+    normalizeResponseFormat(nested(MAX_SCHEMA_DEPTH - 1), 'deep');
+    normalizeResponseFormat(enumOf(MAX_SCHEMA_ENUM_VALUES), 'enum');
+  });
+  assert.ok(ms < 1500, `compiling schemas at the limits took ${ms.toFixed(0)} ms`);
 });
