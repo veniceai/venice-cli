@@ -523,6 +523,7 @@ export interface ChatCompletionRequestOptions {
   reasoning_effort?: ReasoningEffort;
   prompt_cache_key?: string;
   prompt_cache_retention?: PromptCacheRetention;
+  recordUsage?: boolean;
 }
 
 function tokenCounts(
@@ -540,7 +541,7 @@ function tokenCounts(
 }
 
 function recordChatUsage(usage: unknown, options: ChatCompletionRequestOptions): void {
-  if (!usage) return;
+  if (!usage || options.recordUsage === false) return;
   trackUsage({
     ...tokenCounts(usage),
     command: 'chat',

@@ -8,11 +8,41 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { nonStreamChat, streamChat } from './chat.js';
 import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
+import type { ChatCompletionRequestOptions } from '../lib/api.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const E2EE_MODEL = 'e2ee-usage-model';
 const PLAIN_MODEL = 'plain-usage-model';
+
+test('streamChat and nonStreamChat ask the client not to record usage when told to', async () => {
+  const seen: ChatCompletionRequestOptions[] = [];
+  await streamChat([{ role: 'user', content: 'hi' }], 'm', [], false, 'raw', {
+    quiet: true,
+    recordUsage: false,
+    completionStream: async function* (_messages, options) {
+      seen.push(options ?? {});
+      yield { content: 'ok', done: false };
+      yield { done: true };
+    },
+  });
+  await nonStreamChat([{ role: 'user', content: 'hi' }], 'm', [], false, 'raw', {
+    recordUsage: false,
+    completion: async (_messages, options) => {
+      seen.push(options ?? {});
+      return { content: 'ok', finish_reason: 'stop' };
+    },
+  });
+  await nonStreamChat([{ role: 'user', content: 'hi' }], 'm', [], false, 'raw', {
+    completion: async (_messages, options) => {
+      seen.push(options ?? {});
+      return { content: 'ok', finish_reason: 'stop' };
+    },
+  });
+
+  assert.deepEqual(seen.map((options) => options.recordUsage), [false, false, undefined]);
+});
 
 function buildTdxQuote(signingAddress: string): string {
   const quote = Buffer.alloc(48 + 584 + 4);
@@ -125,6 +155,18 @@ async function runChat(
 }
 
 const usage = { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 };
+
+test('an E2EE chat session leaves no usage record', async () => {
+  const result = await runChat(['--model', E2EE_MODEL, 'hello'], usage);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.usageEntries, []);
+});
+
+test('a TEE chat session leaves no usage record', async () => {
+  const result = await runChat(['--model', E2EE_MODEL, '--no-e2ee', 'hello'], usage);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.usageEntries, []);
+});
 
 test('a plain chat records only validated token counts under the requested model', async () => {
   const result = await runChat(['--model', PLAIN_MODEL, 'hello'], {

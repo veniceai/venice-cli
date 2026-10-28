@@ -257,3 +257,23 @@ test('a non-streamed usage record drops counts that are not non-negative integer
   assert.equal(typeof timestamp, 'string');
   assert.deepEqual(entry, { command: 'chat', model: 'plain-model' });
 });
+
+test('recordUsage: false leaves usage.json untouched', async () => {
+  const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+  serveEvents([
+    `data: ${JSON.stringify({ id: 'cmpl-1', choices: [], usage })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+  await collect({ recordUsage: false });
+
+  handler = (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: 'Hi' }, finish_reason: 'stop' }],
+      usage,
+    }));
+  };
+  await api.chatCompletion([{ role: 'user', content: 'hello' }], { recordUsage: false });
+
+  assert.deepEqual(usageEntries(), []);
+});
