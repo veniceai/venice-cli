@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -44,6 +44,14 @@ async function startStub(routes: Record<string, Route>): Promise<Stub> {
 function sendJson(response: ServerResponse, body: unknown): void {
   response.writeHead(200, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify(body));
+}
+
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
 }
 
 function sendAudio(response: ServerResponse, bytes: Buffer): void {
@@ -178,6 +186,56 @@ test('music status --wait accepts a --timeout beyond the 32-bit timer limit', { 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).status, 'COMPLETED');
     assert.doesNotMatch(result.stderr, /TimeoutOverflowWarning|Timed out/);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('music retrieve exits 2 while the audio is processing and 1 when the job failed', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const statuses: Record<string, unknown> = {
+    'mq-processing': { status: 'PROCESSING' },
+    'mq-failed': { status: 'FAILED', error: 'generation failed' },
+  };
+  const stub = await startStub({
+    [RETRIEVE]: async (request, response) => {
+      sendJson(response, statuses[String((await readJson(request)).queue_id)]);
+    },
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'out.mp3');
+  const cases: Array<[string, number, RegExp]> = [
+    ['mq-processing', 2, /Audio is not ready yet/],
+    ['mq-failed', 1, /Error: generation failed/],
+  ];
+  try {
+    for (const [queueId, exitCode, prettyMessage] of cases) {
+      const json = await runCli(['music', 'retrieve', queueId, '-o', output, '-f', 'json'], dir, stub.origin);
+      assert.equal(json.status, exitCode, `${queueId} json: ${json.stderr}`);
+      assert.deepEqual(JSON.parse(json.stdout), statuses[queueId]);
+
+      const pretty = await runCli(['music', 'retrieve', queueId, '-o', output, '-f', 'pretty'], dir, stub.origin);
+      assert.equal(pretty.status, exitCode, `${queueId} pretty: ${pretty.stderr}`);
+      assert.match(pretty.stdout + pretty.stderr, prettyMessage);
+    }
+    assert.equal(existsSync(output), false);
+    assert.equal(stub.count('POST /api/v1/audio/complete'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('music complete exits 1 when Venice reports success: false, in every output format', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, { success: false }),
+  });
+  try {
+    const json = await runCli(['music', 'complete', 'mq1', '-f', 'json'], dir, stub.origin);
+    assert.equal(json.status, 1, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), { success: false });
+
+    const pretty = await runCli(['music', 'complete', 'mq1', '-f', 'pretty'], dir, stub.origin);
+    assert.equal(pretty.status, 1);
+    assert.match(pretty.stderr, /Remote audio cleanup did not complete/);
   } finally {
     await stub.close();
   }
