@@ -15,12 +15,13 @@ import {
 } from '../lib/api.js';
 import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+  MAX_JOB_WAIT_TIMEOUT_SECONDS,
   classifyJobStatus,
   colorForJobStatus,
   waitForJobStatus,
 } from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeResponseToFile } from '../lib/media.js';
-import { parseIntegerOption } from '../lib/options.js';
+import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { detectOutputFormat, formatError, formatSuccess, getChalk } from '../lib/output.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
@@ -184,10 +185,11 @@ export function registerMusicCommands(program: Command): void {
           return;
         }
 
-        const timeoutSeconds = Number(options.timeout);
-        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-          throw new Error('--timeout must be a positive number of seconds.');
-        }
+        const timeoutSeconds = parseDecimalOption(options.timeout, '--timeout', {
+          min: 0,
+          exclusiveMin: true,
+          max: MAX_JOB_WAIT_TIMEOUT_SECONDS,
+        });
 
         const status = await waitForJobStatus(fetchStatus, {
           label: 'audio generation',

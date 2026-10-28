@@ -29,6 +29,7 @@ import {
 import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
 import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+  MAX_JOB_WAIT_TIMEOUT_SECONDS,
   classifyJobStatus,
   jobPollIntervalMs,
   waitForJobStatus,
@@ -54,7 +55,6 @@ export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: stri
 ];
 
 const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = DEFAULT_JOB_WAIT_TIMEOUT_SECONDS;
-const MAX_VIDEO_STATUS_TIMEOUT_SECONDS = 24 * 60 * 60;
 
 export function isPublicHttpUrl(value: string): boolean {
   try {
@@ -284,7 +284,7 @@ export function registerVideoCommands(program: Command): void {
           const timeoutSeconds = parseDecimalOption(options.timeout, '--timeout', {
             min: 0,
             exclusiveMin: true,
-            max: MAX_VIDEO_STATUS_TIMEOUT_SECONDS,
+            max: MAX_JOB_WAIT_TIMEOUT_SECONDS,
           });
 
           const status = await waitForVideoStatus(

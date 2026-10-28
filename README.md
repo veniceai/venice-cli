@@ -377,7 +377,7 @@ venice video status <queue_id> -m wan-2.6-text-to-video
 # Wait for completion (polls every 5s, times out after 10 minutes)
 venice video status -w <queue_id> -m <model>
 
-# Set a custom wait timeout in seconds
+# Set a custom wait timeout in seconds (at most 86400)
 venice video status -w <queue_id> -m <model> --timeout 900
 
 # Download completed video
@@ -429,6 +429,7 @@ venice music generate -m elevenlabs-music --lyrics lyrics.txt \
 # Check once, or poll until complete (polls every 5s, times out after 10 minutes)
 venice music status <queue_id> -m elevenlabs-music
 venice music status <queue_id> -m elevenlabs-music --wait
+# Set a custom wait timeout in seconds (at most 86400)
 venice music status <queue_id> -m elevenlabs-music --wait --timeout 900
 
 # Download the finished audio
