@@ -87,7 +87,8 @@ export function registerConfigCommand(program: Command): void {
         console.log(`  ${c.cyan(key.padEnd(20))} ${displayValue}`);
       }
 
-      console.log(`\n${c.dim('Tip: Use "venice config set <key> <value>" to update settings')}`);
+      console.log(`\n${c.dim('Tip: Set the API key with "venice config set api_key" or pipe it to "venice config set api_key --stdin".')}`);
+      console.log(c.dim('     Use "venice config set <key> <value>" for other settings.'));
     });
 
   // Set a config value
