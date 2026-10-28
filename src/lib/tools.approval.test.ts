@@ -70,3 +70,28 @@ test('the tool approval prompt shows control, bidi and invisible characters as e
   );
   assert.doesNotMatch(output, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b\u2028\u202a-\u202e]/);
 });
+
+test('the tool approval prompt refuses to ask without a terminal', { timeout: 5000 }, async () => {
+  const input = fakeInput(false);
+  const output = await withStdin(input, async () => {
+    const pending = executeTool('calculator', { expression: '2+2' }, {
+      interactive: true,
+      allowedTools: ['calculator'],
+    });
+    input.end();
+    await assert.rejects(pending, /stdin is not a terminal/);
+  });
+  assert.equal(output, '');
+});
+
+test('the tool approval prompt fails when input ends without an answer', { timeout: 5000 }, async () => {
+  const input = fakeInput(true);
+  await withStdin(input, async () => {
+    const pending = executeTool('calculator', { expression: '2+2' }, {
+      interactive: true,
+      allowedTools: ['calculator'],
+    });
+    setImmediate(() => input.end());
+    await assert.rejects(pending, /Input ended before the prompt was answered/);
+  });
+});

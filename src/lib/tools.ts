@@ -5,8 +5,8 @@
  */
 
 import type { ToolDefinition } from '../types/index.js';
-import * as readline from 'readline';
 import { escapeInvisible, getChalk } from './output.js';
+import { confirm } from './prompt.js';
 
 // Built-in tool definitions
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
@@ -534,23 +534,19 @@ export async function executeTool(
 }
 
 async function promptForApproval(name: string, args: unknown): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      'Tool calls need approval on a terminal, but stdin is not a terminal. ' +
+      'Run the command in a terminal, or omit --interactive-tools.'
+    );
+  }
   const c = getChalk();
   
   console.log('\n' + c.yellow('⚡ Tool Call Request'));
   console.log(`${c.cyan('Tool:')} ${escapeInvisible(name)}`);
   console.log(`${c.cyan('Args:')} ${escapeInvisible(String(JSON.stringify(args, null, 2)))}`);
-  
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
 
-  return new Promise((resolve) => {
-    rl.question(c.yellow('\nApprove? [y/N] '), (answer) => {
-      rl.close();
-      resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
-    });
-  });
+  return confirm(c.yellow('\nApprove? [y/N] '));
 }
 
 export function formatToolsHelp(): string {
