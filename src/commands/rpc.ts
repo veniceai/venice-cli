@@ -149,8 +149,53 @@ export function parseRpcParam(token: string): unknown {
 }
 
 function validateRawJson(json: string, context: 'parameter' | 'batch file'): void {
-  const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
   let depth = 0;
+  scanJson(json, {
+    onOpen() {
+      depth++;
+      if (depth > MAX_RPC_JSON_DEPTH) {
+        throw new Error(`JSON ${context} is nested more than ${MAX_RPC_JSON_DEPTH} levels deep.`);
+      }
+    },
+    onClose() {
+      depth--;
+    },
+    onNumber(literal) {
+      if (isUnsafeJsonNumber(literal)) {
+        throw new Error(
+          `Unsafe numeric literal in JSON ${context}: ${literal}. ` +
+          'Quote it as a string or use a chain-native hex quantity.'
+        );
+      }
+    },
+  });
+}
+
+// Parses JSON with every number that a double cannot carry exactly, or
+// that is beyond the safe-integer range, kept as a string of its digits.
+function parseJsonExactly(json: string): unknown {
+  let rewritten = '';
+  let copied = 0;
+  scanJson(json, {
+    onNumber(literal, index) {
+      if (isUnsafeJsonNumber(literal)) {
+        rewritten += `${json.slice(copied, index)}"${literal}"`;
+        copied = index + literal.length;
+      }
+    },
+  });
+  return JSON.parse(rewritten + json.slice(copied)) as unknown;
+}
+
+function scanJson(
+  json: string,
+  handlers: {
+    onNumber: (literal: string, index: number) => void;
+    onOpen?: () => void;
+    onClose?: () => void;
+  }
+): void {
+  const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 
   for (let index = 0; index < json.length;) {
     const char = json[index];
@@ -170,15 +215,12 @@ function validateRawJson(json: string, context: 'parameter' | 'batch file'): voi
     }
 
     if (char === '[' || char === '{') {
-      depth++;
-      if (depth > MAX_RPC_JSON_DEPTH) {
-        throw new Error(`JSON ${context} is nested more than ${MAX_RPC_JSON_DEPTH} levels deep.`);
-      }
+      handlers.onOpen?.();
       index++;
       continue;
     }
     if (char === ']' || char === '}') {
-      depth--;
+      handlers.onClose?.();
       index++;
       continue;
     }
@@ -190,15 +232,13 @@ function validateRawJson(json: string, context: 'parameter' | 'batch file'): voi
       continue;
     }
 
-    const literal = match[0];
-    if (!isExactJsonNumber(literal) || exceedsSafeIntegerMagnitude(literal)) {
-      throw new Error(
-        `Unsafe numeric literal in JSON ${context}: ${literal}. ` +
-        'Quote it as a string or use a chain-native hex quantity.'
-      );
-    }
-    index += literal.length;
+    handlers.onNumber(match[0], index);
+    index += match[0].length;
   }
+}
+
+function isUnsafeJsonNumber(literal: string): boolean {
+  return !isExactJsonNumber(literal) || exceedsSafeIntegerMagnitude(literal);
 }
 
 // JSON.stringify writes the shortest decimal that round-trips the parsed
@@ -434,18 +474,13 @@ function truncateForDisplay(text: string): string {
 
 function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
   const c = getChalk();
-  const body = result.body;
 
-  if (format === 'json') {
-    console.log(JSON.stringify(body, null, 2));
+  if (format === 'json' || format === 'raw') {
+    process.stdout.write(result.text.endsWith('\n') ? result.text : `${result.text}\n`);
     return;
   }
 
-  if (format === 'raw') {
-    console.log(JSON.stringify(body));
-    return;
-  }
-
+  const body = parseJsonExactly(result.text);
   const items: unknown[] = Array.isArray(body) ? body : [body];
   const multiple = Array.isArray(body);
   if (multiple && items.length === 0) {
