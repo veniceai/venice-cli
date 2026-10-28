@@ -285,7 +285,36 @@ function writeHistoryFile(history: ConversationEntry[]): void {
 
 export function loadHistory(): ConversationEntry[] {
   ensureConfigDir();
-  return readHistoryFile();
+  return removeOlderPrivateConversations(readHistoryFile());
+}
+
+// Older builds saved E2EE and TEE chats here, without a privacy field; drop
+// them the first time this version loads history.
+function removeOlderPrivateConversations(history: ConversationEntry[]): ConversationEntry[] {
+  const kept = history.filter((entry) => !isPrivateModeConversation(entry));
+  const removed = history.length - kept.length;
+  if (removed === 0) return history;
+
+  const count = `${removed} private-mode conversation${removed === 1 ? '' : 's'}`;
+  try {
+    writeHistoryFile(kept);
+    console.error(`Removed ${count} saved by an older version from ${HISTORY_FILE}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `Warning: could not remove ${count} saved by an older version from ${HISTORY_FILE}: ${message}\n` +
+      'Run "venice history clear" to delete all saved history.'
+    );
+  }
+  return kept;
+}
+
+function isPrivateModeConversation(entry: ConversationEntry): boolean {
+  if (typeof entry.privacy === 'string') {
+    return entry.privacy === 'e2ee' || entry.privacy === 'tee';
+  }
+  const model = entry.model.toLowerCase();
+  return model.includes('e2ee') || model.startsWith('tee-') || model.includes('-tee');
 }
 
 export function saveHistory(history: ConversationEntry[]): void {
