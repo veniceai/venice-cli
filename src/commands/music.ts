@@ -13,12 +13,19 @@ import {
   retrieveGeneratedAudio,
   type AudioProcessingStatus,
 } from '../lib/api.js';
+import {
+  DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+  classifyJobStatus,
+  colorForJobStatus,
+  waitForJobStatus,
+} from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeResponseToFile } from '../lib/media.js';
 import { detectOutputFormat, formatError, formatSuccess, getChalk } from '../lib/output.js';
 import type { Model } from '../types/index.js';
 
 const DEFAULT_MUSIC_MODEL = 'elevenlabs-music';
-const POLL_INTERVAL_MS = 5000;
+
+type MusicJobStatus = AudioProcessingStatus & { content_type?: string; size_bytes?: number };
 
 function positiveInteger(value: string | undefined, label: string): number | undefined {
   if (value === undefined) return undefined;
@@ -41,12 +48,7 @@ function extensionForContentType(contentType: string): string {
 
 function printProcessingStatus(status: AudioProcessingStatus): void {
   const c = getChalk();
-  const normalized = status.status.toLowerCase();
-  const color = normalized === 'failed'
-    ? c.red
-    : normalized === 'processing' || normalized === 'queued'
-      ? c.blue
-      : c.green;
+  const color = colorForJobStatus(status.status, c);
 
   console.log(`${c.dim('Status:')} ${color(status.status)}`);
   if (status.average_execution_time !== undefined) {
@@ -147,48 +149,69 @@ export function registerMusicCommands(program: Command): void {
     .description('Check the status of an audio generation job')
     .option('-m, --model <model>', 'Model used for generation', DEFAULT_MUSIC_MODEL)
     .option('-w, --wait', 'Wait for completion (poll every 5s)')
+    .option(
+      '-t, --timeout <seconds>',
+      'Maximum time to wait in seconds',
+      String(DEFAULT_JOB_WAIT_TIMEOUT_SECONDS)
+    )
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (queueId: string, options) => {
       const format = detectOutputFormat(options.format);
 
-      try {
-        while (true) {
-          const result = await retrieveGeneratedAudio(queueId, options.model);
-
-          if (result.kind === 'audio') {
-            await result.response.body?.cancel();
-            const completed = {
-              status: 'COMPLETED',
-              content_type: result.contentType,
-              size_bytes: result.sizeBytes,
-            };
-            if (format === 'json') {
-              console.log(JSON.stringify(completed, null, 2));
-            } else {
-              printProcessingStatus(completed);
-              console.log(
-                `${getChalk().dim('Download with:')} venice music retrieve ${queueId} -m ${options.model}`
-              );
-            }
-            return;
-          }
-
-          const isPending = ['processing', 'queued'].includes(result.status.status.toLowerCase());
-          if (!options.wait || !isPending) {
-            if (format === 'json') {
-              console.log(JSON.stringify(result.status, null, 2));
-            } else {
-              printProcessingStatus(result.status);
-            }
-            return;
-          }
-
-          if (format !== 'json') {
-            printProcessingStatus(result.status);
-            console.log(getChalk().dim('Waiting...'));
-          }
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+      const fetchStatus = async (): Promise<MusicJobStatus> => {
+        const result = await retrieveGeneratedAudio(queueId, options.model);
+        if (result.kind === 'processing') {
+          return result.status;
         }
+
+        await result.response.body?.cancel();
+        return {
+          status: 'COMPLETED',
+          content_type: result.contentType,
+          size_bytes: result.sizeBytes,
+        };
+      };
+
+      const printStatus = (status: MusicJobStatus): void => {
+        if (format === 'json') {
+          console.log(JSON.stringify(status, null, 2));
+          return;
+        }
+
+        printProcessingStatus(status);
+        if (classifyJobStatus(status.status) === 'completed') {
+          console.log(
+            `${getChalk().dim('Download with:')} venice music retrieve ${queueId} -m ${options.model}`
+          );
+        }
+      };
+
+      try {
+        if (!options.wait) {
+          printStatus(await fetchStatus());
+          return;
+        }
+
+        const timeoutSeconds = Number(options.timeout);
+        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+          throw new Error('--timeout must be a positive number of seconds.');
+        }
+
+        const status = await waitForJobStatus(fetchStatus, {
+          label: 'audio generation',
+          timeoutMs: timeoutSeconds * 1000,
+          onPoll: format === 'json' ? undefined : current => {
+            printProcessingStatus(current);
+            console.log(getChalk().dim('Waiting...'));
+          },
+        });
+        const exitCode = classifyJobStatus(status.status) === 'completed' ? 0 : 1;
+
+        printStatus(status);
+        if (exitCode !== 0 && format !== 'json' && !status.error) {
+          console.error(formatError(`Audio generation ended with status "${status.status}".`));
+        }
+        process.exitCode = exitCode;
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);

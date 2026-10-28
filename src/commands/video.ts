@@ -28,6 +28,13 @@ import {
 } from '../lib/media.js';
 import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
 import {
+  DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+  classifyJobStatus,
+  jobPollIntervalMs,
+  waitForJobStatus,
+  type JobStatusPhase,
+} from '../lib/job-status.js';
+import {
   formatSuccess,
   formatError,
   getChalk,
@@ -44,10 +51,7 @@ export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: stri
   { id: 'topaz-video-upscale', name: 'Topaz Video Upscale', type: 'upscale' },
 ];
 
-const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = 600;
-const VIDEO_STATUS_POLL_INTERVAL_MS = 5000;
-
-type VideoStatusPhase = 'processing' | 'completed' | 'failed' | 'other';
+const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = DEFAULT_JOB_WAIT_TIMEOUT_SECONDS;
 
 export function isPublicHttpUrl(value: string): boolean {
   try {
@@ -81,65 +85,20 @@ export function videoModelKind(id: string): string {
   return 'video';
 }
 
-export function classifyVideoStatus(status: string): VideoStatusPhase {
-  const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, '_');
+export const classifyVideoStatus = classifyJobStatus;
 
-  if (['processing', 'pending', 'queued', 'in_progress'].includes(normalized)) {
-    return 'processing';
-  }
-  if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(normalized)) {
-    return 'completed';
-  }
-  if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(normalized)) {
-    return 'failed';
-  }
-  return 'other';
-}
-
-export async function waitForVideoStatus(
+export function waitForVideoStatus(
   fetchStatus: () => Promise<VideoStatusResult>,
   timeoutMs: number,
-  pollIntervalMs = VIDEO_STATUS_POLL_INTERVAL_MS,
+  pollIntervalMs = jobPollIntervalMs(),
   onPoll?: (status: VideoStatusResult) => void
 ): Promise<VideoStatusResult> {
-  const deadline = Date.now() + timeoutMs;
-  const timeoutError = () =>
-    new Error(`Timed out waiting for video generation after ${Math.ceil(timeoutMs / 1000)} seconds.`);
-
-  const fetchBeforeDeadline = async (): Promise<VideoStatusResult> => {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw timeoutError();
-    }
-
-    let timeoutId: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        fetchStatus(),
-        new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => reject(timeoutError()), remainingMs);
-        }),
-      ]);
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  };
-
-  let status = await fetchBeforeDeadline();
-  while (classifyVideoStatus(status.status) === 'processing') {
-    onPoll?.(status);
-
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw timeoutError();
-    }
-    await new Promise(resolve => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
-    status = await fetchBeforeDeadline();
-  }
-
-  return status;
+  return waitForJobStatus(fetchStatus, {
+    label: 'video generation',
+    timeoutMs,
+    pollIntervalMs,
+    onPoll,
+  });
 }
 
 function downloadVideoFromUrl(url: string, outputPath: string) {
@@ -293,7 +252,7 @@ export function registerVideoCommands(program: Command): void {
           return;
         }
 
-        const statusColors: Record<VideoStatusPhase, (s: string) => string> = {
+        const statusColors: Record<JobStatusPhase, (s: string) => string> = {
           processing: c.blue,
           completed: c.green,
           failed: c.red,
@@ -331,7 +290,7 @@ export function registerVideoCommands(program: Command): void {
           const status = await waitForVideoStatus(
             () => getVideoStatus(queueId, options.model),
             timeoutSeconds * 1000,
-            VIDEO_STATUS_POLL_INTERVAL_MS,
+            jobPollIntervalMs(),
             format === 'json' ? undefined : currentStatus => {
               const elapsed = currentStatus.execution_duration
                 ? `${Math.ceil(currentStatus.execution_duration / 1000)}s`
@@ -519,7 +478,7 @@ export function registerVideoCommands(program: Command): void {
         const status = await waitForVideoStatus(
           () => getVideoStatus(queued.queue_id, queued.model),
           DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS * 1000,
-          VIDEO_STATUS_POLL_INTERVAL_MS,
+          jobPollIntervalMs(),
           format === 'json' ? undefined : current => {
             console.log(`Status: ${current.status} - waiting...`);
           }
