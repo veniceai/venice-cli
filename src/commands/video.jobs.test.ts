@@ -58,11 +58,13 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 function runCli(
   args: string[],
   dir: string,
-  apiOrigin: string
+  apiOrigin: string,
+  env: NodeJS.ProcessEnv = {}
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: dir,
+      timeout: 10_000,
       env: {
         ...process.env,
         HOME: dir,
@@ -70,6 +72,7 @@ function runCli(
         NO_COLOR: '1',
         VENICE_API_KEY: 'test-key',
         VENICE_API_BASE_URL: `${apiOrigin}/api/v1`,
+        ...env,
       },
     });
     let stdout = '';
@@ -250,6 +253,32 @@ test('video status --wait exits 1 unless the job completes, in every output form
     const unknown = await runCli([...wait, '-f', 'pretty'], dir, stub.origin);
     assert.equal(unknown.status, 1);
     assert.match(unknown.stderr, /Video generation ended with status "MYSTERY"/);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video status --wait prints the status it waited for without fetching it again', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const responses: Array<Record<string, string>> = [
+    { status: 'PROCESSING' },
+    { status: 'PROCESSING' },
+    { status: 'completed' },
+  ];
+  const stub = await startStub({
+    'POST /api/v1/video/retrieve': (_request, response) =>
+      sendJson(response, responses.shift() ?? { status: 'failed', error: 'status fetched again' }),
+  });
+  try {
+    const result = await runCli(
+      ['video', 'status', 'q1', '-m', 'test-model', '--wait', '-f', 'json'],
+      dir,
+      stub.origin,
+      { VENICE_TEST_POLL_INTERVAL_MS: '50' }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { status: 'completed' });
+    assert.equal(stub.count('POST /api/v1/video/retrieve'), 3);
   } finally {
     await stub.close();
   }
