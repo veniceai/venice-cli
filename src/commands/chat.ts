@@ -23,12 +23,15 @@ import {
 import {
   formatUsage,
   formatError,
+  formatJson,
   formatWarning,
   getChalk,
   startSpinner,
   clearSpinner,
   detectOutputFormat,
   isPiped,
+  terminalFilter,
+  terminalSafe,
 } from '../lib/output.js';
 import {
   generateEphemeralKeyPair,
@@ -617,6 +620,7 @@ interface ThinkingState {
   inThinkingBlock: boolean;
   thinkingBuffer: string; // Buffer content inside <think> until we see </think>
   tagBuffer: string; // Buffer for partial tags
+  display: (text: string) => string; // Makes streamed model text safe for stdout
 }
 
 function processThinkingContent(
@@ -626,7 +630,7 @@ function processThinkingContent(
   chalk: ReturnType<typeof getChalk>
 ): { output: string; state: ThinkingState } {
   let output = '';
-  let text = state.tagBuffer + content;
+  let text = state.tagBuffer + state.display(content);
   let { inThinkingBlock, thinkingBuffer } = state;
   let tagBuffer = '';
 
@@ -688,7 +692,7 @@ function processThinkingContent(
 
   return {
     output,
-    state: { inThinkingBlock, thinkingBuffer, tagBuffer },
+    state: { inThinkingBlock, thinkingBuffer, tagBuffer, display: state.display },
   };
 }
 
@@ -774,10 +778,10 @@ function outputStructuredResponse(
   }
 
   if (format === 'raw') {
-    console.log(JSON.stringify(parsed));
+    console.log(formatJson(parsed, 0));
     return;
   }
-  console.log(JSON.stringify(parsed, null, 2));
+  console.log(formatJson(parsed));
 }
 
 export async function streamChat(
@@ -832,6 +836,7 @@ export async function streamChat(
         inThinkingBlock: false,
         thinkingBuffer: '',
         tagBuffer: '',
+        display: terminalFilter(),
       };
       const messagesToSend = e2eeContext
         ? encryptMessagesForE2EE(messages, e2eeContext.modelPublicKey)
@@ -842,9 +847,8 @@ export async function streamChat(
       for await (const chunk of completionStream(messagesToSend, streamOptions)) {
         if (chunk.reasoning_content && !stripThinking && !e2eeContext && format !== 'json') {
           if (spinner) clearSpinner();
-          process.stdout.write(
-            format === 'pretty' ? c.dim(chunk.reasoning_content) : chunk.reasoning_content
-          );
+          const reasoning = thinkingState.display(chunk.reasoning_content);
+          process.stdout.write(format === 'pretty' ? c.dim(reasoning) : reasoning);
         }
         if (chunk.content) {
           if (spinner) clearSpinner();
@@ -898,7 +902,7 @@ export async function streamChat(
         appendAssistantReply(messages, roundContent);
         if (format === 'json') {
           const content = stripThinking ? stripThinkingForContext(roundContent) : roundContent;
-          console.log(JSON.stringify({ content }, null, 2));
+          console.log(formatJson({ content }));
         }
         break;
       }
@@ -1171,7 +1175,7 @@ function outputChatText(
 ): void {
   if (reasoningContent && !extras.stripThinking && format === 'pretty') {
     const c = getChalk();
-    console.log(c.dim('💭 ' + reasoningContent.trim()));
+    console.log(c.dim('💭 ' + terminalSafe(reasoningContent.trim())));
   }
   outputResponse(content, format);
 }
@@ -1179,15 +1183,15 @@ function outputChatText(
 function outputResponse(content: string, format: OutputFormat): void {
   switch (format) {
     case 'json':
-      console.log(JSON.stringify({ content }, null, 2));
+      console.log(formatJson({ content }));
       break;
     case 'raw':
     case 'markdown':
-      console.log(content);
+      console.log(terminalSafe(content));
       break;
     case 'pretty':
     default:
-      console.log(content);
+      console.log(terminalSafe(content));
       break;
   }
 }

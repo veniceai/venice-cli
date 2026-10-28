@@ -6,8 +6,10 @@ import { Command } from 'commander';
 import { listModels } from '../lib/api.js';
 import {
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 import type { Model } from '../types/index.js';
 
@@ -55,7 +57,7 @@ export function registerModelsCommand(program: Command): void {
         models.sort((a: Model, b: Model) => (a.id || '').localeCompare(b.id || ''));
 
         if (format === 'json') {
-          console.log(JSON.stringify(models, null, 2));
+          console.log(formatJson(models));
           return;
         }
 
@@ -75,10 +77,10 @@ export function registerModelsCommand(program: Command): void {
 
           for (const model of typeModels) {
             const privacy = isPrivacyPreserving(model) ? c.green('🔒') : c.dim('📊');
-            console.log(`  ${privacy} ${c.cyan(model.id)}`);
+            console.log(`  ${privacy} ${c.cyan(terminalSafe(model.id))}`);
             
             if (model.model_spec?.description) {
-              const desc = model.model_spec.description;
+              const desc = terminalSafe(model.model_spec.description);
               const indent = '     ';
               const maxWidth = Math.max(60, (process.stdout.columns || 80) - indent.length - 2);
               const wrapped = wrapText(desc, maxWidth);

@@ -9,8 +9,10 @@ import { writeOutputFile } from '../lib/safe-write.js';
 import {
   detectOutputFormat,
   formatError,
+  formatJson,
   formatSuccess,
   getChalk,
+  terminalSafe,
 } from '../lib/output.js';
 
 export function registerAugmentCommands(program: Command): void {
@@ -26,7 +28,7 @@ export function registerAugmentCommands(program: Command): void {
       try {
         const result = await parseDocument(resolvedPath);
         const output = format === 'json'
-          ? JSON.stringify(result, null, 2)
+          ? formatJson(result)
           : result.text;
 
         if (options.output) {
@@ -35,9 +37,9 @@ export function registerAugmentCommands(program: Command): void {
           return;
         }
 
-        console.log(output);
+        console.log(terminalSafe(output));
         if (format === 'pretty') {
-          console.log(getChalk().dim(`\nTokens: ${result.tokens}`));
+          console.log(getChalk().dim(`\nTokens: ${terminalSafe(result.tokens)}`));
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -57,7 +59,7 @@ export function registerAugmentCommands(program: Command): void {
         assertPublicWebUrl(url);
         const result = await scrapeWebPage(url);
         const output = format === 'json'
-          ? JSON.stringify(result, null, 2)
+          ? formatJson(result)
           : result.content;
 
         if (options.output) {
@@ -66,7 +68,7 @@ export function registerAugmentCommands(program: Command): void {
           return;
         }
 
-        console.log(output);
+        console.log(terminalSafe(output));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);

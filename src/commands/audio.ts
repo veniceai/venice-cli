@@ -15,8 +15,10 @@ import { getDefaultVoice } from '../lib/config.js';
 import {
   formatSuccess,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
 
@@ -96,12 +98,12 @@ export function registerAudioCommands(program: Command): void {
       try {
         const result = await cloneVoice(resolvedPath, { model: options.model });
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
           return;
         }
 
         console.log(formatSuccess(`Cloned voice: ${result.id}`));
-        console.log(`Model: ${result.model}`);
+        console.log(`Model: ${terminalSafe(result.model)}`);
         console.log(`Use: venice tts -m ${result.model} -v ${result.id} "Hello"`);
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -137,17 +139,17 @@ export function registerAudioCommands(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else if (format === 'raw') {
-          console.log(result.text);
+          console.log(terminalSafe(result.text));
         } else {
-          console.log(result.text);
+          console.log(terminalSafe(result.text));
           if (options.timestamps && result.timestamps) {
             console.log(`\n${c.dim('─'.repeat(50))}`);
             if (result.timestamps.segment) {
               console.log(c.bold('\nSegments:'));
               for (const seg of result.timestamps.segment) {
-                console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${seg.text}`);
+                console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${terminalSafe(seg.text)}`);
               }
             }
           }
@@ -187,7 +189,7 @@ export function registerAudioCommands(program: Command): void {
         );
 
         if (format === 'json') {
-          console.log(JSON.stringify(voices, null, 2));
+          console.log(formatJson(voices));
           return;
         }
 
@@ -200,16 +202,17 @@ export function registerAudioCommands(program: Command): void {
         for (const model of models) {
           const modelVoices = model.model_spec?.voices || [];
           const cloneLabel = model.model_spec?.voice_cloning
-            ? c.dim(` · cloning (${model.model_spec.voice_cloning.retention_days}-day handles)`)
+            ? c.dim(` · cloning (${terminalSafe(model.model_spec.voice_cloning.retention_days)}-day handles)`)
             : '';
-          console.log(`\n${c.bold(model.id)}${cloneLabel}`);
+          console.log(`\n${c.bold(terminalSafe(model.id))}${cloneLabel}`);
           if (modelVoices.length === 0) {
             console.log(c.dim('  No preset voices advertised.'));
             continue;
           }
-          console.log(modelVoices.map((voice) =>
-            voice === model.model_spec?.default_voice ? `${c.cyan(voice)} ${c.dim('(default)')}` : c.cyan(voice)
-          ).join(', '));
+          console.log(modelVoices.map((voice) => {
+            const name = c.cyan(terminalSafe(voice));
+            return voice === model.model_spec?.default_voice ? `${name} ${c.dim('(default)')}` : name;
+          }).join(', '));
         }
 
         console.log(`\n${c.dim('Usage: venice tts -m <model> -v <voice> "Hello world"')}`);
