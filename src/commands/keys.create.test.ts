@@ -106,7 +106,7 @@ test('keys create says the key may exist after a truncated response without echo
   });
 
   assertKeyMayExist(result);
-  assert.match(result.stderr, /No valid response was received/);
+  assert.match(result.stderr, /may already have been processed, so it was not retried/);
   assert.doesNotMatch(result.stderr, /venice-secret/);
   assert.deepEqual(result.methods, ['POST']);
   assert.equal(result.secretSaved, false);
