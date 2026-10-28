@@ -12,6 +12,7 @@ import type { Message, Model } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const MODEL = 'e2ee-test-model';
+const BANNER = /Response decrypted end-to-end/;
 const DEBUG_TD_ATTRIBUTES = Buffer.from([0x01, 0, 0, 0, 0, 0, 0, 0]);
 
 const enclave = generateEphemeralKeyPair();
@@ -174,6 +175,31 @@ async function runChat(args: string[], stub: Stub = {}): Promise<ChatRun> {
   }
 }
 
+function tamperLastHexDigit(ciphertext: string): string {
+  const last = ciphertext.at(-1) === '0' ? '1' : '0';
+  return ciphertext.slice(0, -1) + last;
+}
+
+test('E2EE chat encrypts every user and system message to the attested key', async () => {
+  const result = await runChat(['--model', MODEL, '-s', 'SYSTEM-SECRET', 'USER-SECRET']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'Hello from the enclave\n');
+  assert.equal(result.completions.length, 1);
+  const [request] = result.completions;
+  assert.deepEqual(request.body.messages.map((message) => message.role), ['system', 'user']);
+  assert.deepEqual(
+    request.body.messages.map((message) => decryptChunk(String(message.content), enclave.privateKey)),
+    ['SYSTEM-SECRET', 'USER-SECRET']
+  );
+  assert.doesNotMatch(request.raw, /SYSTEM-SECRET|USER-SECRET/);
+  assert.equal(request.body.venice_parameters?.enable_e2ee, true);
+  assert.match(String(request.headers['x-venice-tee-client-pub-key']), /^04[0-9a-f]{128}$/);
+  assert.equal(request.headers['x-venice-tee-signing-algo'], 'ecdsa');
+  assert.equal(request.headers['x-venice-tee-model-pub-key'], enclave.publicKeyHex);
+  assert.equal(result.history, undefined);
+});
+
 test('E2EE chat prints the decrypted banner only after a complete reply', async () => {
   const result = await runChat(['--model', MODEL, '-f', 'pretty', 'hello']);
 
@@ -182,6 +208,86 @@ test('E2EE chat prints the decrypted banner only after a complete reply', async 
   assert.match(result.stdout, /Server attestation report passed the CLI's consistency checks/);
   assert.match(result.stdout, /quote signature and enclave measurements are not verified client-side/);
   assert.doesNotMatch(result.stdout, /TEE attestation verified/);
+});
+
+test('E2EE chat stops at a plaintext chunk and exits 1 without the banner', async () => {
+  const result = await runChat(['--model', MODEL, '-f', 'pretty', 'hello'], {
+    reply: (clientPublicKey) => [
+      frame({ content: encryptMessage('Hello ', clientPublicKey) }),
+      frame({ content: 'INJECTED ' }),
+      frame({ content: encryptMessage('world', clientPublicKey) }),
+      FINISH,
+      DONE,
+    ],
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Hello /);
+  assert.doesNotMatch(result.stdout, /INJECTED|world/);
+  assert.doesNotMatch(result.stdout, BANNER);
+  assert.match(result.stderr, /E2EE response rejected: a response chunk was not encrypted/);
+});
+
+test('E2EE chat stops at a chunk that fails to decrypt and exits 1 without the banner', async () => {
+  const stranger = generateEphemeralKeyPair();
+  const badChunks: Record<string, (clientPublicKey: string) => string> = {
+    'a tampered GCM tag': (clientPublicKey) => tamperLastHexDigit(encryptMessage('world', clientPublicKey)),
+    'a chunk for another client key': () => encryptMessage('world', stranger.publicKeyHex),
+    'an odd-length hex chunk': (clientPublicKey) => `${encryptMessage('world', clientPublicKey)}0`,
+  };
+
+  for (const [label, badChunk] of Object.entries(badChunks)) {
+    const result = await runChat(['--model', MODEL, '-f', 'pretty', 'hello'], {
+      reply: (clientPublicKey) => [
+        frame({ content: encryptMessage('Hello ', clientPublicKey) }),
+        frame({ content: badChunk(clientPublicKey) }),
+        frame({ content: encryptMessage('again', clientPublicKey) }),
+        FINISH,
+        DONE,
+      ],
+    });
+
+    assert.equal(result.status, 1, label);
+    assert.match(result.stdout, /Hello /, label);
+    assert.doesNotMatch(result.stdout, /world|again/, label);
+    assert.doesNotMatch(result.stdout, BANNER, label);
+    assert.match(result.stderr, /E2EE response rejected: a response chunk (could not be decrypted|was not encrypted)/, label);
+  }
+});
+
+test('E2EE chat rejects a stream that ends without a finish reason', async () => {
+  for (const format of ['pretty', 'raw', 'json']) {
+    const result = await runChat(['--model', MODEL, '-f', format, 'hello'], {
+      reply: (clientPublicKey) => [
+        frame({ content: encryptMessage('Hello ', clientPublicKey) }),
+        frame({ content: encryptMessage('from the enclave', clientPublicKey) }),
+        DONE,
+      ],
+    });
+
+    assert.equal(result.status, 1, format);
+    assert.doesNotMatch(result.stdout, BANNER, format);
+    assert.match(result.stderr, /E2EE response rejected: the stream ended without a finish reason/, format);
+    if (format === 'json') assert.equal(result.stdout, '');
+  }
+});
+
+test('E2EE chat sends exactly one completion request when the stream asks for tools', async () => {
+  const result = await runChat(['--model', MODEL, '--tools', 'calculator', 'hello'], {
+    reply: (clientPublicKey) => [
+      frame({ content: encryptMessage('done', clientPublicKey) }),
+      frame(
+        { tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'calculator', arguments: '{"expression":"6*7"}' } }] },
+        'tool_calls'
+      ),
+      DONE,
+    ],
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'done\n');
+  assert.equal(result.completions.length, 1);
+  assert.equal(result.completions[0].body.tools, undefined);
 });
 
 test('an e2ee model id fails closed when the catalog does not advertise supportsE2EE', async () => {

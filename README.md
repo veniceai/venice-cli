@@ -745,7 +745,7 @@ E2EE is the strongest privacy mode the CLI offers. The CLI uses it when the mode
 1. The CLI fetches the server's attestation report and checks it (see [TEE Attestation](#tee-attestation))
 2. An ephemeral key pair is generated for the session
 3. All messages are encrypted client-side using ECDH + AES-GCM to the enclave key named in the attestation report
-4. Responses are encrypted and decrypted client-side
+4. Responses are decrypted client-side as they stream. If a chunk is not encrypted or fails to decrypt, or the stream ends without a finish reason, output stops and the command exits with an error. "Response decrypted end-to-end" appears only after a complete reply
 
 ```bash
 # List E2EE-capable models

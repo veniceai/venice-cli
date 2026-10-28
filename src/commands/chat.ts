@@ -190,6 +190,24 @@ function buildE2EEHeaders(context: E2EEContext): Record<string, string> {
   };
 }
 
+function rejectE2EEStream(reason: string, format: OutputFormat): never {
+  if (format === 'pretty') {
+    process.stdout.write('\n');
+  }
+  throw new Error(`E2EE response rejected: ${reason}`);
+}
+
+function decryptE2EEContent(content: string, privateKey: Uint8Array, format: OutputFormat): string {
+  if (!isHexEncrypted(content) || content.length % 2 !== 0) {
+    rejectE2EEStream('a response chunk was not encrypted. Output stopped at that chunk.', format);
+  }
+  try {
+    return decryptChunk(content, privateKey);
+  } catch {
+    rejectE2EEStream('a response chunk could not be decrypted. Output stopped at that chunk.', format);
+  }
+}
+
 function encryptMessagesForE2EE(
   messages: Message[],
   modelPublicKey: string
@@ -831,16 +849,10 @@ export async function streamChat(
         if (chunk.content) {
           if (spinner) clearSpinner();
 
-          // E2EE: Decrypt content if encrypted
-          let displayContent = chunk.content;
-          if (e2eeContext && isHexEncrypted(chunk.content)) {
-            try {
-              displayContent = decryptChunk(chunk.content, e2eeContext.privateKey);
-            } catch (decryptError) {
-              console.error(c.red('\n[E2EE Decryption Error]'));
-              throw decryptError;
-            }
-          }
+          // E2EE: every content chunk must decrypt
+          const displayContent = e2eeContext
+            ? decryptE2EEContent(chunk.content, e2eeContext.privateKey, format)
+            : chunk.content;
 
           const { output, state: newState } = processThinkingContent(
             displayContent,
@@ -870,6 +882,9 @@ export async function streamChat(
         }
       }
       clearSpinner();
+      if (e2eeContext && !finishReason) {
+        rejectE2EEStream('the stream ended without a finish reason, so the reply may be incomplete.', format);
+      }
 
       const remaining = flushThinkingState(thinkingState, { strip: stripThinking, format }, c);
       if (remaining && format !== 'json') {

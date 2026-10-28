@@ -588,6 +588,7 @@ async function runE2EEChat(args: string[], replyChunks: string[]) {
         const delta = { content: encryptMessage(text, clientPublicKey) };
         response.write(`data: ${JSON.stringify({ id: 'cmpl-1', choices: [{ delta }] })}\n\n`);
       }
+      response.write(`data: ${JSON.stringify({ id: 'cmpl-1', choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       response.end('data: [DONE]\n\n');
       return;
     }
@@ -665,6 +666,7 @@ test('streaming chat -f json buffers output and honours --strip-thinking', async
     async function* () {
       yield { content: encryptMessage('<think>plan</think>', clientKeys.publicKeyHex), done: false };
       yield { content: encryptMessage('answer', clientKeys.publicKeyHex), done: false };
+      yield { finish_reason: 'stop', done: false };
       yield { done: true };
     };
   const writes: string[] = [];
@@ -802,6 +804,7 @@ test('E2EE streaming strips server-side controls from the request', async () => 
     seenOptions = options as unknown as Record<string, unknown>;
     yield { reasoning_content: 'secret-reasoning', done: false };
     yield { content: encryptedContent, done: false };
+    yield { finish_reason: 'stop', done: false };
     yield { done: true };
   };
   const output: string[] = [];
