@@ -322,6 +322,9 @@ export const evaluateTEEAttestationPolicy = (
   }
 }
 
+export const ATTESTATION_SCOPE_NOTE =
+  'The Intel TDX quote signature and enclave measurements are not verified client-side.'
+
 const evaluateAttestationResponse = (attestation: TeeVerificationResult): string[] => {
   const failures: string[] = []
 

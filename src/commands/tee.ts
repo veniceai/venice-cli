@@ -18,8 +18,12 @@ import {
   evaluateE2EEAttestationPolicy,
   buildGpuAttestationCurl,
   buildTeeVerificationResult,
+  ATTESTATION_SCOPE_NOTE,
 } from '../lib/tee.js';
 import { deriveSigningAddressFromKey, recoverSignerAddress } from '../lib/e2ee.js';
+
+const VERIFY_SCOPE_NOTE =
+  `The attestation report is the server's own; the CLI checks it for internal consistency only. ${ATTESTATION_SCOPE_NOTE}`;
 
 export function registerTeeCommand(program: Command): void {
   const teeCommand = program
@@ -29,7 +33,7 @@ export function registerTeeCommand(program: Command): void {
   // venice tee attestation <model>
   teeCommand
     .command('attestation <model>')
-    .description('Fetch and display TEE attestation for a model')
+    .description("Fetch and display the server's TEE attestation report for a model")
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .option('--verbose', 'Show detailed TDX quote information')
     .action(async (modelId: string, options) => {
@@ -49,7 +53,7 @@ export function registerTeeCommand(program: Command): void {
         // Basic info
         console.log(`${c.dim('Model:')} ${response.model}`);
         console.log(`${c.dim('TEE Provider:')} ${response.tee_provider || 'Unknown'}`);
-        console.log(`${c.dim('Verified:')} ${response.verified ? c.green('✓ Yes') : c.red('✗ No')}`);
+        console.log(`${c.dim('Server Verified:')} ${response.verified ? c.green('✓ Yes') : c.red('✗ No')}`);
         console.log(`${c.dim('Nonce Match:')} ${response.nonce === clientNonce ? c.green('✓ Yes') : c.red('✗ No')}`);
 
         // Signing key info
@@ -133,6 +137,7 @@ export function registerTeeCommand(program: Command): void {
           console.log(`  ${c.dim('Duration:')} ${sv.verificationDurationMs}ms`);
         }
 
+        console.log(c.dim(`\n${ATTESTATION_SCOPE_NOTE}`));
         console.log('');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -143,7 +148,7 @@ export function registerTeeCommand(program: Command): void {
   // venice tee verify <model>
   teeCommand
     .command('verify <model>')
-    .description('Run full E2EE attestation policy verification')
+    .description("Check the server's attestation report against the E2EE policy")
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (modelId: string, options) => {
       const format = detectOutputFormat(options.format);
@@ -171,6 +176,7 @@ export function registerTeeCommand(program: Command): void {
                   hasIntelQuote: !!response.intel_quote,
                   hasNvidiaPayload: !!response.nvidia_payload,
                 },
+                note: VERIFY_SCOPE_NOTE,
               },
               null,
               2
@@ -183,9 +189,10 @@ export function registerTeeCommand(program: Command): void {
         console.log(`${c.dim('Model:')} ${modelId}`);
 
         if (policy.passed) {
-          console.log(`${c.bold(c.green('✓ PASSED'))} - Model attestation is valid for E2EE\n`);
+          console.log(`${c.bold(c.green('✓ PASSED'))} - The server's attestation report passed the E2EE policy checks\n`);
           console.log(`${c.dim('Signing Address:')} ${response.signing_address || 'N/A'}`);
           console.log(`${c.dim('TEE Provider:')} ${response.tee_provider || 'Unknown'}`);
+          console.log(c.dim(`\n${VERIFY_SCOPE_NOTE}`));
         } else {
           console.log(`${c.bold(c.red('✗ FAILED'))} - Attestation policy check failed\n`);
           console.log(c.red('Failures:'));

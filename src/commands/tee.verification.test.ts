@@ -137,3 +137,28 @@ test('tee verify reports a malformed NVIDIA payload as a policy failure', async 
   assert.equal(json.status, 1, json.stdout + json.stderr);
   assert.equal(JSON.parse(json.stdout).passed, false);
 });
+
+test('tee verify says a pass rests on the server report and is not verified client-side', async () => {
+  const routes = { '/tee/attestation': attestationRoute() };
+
+  const pretty = await runTee(['verify', MODEL], routes);
+  assert.equal(pretty.status, 0, pretty.stdout + pretty.stderr);
+  assert.match(pretty.stdout, /PASSED - The server's attestation report passed the E2EE policy checks/);
+  assert.match(pretty.stdout, /the CLI checks it for internal consistency only/);
+  assert.match(pretty.stdout, /quote signature and enclave measurements are not verified client-side/);
+  assert.doesNotMatch(pretty.stdout, /valid for E2EE/);
+
+  const json = await runTee(['verify', MODEL, '-f', 'json'], routes);
+  assert.equal(json.status, 0, json.stdout + json.stderr);
+  const report = JSON.parse(json.stdout);
+  assert.equal(report.passed, true);
+  assert.match(report.note, /not verified client-side/);
+});
+
+test('tee attestation labels the server verdict and says what is not verified client-side', async () => {
+  const result = await runTee(['attestation', MODEL], { '/tee/attestation': attestationRoute() });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /Server Verified: ✓ Yes/);
+  assert.match(result.stdout, /quote signature and enclave measurements are not verified client-side/);
+});

@@ -174,6 +174,16 @@ async function runChat(args: string[], stub: Stub = {}): Promise<ChatRun> {
   }
 }
 
+test('E2EE chat prints the decrypted banner only after a complete reply', async () => {
+  const result = await runChat(['--model', MODEL, '-f', 'pretty', 'hello']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Hello from the enclave[\s\S]*Response decrypted end-to-end/);
+  assert.match(result.stdout, /Server attestation report passed the CLI's consistency checks/);
+  assert.match(result.stdout, /quote signature and enclave measurements are not verified client-side/);
+  assert.doesNotMatch(result.stdout, /TEE attestation verified/);
+});
+
 const brokenAttestations: Array<[string, Record<string, unknown>, RegExp]> = [
   ['verified: false', { verified: false }, /did not report this attestation as verified/],
   ['a nonce that is not the client nonce', { nonce: 'f'.repeat(64) }, /nonce mismatch/],

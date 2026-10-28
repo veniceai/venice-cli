@@ -637,7 +637,7 @@ test('piped E2EE chat streams and prints only the decrypted reply', async () => 
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'Hello from the enclave\n');
-  assert.match(result.stderr, /TEE attestation verified/);
+  assert.match(result.stderr, /Server attestation report passed/);
   assert.ok(result.requests.includes('POST /api/v1/chat/completions'));
   assert.doesNotMatch(result.history ?? '', /from the enclave|hello/);
 });

@@ -144,6 +144,46 @@ async function runChat(
   }
 }
 
+test('TEE-only chat sends one request after a passing attestation and keeps no history', async () => {
+  const result = await runChat(['--model', TEE_MODEL, 'TEE-PROMPT']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `${REPLY}\n`);
+  assert.equal(result.attestationRequests, 1);
+  assert.equal(result.completions.length, 1);
+  const [request] = result.completions;
+  assert.equal(request.body.messages.at(-1)?.content, 'TEE-PROMPT');
+  assert.equal(request.headers['x-venice-tee-client-pub-key'], undefined);
+  assert.equal(result.history, undefined);
+});
+
+test('TEE-only status says what was checked and stays off stdout outside pretty output', async () => {
+  for (const format of ['raw', 'markdown']) {
+    const result = await runChat(['--model', TEE_MODEL, '-f', format, 'hello']);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${REPLY}\n`, format);
+    assert.match(result.stderr, /TEE mode: not end-to-end encrypted; Venice's proxy can read the prompt/, format);
+    assert.match(result.stderr, /not bound to this request/, format);
+    assert.match(result.stderr, /quote signature and enclave measurements are not verified client-side/, format);
+    assert.doesNotMatch(result.stderr, /TEE attestation verified|running in Trusted Execution Environment/, format);
+  }
+
+  const pretty = await runChat(['--model', TEE_MODEL, '-f', 'pretty', 'hello']);
+  assert.equal(pretty.status, 0, pretty.stderr);
+  assert.match(pretty.stdout, /TEE mode: not end-to-end encrypted[\s\S]*tee reply/);
+  assert.equal(pretty.stderr, '');
+
+  const quiet = await runChat(['--model', TEE_MODEL, '-q', 'hello']);
+  assert.equal(quiet.status, 0, quiet.stderr);
+  assert.equal(quiet.stdout, `${REPLY}\n`);
+  assert.equal(quiet.stderr, '');
+
+  const json = await runChat(['--model', TEE_MODEL, '-f', 'json', 'hello']);
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout), { content: REPLY });
+});
+
 const nvidiaPayload = JSON.stringify({ arch: 'HOPPER', evidence_list: [] });
 
 const brokenAttestations: Array<[string, Record<string, unknown>, RegExp]> = [

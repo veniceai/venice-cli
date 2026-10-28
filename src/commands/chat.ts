@@ -38,6 +38,7 @@ import {
   zeroFill,
 } from '../lib/e2ee.js';
 import {
+  ATTESTATION_SCOPE_NOTE,
   buildTeeVerificationResult,
   evaluateE2EEAttestationPolicy,
   evaluateTEEAttestationPolicy,
@@ -110,7 +111,8 @@ async function setupE2EE(
     if (!quiet) {
       // Raw output must carry only the decrypted reply.
       const status = format === 'pretty' ? console.log : console.error;
-      status(c.green('✓') + ' TEE attestation verified');
+      status(c.green('✓') + " Server attestation report passed the CLI's consistency checks");
+      status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
       if (showDetails && format === 'pretty') {
         console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
@@ -161,8 +163,11 @@ async function verifyTEEAttestation(
 
   // Show success message
   if (!quiet) {
-    console.log(c.cyan('🛡️  TEE model - running in Trusted Execution Environment'));
-    console.log(c.green('✓') + ' TEE attestation verified');
+    // Raw output must carry only the reply.
+    const status = format === 'pretty' ? console.log : console.error;
+    status(c.cyan("🛡️  TEE mode: not end-to-end encrypted; Venice's proxy can read the prompt"));
+    status("Server attestation report passed the CLI's consistency checks; it is not bound to this request");
+    status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
     if (showDetails && format === 'pretty') {
       console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
@@ -173,7 +178,7 @@ async function verifyTEEAttestation(
         console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
       }
     }
-    console.log('');
+    status('');
   }
 }
 

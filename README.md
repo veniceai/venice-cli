@@ -49,7 +49,7 @@ npx veniceai-cli chat 'Hello, world!'
 
 - 🤖 **Chat** with state-of-the-art AI models
 - 🔐 **End-to-End Encryption (E2EE)** for maximum privacy
-- 🛡️ **TEE Attestation** verification for trusted execution
+- 🛡️ **TEE Attestation** report checks before sending to TEE models
 - 🔍 **Web Search** with AI-powered synthesis
 - 📄 **Document Parsing** without model inference
 - 🌐 **Standalone Web Search & Scraping** for structured retrieval
@@ -423,16 +423,16 @@ instrumental mode.
 
 ### TEE Attestation
 
-Venice supports Trusted Execution Environment (TEE) attestation for models running in secure enclaves. This provides cryptographic proof that your data is processed in a trusted environment.
+Venice supports Trusted Execution Environment (TEE) attestation for models running in secure enclaves. The attestation report comes from Venice's API. The CLI checks it for internal consistency: the requested model, the echo of a fresh client nonce, the server's own verdict, debug mode, and the binding between the enclave signing key and the quote's REPORTDATA. The CLI does not yet verify the Intel TDX quote signature or the enclave measurements client-side, so a passing check rests on the server's report (see [#43](https://github.com/veniceai/venice-cli/issues/43)).
 
 ```bash
-# Fetch and display TEE attestation for a model
+# Fetch and display the server's attestation report for a model
 venice tee attestation tee-qwen3-5-122b-a10b
 
 # With verbose TDX quote details
 venice tee attestation --verbose tee-qwen3-5-122b-a10b
 
-# Run TEE attestation policy verification
+# Check the attestation report against the E2EE policy
 venice tee verify tee-qwen3-5-122b-a10b
 
 # Verify a response signature (requires completion ID from a previous request)
@@ -446,8 +446,8 @@ venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x12
 
 | Command | Description |
 |---------|-------------|
-| `attestation <model>` | Fetch and display TEE attestation report |
-| `verify <model>` | Run TEE attestation policy verification |
+| `attestation <model>` | Fetch and display the server's TEE attestation report |
+| `verify <model>` | Check the server's attestation report against the E2EE policy (internal consistency only) |
 | `signature <model> <id>` | Fetch and verify TEE response signature |
 
 ### Models
@@ -730,8 +730,8 @@ venice chat "Generate code" | pbcopy
 
 Venice CLI is designed with privacy in mind:
 
-- **End-to-End Encryption (E2EE)**: Messages encrypted client-side, decrypted only in the TEE—Venice cannot read your data
-- **TEE Attestation**: Cryptographically verify that models run in secure enclaves before sending data
+- **End-to-End Encryption (E2EE)**: Messages are encrypted client-side to the enclave key named in the server's attestation report, which the CLI checks for consistency but cannot yet verify independently (see [TEE Attestation](#tee-attestation))
+- **TEE Attestation**: Check the server's attestation report for consistency before sending data; the Intel TDX quote signature and enclave measurements are not yet verified client-side
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI doesn't collect or send usage data
 - **Local configuration**: API key stored locally with restricted permissions
@@ -742,11 +742,10 @@ Venice CLI is designed with privacy in mind:
 
 E2EE models provide the highest level of privacy. The CLI automatically detects E2EE support via model capabilities (not model names). When using an E2EE-capable model:
 
-1. The CLI fetches and verifies TEE attestation
+1. The CLI fetches the server's attestation report and checks it (see [TEE Attestation](#tee-attestation))
 2. An ephemeral key pair is generated for the session
-3. All messages are encrypted client-side using ECDH + AES-GCM
-4. Only the TEE enclave can decrypt and process your data
-5. Responses are encrypted and decrypted client-side
+3. All messages are encrypted client-side using ECDH + AES-GCM to the enclave key named in the attestation report
+4. Responses are encrypted and decrypted client-side
 
 ```bash
 # List E2EE-capable models
@@ -763,14 +762,14 @@ venice chat -m <e2ee-capable-model> --no-e2ee "TEE verified, not encrypted"
 
 ### TEE Models
 
-TEE (Trusted Execution Environment) models run in secure enclaves with cryptographic attestation. The CLI automatically verifies attestation for models with TEE support.
+TEE (Trusted Execution Environment) models run in secure enclaves, according to the server's attestation report. For models with TEE support, the CLI fetches that report and refuses to send the prompt if it fails the checks described in [TEE Attestation](#tee-attestation). TEE mode does not encrypt the prompt end to end: Venice's API proxy can read it, and the attestation is not bound to the request.
 
 ```bash
 # List TEE-capable models
 venice models --tee
 
-# Chat with TEE attestation verification
-venice chat -m <tee-capable-model> "Verified secure execution"
+# Chat in TEE mode (the attestation report is checked first)
+venice chat -m <tee-capable-model> "Hello from the command line"
 ```
 
 ## Environment Variables
