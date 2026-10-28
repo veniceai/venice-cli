@@ -198,8 +198,10 @@ export interface SignatureVerificationParams {
   signedText: string
   signatureHex: string
   expectedSigningAddress: string
+  /** The exact reply text, or the exact response the enclave hashed when expectedRequest is set. */
   expectedContent: string
-  expectedReasoningContent?: string
+  /** The exact request the enclave hashed. */
+  expectedRequest?: string
 }
 
 export interface SignatureVerificationResult {
@@ -207,14 +209,15 @@ export interface SignatureVerificationResult {
   error?: string
 }
 
-const normalizeTextForComparison = (text: string): string => text.trim().replace(/\s+/g, ' ')
+const sha256Hex = (text: string): string => bytesToHex(sha256(new TextEncoder().encode(text)))
 
 /**
- * Verify that the signature was created by the expected signing address.
- * This performs signer recovery and content matching.
+ * Verify that the signature was created by the expected signing address over exactly one payload:
+ * expectedContent itself or, when expectedRequest is set, the lower-case hex SHA-256 digests of
+ * expectedRequest and expectedContent joined by a colon.
  */
 export const verifySignature = (params: SignatureVerificationParams): SignatureVerificationResult => {
-  const { signedText, signatureHex, expectedSigningAddress, expectedContent, expectedReasoningContent } = params
+  const { signedText, signatureHex, expectedSigningAddress, expectedContent, expectedRequest } = params
 
   const expectedAddr = expectedSigningAddress.toLowerCase().replace(/^0x/, '')
   const recoveredAddress = recoverSignerAddress(signedText, signatureHex)
@@ -230,36 +233,19 @@ export const verifySignature = (params: SignatureVerificationParams): SignatureV
     }
   }
 
-  // Generate content variants for matching
-  const contentVariants = [expectedContent]
-  if (expectedReasoningContent) {
-    contentVariants.push(
-      expectedReasoningContent + expectedContent,
-      expectedContent + expectedReasoningContent,
-      expectedReasoningContent + '\n' + expectedContent,
-      expectedContent + '\n' + expectedReasoningContent,
-      expectedReasoningContent,
-    )
-  }
-
-  // Check for hash formats (hash pairs or single hash)
-  const hashPairRegex = /^([0-9a-f]{64}):([0-9a-f]{64})$/i
-  const singleHashRegex = /^[0-9a-f]{64}$/i
-
-  if (hashPairRegex.test(signedText) || singleHashRegex.test(signedText)) {
-    // Hash format detected - trust signer verification since the cryptographic chain is intact
+  if (expectedRequest !== undefined) {
+    if (signedText !== `${sha256Hex(expectedRequest)}:${sha256Hex(expectedContent)}`) {
+      return { verified: false, error: 'Signed hashes do not match the expected request and response' }
+    }
     return { verified: true }
   }
 
-  // Direct content matching
-  for (const variant of contentVariants) {
-    if (signedText === variant || normalizeTextForComparison(signedText) === normalizeTextForComparison(variant)) {
-      return { verified: true }
+  if (signedText !== expectedContent) {
+    return {
+      verified: false,
+      error: `Signed text does not match expected content (signed: ${signedText.length} chars, expected: ${expectedContent.length} chars)`,
     }
   }
 
-  return {
-    verified: false,
-    error: `Signed text does not match expected content (signed: ${signedText.length} chars, expected: ${expectedContent.length} chars)`,
-  }
+  return { verified: true }
 }
