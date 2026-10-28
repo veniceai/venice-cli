@@ -273,3 +273,52 @@ test('non-streaming chat output is sanitised on a terminal and unchanged when pi
     assert.deepEqual(JSON.parse(json.stdout), { content: `reply${PAYLOAD}` });
   }));
 });
+
+test('tee output on a terminal strips control sequences from server fields, and JSON escapes them', async () => {
+  const attestation = {
+    model: `model${PAYLOAD}`,
+    tee_provider: `provider${PAYLOAD}`,
+    verified: false,
+    signing_address: `address${PAYLOAD}`,
+    nvidia_payload: JSON.stringify({ arch: `arch${PAYLOAD}`, evidence_list: [] }),
+    server_verification: {
+      tdx: { valid: false, error: `tdx error ${PAYLOAD}` },
+      nvidia: { valid: false, error: `gpu error ${PAYLOAD}` },
+      verifiedAt: `time${PAYLOAD}`,
+      verificationDurationMs: `duration${PAYLOAD}`,
+    },
+  };
+  const signature = {
+    model: `model${PAYLOAD}`,
+    request_id: 'cmpl-1',
+    tee_provider: `provider${PAYLOAD}`,
+    tee_hardware: `hardware${PAYLOAD}`,
+    signing_address: `address${PAYLOAD}`,
+    text: `signed${PAYLOAD}`,
+    signature: `0x${'ab'.repeat(65)}`,
+    payload: { request_hash: `request${PAYLOAD}`, response_hash: `response${PAYLOAD}`, timestamp: `time${PAYLOAD}` },
+  };
+  const routes: Routes = {
+    'GET /tee/attestation': ok(attestation),
+    'GET /tee/signature': ok(signature),
+  };
+  await withApi(routes, (baseUrl) => withHome(async (home) => {
+    const cases: Array<[string[], number]> = [
+      [['tee', 'attestation', 'tee-model', '--verbose'], 0],
+      [['tee', 'verify', 'tee-model'], 1],
+      [['tee', 'signature', 'tee-model', 'cmpl-1'], 0],
+    ];
+    for (const [args, status] of cases) {
+      const label = args.join(' ');
+      const terminal = await runCli(args, { home, baseUrl, terminal: true });
+      assert.equal(terminal.status, status, `${label}: ${terminal.stderr}`);
+      assertClean(terminal.stdout, label);
+      assert.match(terminal.stdout, /link textsafetxt\.exe/, label);
+
+      const json = await runCli([...args, '-f', 'json'], { home, baseUrl });
+      assert.equal(json.status, status, `${label} -f json: ${json.stderr}`);
+      assertClean(json.stdout.replace(/\n/g, ''), `${label} -f json`);
+      JSON.parse(json.stdout);
+    }
+  }));
+});
