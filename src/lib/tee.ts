@@ -1,5 +1,7 @@
 import { bytesToHex, parseHex, verifyKeyBinding, deriveSigningAddressFromKey } from './e2ee.js'
 
+import type { TeeAttestationResponse } from './api.js'
+
 export const NRAS_ATTEST_URL = 'https://nras.attestation.nvidia.com/v3/attest/gpu'
 
 export type NvidiaEvidence = { certificate: string; evidence: string; arch: string }
@@ -67,7 +69,9 @@ export type ParsedTdxQuote = {
 
 export type TeeVerificationResult = {
   report: Record<string, unknown>
+  serverVerified: boolean
   nonce: string
+  clientNonce: string
   attestedModel: string
   evidencePresent: boolean
   signingAddress?: string
@@ -75,6 +79,7 @@ export type TeeVerificationResult = {
   intelQuote?: string
   parsedTdxQuote?: ParsedTdxQuote
   nvidiaPayload?: NvidiaPayload
+  nvidiaPayloadInvalid: boolean
   serverVerification?: ServerVerification
   teeProvider?: string
   fetchedAt: number
@@ -179,6 +184,8 @@ export const evaluateE2EEAttestationPolicy = (
   const { parsedTdxQuote, serverVerification, signingKey } = attestation
   const derivedSigningAddress = signingKey ? deriveSigningAddressFromKey(signingKey) : undefined
 
+  failures.push(...evaluateAttestationResponse(attestation))
+
   if (!attestation.evidencePresent) {
     failures.push('No attestation evidence was returned for this model.')
   }
@@ -261,6 +268,8 @@ export const evaluateTEEAttestationPolicy = (
   const failures: string[] = []
   const { parsedTdxQuote, serverVerification } = attestation
 
+  failures.push(...evaluateAttestationResponse(attestation))
+
   if (!attestation.evidencePresent) {
     failures.push('No attestation evidence was returned for this model.')
   }
@@ -310,6 +319,68 @@ export const evaluateTEEAttestationPolicy = (
   return {
     failures,
     passed: failures.length === 0,
+  }
+}
+
+const evaluateAttestationResponse = (attestation: TeeVerificationResult): string[] => {
+  const failures: string[] = []
+
+  if (!attestation.serverVerified) {
+    failures.push('The server did not report this attestation as verified.')
+  }
+
+  if (attestation.nonce !== attestation.clientNonce) {
+    failures.push('Attestation nonce mismatch: the response does not echo the nonce this client sent.')
+  }
+
+  if (attestation.nvidiaPayloadInvalid) {
+    failures.push('NVIDIA GPU attestation payload is not a valid JSON object.')
+  }
+
+  return failures
+}
+
+const stringField = (value: unknown): string | undefined =>
+  value === undefined || value === null || value === '' ? undefined : String(value)
+
+const parseNvidiaPayload = (payload: string): NvidiaPayload | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(payload)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as NvidiaPayload) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Collect the attestation fields that the policies check.
+ */
+export const buildTeeVerificationResult = (
+  response: TeeAttestationResponse,
+  clientNonce: string,
+  modelId: string,
+): TeeVerificationResult => {
+  const intelQuote = stringField(response.intel_quote)
+  const rawNvidiaPayload = stringField(response.nvidia_payload)
+  const nvidiaPayload = rawNvidiaPayload ? parseNvidiaPayload(rawNvidiaPayload) : undefined
+
+  return {
+    report: response as Record<string, unknown>,
+    serverVerified: response.verified === true,
+    nonce: response.nonce,
+    clientNonce,
+    attestedModel: response.model,
+    evidencePresent: !!intelQuote || !!rawNvidiaPayload,
+    signingAddress: stringField(response.signing_address),
+    signingKey: stringField(response.signing_key) ?? stringField(response.signing_public_key),
+    intelQuote,
+    parsedTdxQuote: intelQuote ? parseTdxQuote(intelQuote) : undefined,
+    nvidiaPayload,
+    nvidiaPayloadInvalid: !!rawNvidiaPayload && !nvidiaPayload,
+    serverVerification: response.server_verification,
+    teeProvider: response.tee_provider,
+    fetchedAt: Date.now(),
+    attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
   }
 }
 

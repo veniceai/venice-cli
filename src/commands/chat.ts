@@ -38,8 +38,7 @@ import {
   zeroFill,
 } from '../lib/e2ee.js';
 import {
-  parseTdxQuote,
-  isTdDebugMode,
+  buildTeeVerificationResult,
   evaluateE2EEAttestationPolicy,
   evaluateTEEAttestationPolicy,
   type TeeVerificationResult,
@@ -96,55 +95,14 @@ async function setupE2EE(
   const c = getChalk();
 
   try {
-    // Generate ephemeral key pair
-    const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
-
     // Fetch attestation (spinner controlled by quiet flag)
     const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
-
-    // Validate attestation
-    if (response.verified !== true) {
-      throw new Error('TEE attestation verification failed on server');
-    }
-
-    if (response.nonce !== clientNonce) {
-      throw new Error('Attestation nonce mismatch - possible replay attack');
-    }
-
-    // Parse TDX quote
-    const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
-
-    // Check for debug mode
-    if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
-      throw new Error('TDX debug mode detected - cannot trust enclave for E2EE');
-    }
-
-    // Get signing key
-    const signingKey = response.signing_key || response.signing_public_key;
-    if (!signingKey) {
-      throw new Error('No signing key in attestation response');
-    }
-
-    // Build verification result for policy evaluation
-    const attestation: TeeVerificationResult = {
-      report: response as Record<string, unknown>,
-      nonce: response.nonce,
-      attestedModel: response.model,
-      evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
-      signingAddress: response.signing_address,
-      signingKey,
-      intelQuote: response.intel_quote,
-      parsedTdxQuote,
-      nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
-      serverVerification: response.server_verification,
-      teeProvider: response.tee_provider,
-      fetchedAt: Date.now(),
-      attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
-    };
+    const attestation = buildTeeVerificationResult(response, clientNonce, modelId);
+    const { parsedTdxQuote, signingKey } = attestation;
 
     // Evaluate policy
     const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
-    if (!policy.passed) {
+    if (!policy.passed || !signingKey) {
       throw new Error(`E2EE attestation policy failed: ${policy.failures.join('; ')}`);
     }
 
@@ -165,6 +123,9 @@ async function setupE2EE(
         console.log('');
       }
     }
+
+    // Generate ephemeral key pair
+    const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
 
     return {
       privateKey,
@@ -190,40 +151,8 @@ async function verifyTEEAttestation(
 
   // Fetch and verify attestation
   const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
-
-  // Validate attestation
-  if (response.verified !== true) {
-    throw new Error('TEE attestation verification failed on server');
-  }
-
-  if (response.nonce !== clientNonce) {
-    throw new Error('Attestation nonce mismatch - possible replay attack');
-  }
-
-  // Parse TDX quote if present
-  const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
-
-  // Check for debug mode
-  if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
-    throw new Error('TDX debug mode detected - cannot trust enclave');
-  }
-
-  // Build verification result for policy evaluation
-  const attestation: TeeVerificationResult = {
-    report: response as Record<string, unknown>,
-    nonce: response.nonce,
-    attestedModel: response.model,
-    evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
-    signingAddress: response.signing_address,
-    signingKey: response.signing_key || response.signing_public_key,
-    intelQuote: response.intel_quote,
-    parsedTdxQuote,
-    nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
-    serverVerification: response.server_verification,
-    teeProvider: response.tee_provider,
-    fetchedAt: Date.now(),
-    attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
-  };
+  const attestation = buildTeeVerificationResult(response, clientNonce, modelId);
+  const { parsedTdxQuote } = attestation;
 
   const policy = evaluateTEEAttestationPolicy(attestation, modelId);
   if (!policy.passed) {

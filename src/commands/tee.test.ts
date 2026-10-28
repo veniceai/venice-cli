@@ -156,7 +156,7 @@ test('tee verify exits 1 on nonce mismatch in both formats', async () => {
 
   const pretty = await runTeeVerify(mismatched);
   assert.equal(pretty.status, 1);
-  assert.match(pretty.stderr, /nonce mismatch/);
+  assert.match(pretty.stdout, /nonce mismatch/);
 });
 
 const SIGNED_TEXT = 'request-hash:response-hash';

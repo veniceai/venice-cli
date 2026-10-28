@@ -17,7 +17,7 @@ import {
   isTdDebugMode,
   evaluateE2EEAttestationPolicy,
   buildGpuAttestationCurl,
-  type TeeVerificationResult,
+  buildTeeVerificationResult,
 } from '../lib/tee.js';
 import { deriveSigningAddressFromKey, recoverSignerAddress } from '../lib/e2ee.js';
 
@@ -151,45 +151,9 @@ export function registerTeeCommand(program: Command): void {
 
       try {
         const { response, clientNonce } = await fetchTeeAttestation(modelId);
-
-        // Parse TDX quote
-        const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
-
-        // Build verification result
-        const signingKey = response.signing_key || response.signing_public_key;
-        const attestation: TeeVerificationResult = {
-          report: response as Record<string, unknown>,
-          nonce: response.nonce,
-          attestedModel: response.model,
-          evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
-          signingAddress: response.signing_address,
-          signingKey,
-          intelQuote: response.intel_quote,
-          parsedTdxQuote,
-          nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
-          serverVerification: response.server_verification,
-          teeProvider: response.tee_provider,
-          fetchedAt: Date.now(),
-          attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
-        };
-
-        // Run policy evaluation
+        const attestation = buildTeeVerificationResult(response, clientNonce, modelId);
         const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
-
-        const nonceMatch = response.nonce === clientNonce;
-        if (!nonceMatch) {
-          if (format === 'json') {
-            console.log(JSON.stringify({
-              model: modelId,
-              passed: false,
-              failures: ['Attestation nonce mismatch - possible replay attack'],
-              attestation: { nonceMatch: false },
-            }, null, 2));
-          } else {
-            console.error(formatError('Attestation nonce mismatch - possible replay attack'));
-          }
-          process.exit(1);
-        }
+        const { signingKey } = attestation;
 
         if (format === 'json') {
           console.log(
@@ -200,7 +164,7 @@ export function registerTeeCommand(program: Command): void {
                 failures: policy.failures,
                 attestation: {
                   verified: response.verified,
-                  nonceMatch,
+                  nonceMatch: attestation.nonce === attestation.clientNonce,
                   signingKey: signingKey ? signingKey.slice(0, 32) + '...' : null,
                   signingAddress: response.signing_address,
                   teeProvider: response.tee_provider,
