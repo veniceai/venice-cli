@@ -189,7 +189,7 @@ test('keys create defaults to a bounded inference credential', async () => {
       sendJson(response, {
         success: true,
         data: {
-          id: 'key-id',
+          id: 'e28e82dc-9df2-4b47-b726-d0a222ef2ab5',
           apiKey: 'venice-secret-once',
           apiKeyType: 'INFERENCE',
           description: 'ci',
