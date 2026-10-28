@@ -36,6 +36,7 @@ import {
   mimeTypeFromPath,
   streamResponseToFile,
 } from './media.js';
+import { checkMp4Header } from './mp4.js';
 
 // Never allow production environment variables to redirect bearer credentials.
 const VENICE_API =
@@ -1514,16 +1515,19 @@ async function inspectVideoRetrieveResponse(
       totalBytes += chunk.length;
       const buffered = Buffer.concat(chunks, totalBytes);
 
-      if (!readingJson && buffered.length >= 8) {
-        if (isMp4Buffer(buffered)) {
+      if (!readingJson) {
+        const mp4Header = checkMp4Header(buffered);
+        if (mp4Header === 'valid') {
           return { kind: 'video', reader, initialChunks: chunks };
         }
 
-        const firstNonWhitespace = buffered.find((byte) => byte > 0x20);
-        if (firstNonWhitespace === 0x7b) {
-          readingJson = true;
-        } else if (firstNonWhitespace !== undefined) {
-          throw unexpectedVideoRetrieveType(response);
+        if (mp4Header === 'invalid') {
+          const firstNonWhitespace = buffered.find((byte) => byte > 0x20);
+          if (firstNonWhitespace === 0x7b) {
+            readingJson = true;
+          } else if (firstNonWhitespace !== undefined) {
+            throw unexpectedVideoRetrieveType(response);
+          }
         }
       }
 
@@ -1541,9 +1545,6 @@ async function inspectVideoRetrieveResponse(
       reader.releaseLock();
       return { kind: 'status', status };
     }
-    if (isMp4Buffer(buffered)) {
-      return { kind: 'video', reader, initialChunks: chunks };
-    }
     throw unexpectedVideoRetrieveType(response);
   } catch (error) {
     await reader.cancel().catch(() => undefined);
@@ -1557,10 +1558,6 @@ function unexpectedVideoRetrieveType(response: Response): Error {
     `Unexpected video retrieve content type "${response.headers.get('content-type') || 'unknown'}": ` +
     'response is neither JSON nor a valid MP4.'
   );
-}
-
-function isMp4Buffer(bytes: Buffer): boolean {
-  return bytes.length >= 8 && bytes.subarray(4, 8).toString('ascii') === 'ftyp';
 }
 
 // Video generation - queue job

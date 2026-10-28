@@ -21,6 +21,14 @@ import {
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 
+function mp4Bytes(tail = ''): Buffer {
+  const header = Buffer.alloc(24);
+  header.writeUInt32BE(header.length, 0);
+  header.write('ftypisom', 4, 'latin1');
+  header.write('isommp41', 16, 'latin1');
+  return Buffer.concat([header, Buffer.from(tail)]);
+}
+
 test('video URL and upscale helpers validate supported inputs', () => {
   assert.equal(isPublicHttpUrl('https://example.com/clip.mp4'), true);
   assert.equal(isPublicHttpUrl('file:///tmp/clip.mp4'), false);
@@ -123,7 +131,7 @@ test('waitForVideoStatus times out even when a status request does not settle', 
 
 test('video retrieve keeps JSON stdout valid while downloading a status URL', async () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-video-test-'));
-  const videoBytes = Buffer.from('xxxxftypisom');
+  const videoBytes = mp4Bytes();
   let origin = '';
   let retrieveRequests = 0;
   const server = createServer((request, response) => {
@@ -224,7 +232,7 @@ test('video retrieve keeps JSON stdout valid while downloading a status URL', as
 
 test('video retrieve completes only after direct or URL downloads are safely written', async () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-video-cleanup-'));
-  const videoBytes = Buffer.from('xxxxftypisom-cleanup');
+  const videoBytes = mp4Bytes('-cleanup');
   const directOutput = join(homeDir, 'direct.mp4');
   const urlOutput = join(homeDir, 'url.mp4');
   const declaredEmptyOutput = join(homeDir, 'declared-empty.mp4');
@@ -378,7 +386,7 @@ test('video retrieve completes only after direct or URL downloads are safely wri
 test('video upscale completes only after the retrieved video is written', async () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-video-upscale-cleanup-'));
   const outputPath = join(homeDir, 'upscaled.mp4');
-  const videoBytes = Buffer.from('xxxxftypisom-upscaled');
+  const videoBytes = mp4Bytes('-upscaled');
   const events: string[] = [];
   let retrieveCount = 0;
 
