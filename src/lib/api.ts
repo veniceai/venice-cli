@@ -52,6 +52,20 @@ const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_STATUS_BYTES = 1024 * 1024;
 const MAX_AUDIO_STATUS_BYTES = 1024 * 1024;
 const AUDIO_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 120000;
+const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_MODELS_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_RPC_RESPONSE_BYTES = 64 * 1024 * 1024;
+// Up to four base64-encoded images of MAX_IMAGE_DOWNLOAD_BYTES each.
+const MAX_IMAGE_GENERATION_RESPONSE_BYTES =
+  Math.ceil((MAX_IMAGE_DOWNLOAD_BYTES * 4 * 4) / 3) + 1024 * 1024;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+const MAX_ERROR_MESSAGE_LENGTH = 1000;
+
+function truncateErrorMessage(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LENGTH
+    ? `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH)}… (truncated)`
+    : message;
+}
 
 export class VeniceApiError extends Error {
   constructor(
@@ -64,14 +78,24 @@ export class VeniceApiError extends Error {
   }
 
   static fromResponse(status: number, body: string): VeniceApiError {
+    let message: unknown;
+    let code: unknown;
     try {
       const json = JSON.parse(body);
-      const message = json.error?.message || json.message || body;
-      const code = json.error?.code;
-      return new VeniceApiError(message, status, code);
+      const error = json?.error;
+      message = typeof error === 'string' ? error : error?.message || json?.message;
+      code = error?.code;
     } catch {
-      return new VeniceApiError(body || `HTTP ${status}`, status);
+      // Not JSON: the body text is the message.
     }
+    const text = typeof message === 'string' && message.trim()
+      ? message
+      : body.trim() || `HTTP ${status}`;
+    return new VeniceApiError(
+      truncateErrorMessage(text),
+      status,
+      typeof code === 'string' ? code : undefined
+    );
   }
 
   isRetryable(): boolean {
@@ -140,7 +164,7 @@ type ApiRequestOptions = {
   | {
       responseType?: 'json';
       stream?: boolean;
-      maxResponseBytes?: never;
+      maxResponseBytes?: number;
       responseLabel?: never;
       expectedContentType?: never;
     }
@@ -153,10 +177,10 @@ type ApiRequestOptions = {
     }
 );
 
-class BinaryResponseValidationError extends Error {
+class ResponseValidationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'BinaryResponseValidationError';
+    this.name = 'ResponseValidationError';
   }
 }
 
@@ -175,23 +199,20 @@ export async function apiRequest<T>(
     additionalHeaders = {},
     onHeaders,
     authenticated = true,
+    maxResponseBytes = MAX_JSON_RESPONSE_BYTES,
   } = options;
 
   const binaryOptions = options.responseType === 'arrayBuffer' ? options : undefined;
   if (binaryOptions && stream) {
-    throw new BinaryResponseValidationError(
+    throw new ResponseValidationError(
       'Binary responses cannot be returned as an unvalidated stream.'
     );
   }
-  if (
-    binaryOptions &&
-    (!Number.isSafeInteger(binaryOptions.maxResponseBytes) || binaryOptions.maxResponseBytes <= 0)
-  ) {
-    throw new BinaryResponseValidationError(
-      'Binary responses require a positive, finite byte limit.'
-    );
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+    throw new ResponseValidationError('Responses require a positive, finite byte limit.');
   }
 
+  const responseLabel = `Response from ${endpoint.split('?')[0]}`;
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
   let lastError: VeniceApiError | null = null;
 
@@ -208,65 +229,41 @@ export async function apiRequest<T>(
       });
 
       if (!response.ok) {
-        let errorBody: string;
-        if (binaryOptions) {
-          const errorBytes = await readResponseBodyWithLimit(
-            response,
-            binaryOptions.maxResponseBytes,
-            `${binaryOptions.responseLabel} API error response`
-          );
-          errorBody = errorBytes.toString('utf-8');
-        } else {
-          // Preserve the existing JSON/stream behavior: only binary response
-          // bodies retain the request timeout while they are consumed.
-          clearTimeout(timeoutId);
-          errorBody = await response.text();
-        }
-        throw VeniceApiError.fromResponse(response.status, errorBody);
+        throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
       }
 
       onHeaders?.(response.headers);
 
+      let result: T;
       if (stream) {
-        clearTimeout(timeoutId);
-        if (spinner) {
-          stopSpinner(true);
-          spinner = null;
-        }
-        return response as unknown as T;
-      }
-
-      if (binaryOptions) {
+        result = response as unknown as T;
+      } else if (binaryOptions) {
         const bytes = await readResponseBodyWithLimit(
           response,
           binaryOptions.maxResponseBytes,
           binaryOptions.responseLabel
         );
         if (bytes.length === 0) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} response was empty.`
           );
         }
 
         const contentType = response.headers.get('content-type');
         if (binaryOptions.expectedContentType === 'image' && !isImageContentType(contentType)) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} did not return an image Content-Type ` +
             `(received: ${contentType || 'missing'}).`
           );
         }
         if (binaryOptions.expectedContentType === 'image' && !looksLikeImageBytes(bytes)) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} did not contain a supported PNG, JPEG, or WebP image.`
           );
         }
-
-        clearTimeout(timeoutId);
-        if (spinner) {
-          stopSpinner(true);
-          spinner = null;
-        }
-        return Uint8Array.from(bytes).buffer as T;
+        result = Uint8Array.from(bytes).buffer as T;
+      } else {
+        result = await readJsonResponse<T>(response, maxResponseBytes, responseLabel);
       }
 
       clearTimeout(timeoutId);
@@ -274,7 +271,7 @@ export async function apiRequest<T>(
         stopSpinner(true);
         spinner = null;
       }
-      return await response.json() as T;
+      return result;
     } catch (error) {
       clearTimeout(timeoutId);
 
@@ -286,7 +283,7 @@ export async function apiRequest<T>(
         );
       }
 
-      if (error instanceof BinaryResponseValidationError) {
+      if (error instanceof ResponseValidationError) {
         if (spinner) stopSpinner(false);
         throw error;
       }
@@ -337,6 +334,42 @@ export async function apiRequest<T>(
 
   if (spinner) stopSpinner(false);
   throw lastError || new Error('Request failed after retries');
+}
+
+async function readErrorBody(response: Response): Promise<string> {
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (totalBytes < MAX_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+      totalBytes += value.byteLength;
+    }
+  } catch {
+    // Report the status with whatever part of the body arrived.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).subarray(0, MAX_ERROR_BODY_BYTES).toString('utf-8');
+}
+
+async function readJsonResponse<T>(
+  response: Response,
+  maxBytes: number,
+  label: string
+): Promise<T> {
+  const bytes = await readResponseBodyWithLimit(response, maxBytes, label);
+  try {
+    return JSON.parse(bytes.toString('utf-8')) as T;
+  } catch {
+    throw new ResponseValidationError(`${label} was not valid JSON.`);
+  }
 }
 
 export interface ChatCompletionRequestOptions {
@@ -596,6 +629,7 @@ export async function generateImage(
     method: 'POST',
     body,
     spinnerText: 'Generating image...',
+    maxResponseBytes: MAX_IMAGE_GENERATION_RESPONSE_BYTES,
   });
 
   trackUsage({
@@ -740,7 +774,7 @@ async function readResponseBodyWithLimit(
     const contentLength = Number(contentLengthHeader);
     if (Number.isFinite(contentLength) && contentLength >= 0 && contentLength > maxBytes) {
       await response.body?.cancel().catch(() => undefined);
-      throw new BinaryResponseValidationError(
+      throw new ResponseValidationError(
         `${label} is too large (${formatBytes(contentLength)}). ` +
         `Maximum allowed size is ${formatBytes(maxBytes)}.`
       );
@@ -763,7 +797,7 @@ async function readResponseBodyWithLimit(
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new BinaryResponseValidationError(
+        throw new ResponseValidationError(
           `${label} exceeded the limit of ${formatBytes(maxBytes)}.`
         );
       }
@@ -812,16 +846,15 @@ export async function upscaleImage(
       signal: controller.signal,
     });
 
+    if (!response.ok) {
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+    }
+
     const bytes = await readResponseBodyWithLimit(
       response,
       MAX_IMAGE_DOWNLOAD_BYTES,
-      response.ok ? 'Upscaled image response' : 'Upscale API error response'
+      'Upscaled image response'
     );
-
-    if (!response.ok) {
-      const errorBody = bytes.toString('utf-8');
-      throw VeniceApiError.fromResponse(response.status, errorBody);
-    }
 
     const contentType = response.headers.get('content-type') || '';
 
@@ -897,12 +930,7 @@ export async function textToSpeech(
     });
 
     if (!response.ok) {
-      const errorBytes = await readResponseBodyWithLimit(
-        response,
-        MAX_AUDIO_DOWNLOAD_BYTES,
-        'Text-to-speech API error response'
-      );
-      throw VeniceApiError.fromResponse(response.status, errorBytes.toString('utf-8'));
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
     }
 
     const contentType = response.headers.get('content-type')?.split(';')[0].trim();
@@ -992,12 +1020,16 @@ export async function cloneVoice(
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
-      throw VeniceApiError.fromResponse(response.status, errorBody);
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
     }
 
+    const voice = await readJsonResponse<{ id: string; model: string }>(
+      response,
+      MAX_JSON_RESPONSE_BYTES,
+      'Voice cloning response'
+    );
     if (spinner) stopSpinner(true);
-    return await response.json() as { id: string; model: string };
+    return voice;
   } catch (error) {
     if (spinner) stopSpinner(false);
     if (error instanceof Error && error.name === 'AbortError') {
@@ -1104,23 +1136,20 @@ export async function transcribe(
       ...requestInit,
     });
 
-    clearTimeout(timeoutId);
-
     if (!res.ok) {
-      const errorBody = await res.text();
-      throw VeniceApiError.fromResponse(res.status, errorBody);
+      throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
     }
 
-    if (spinner) stopSpinner(true);
-
-    const response = await res.json() as {
+    const response = await readJsonResponse<{
       text: string;
       duration?: number;
       timestamps?: {
         word?: Array<{ word: string; start: number; end: number }>;
         segment?: Array<{ text: string; start: number; end: number }>;
       };
-    };
+    }>(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+
+    if (spinner) stopSpinner(true);
 
     trackUsage({
       command: 'transcribe',
@@ -1129,12 +1158,13 @@ export async function transcribe(
 
     return response;
   } catch (error) {
-    clearTimeout(timeoutId);
     if (spinner) stopSpinner(false);
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('Transcription request timed out. Try a shorter audio file.');
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -1208,6 +1238,7 @@ export async function listModels(
         method: 'GET',
         spinnerText: 'Fetching models...',
         showSpinner: showSpinnerOption,
+        maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
       }
     );
     return (response.data || []).map((model) =>
@@ -1228,12 +1259,14 @@ export async function listModels(
     method: 'GET',
     spinnerText: 'Fetching models...',
     showSpinner: showSpinnerOption,
+    maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
   });
 
   const typed = modelTypes.map((type) =>
     apiRequest<{ data: Model[] }>(`/models?type=${encodeURIComponent(type)}`, {
       method: 'GET',
       showSpinner: false,
+      maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
     })
       .then((response) => ({ type, response }))
       .catch(() => null)
@@ -2169,16 +2202,16 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
       signal: controller.signal,
     };
     const response = await fetch(`${VENICE_API}/augment/text-parser`, requestInit);
+
+    if (!response.ok) {
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+    }
+
     const responseBytes = await readResponseBodyWithLimit(
       response,
       MAX_DOCUMENT_PARSE_RESPONSE_BYTES,
-      response.ok ? 'Document parse response' : 'Document parse API error response'
+      'Document parse response'
     );
-
-    if (!response.ok) {
-      throw VeniceApiError.fromResponse(response.status, responseBytes.toString('utf-8'));
-    }
-
     const responseBody = responseBytes.toString('utf-8');
     if (responseBody.trim().length === 0) {
       throw new Error('Document parse response was empty; expected JSON.');
@@ -2349,6 +2382,7 @@ export async function cryptoRpc(
     {
       method: 'POST',
       body,
+      maxResponseBytes: MAX_RPC_RESPONSE_BYTES,
       spinnerText: 'Sending RPC request...',
       additionalHeaders: { 'Idempotency-Key': idempotencyKey },
       onHeaders: (headers) => {
