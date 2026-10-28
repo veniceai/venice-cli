@@ -53,8 +53,9 @@ export function registerCharactersCommand(program: Command): void {
     .command('show <slug>')
     .description('Show details for a character slug')
     .option('-f, --format <format>', 'Output format (pretty|json)')
-    .action(async (slug: string, options) => {
-      const format = detectOutputFormat(options.format);
+    .action(async (slug: string, _options, command: Command) => {
+      // `characters` also defines -f, so commander gives the flag to the parent command.
+      const format = detectOutputFormat(command.optsWithGlobals().format);
       const c = getChalk();
 
       try {
