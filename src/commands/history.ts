@@ -10,6 +10,7 @@ import {
   type ConversationEntry,
 } from '../lib/config.js';
 import { messageContentToText } from '../types/index.js';
+import { parseIntegerOption } from '../lib/options.js';
 import { confirm } from '../lib/prompt.js';
 import {
   formatSuccess,
@@ -69,7 +70,7 @@ export function registerHistoryCommand(program: Command): void {
     .action((options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
-      const limit = parseInt(options.limit, 10);
+      const limit = parseIntegerOption(options.limit, '--limit', { min: 1 });
 
       const conversations = loadHistory();
       const recent = conversations.slice(-limit).reverse();
