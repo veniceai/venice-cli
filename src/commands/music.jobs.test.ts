@@ -67,6 +67,7 @@ function runCli(
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: dir,
+      timeout: 10_000,
       env: {
         ...process.env,
         HOME: dir,
