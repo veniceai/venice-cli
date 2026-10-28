@@ -9,19 +9,21 @@ import {
   listCryptoNetworks,
   validateIdempotencyKey,
   type CryptoRpcResult,
+  type JsonRpcErrorObject,
   type JsonRpcRequest,
-  type JsonRpcResponse,
 } from '../lib/api.js';
 import {
   formatError,
   getChalk,
   detectOutputFormat,
+  sanitizeTerminalText,
 } from '../lib/output.js';
 import type { OutputFormat } from '../types/index.js';
 
 export const MAX_RPC_BATCH = 100;
 export const MAX_RPC_BATCH_BYTES = 1024 * 1024;
 export const MAX_RPC_JSON_DEPTH = 32;
+const MAX_RPC_ERROR_DISPLAY_LENGTH = 500;
 
 export function registerRpcCommand(program: Command): void {
   program
@@ -54,11 +56,13 @@ Examples:
         if (!network || network === 'networks') {
           if (options.batch) {
             console.error(formatError('Network is required for --batch. Usage: venice rpc <network> --batch <file>'));
-            process.exit(1);
+            process.exitCode = 1;
+            return;
           }
           if (options.idempotencyKey !== undefined) {
             console.error(formatError('--idempotency-key applies only to RPC calls, not "venice rpc networks".'));
-            process.exit(1);
+            process.exitCode = 1;
+            return;
           }
           await printNetworks(format);
           return;
@@ -66,7 +70,8 @@ Examples:
 
         if (options.batch && method) {
           console.error(formatError('Use either a method or --batch, not both.'));
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
 
         let body: JsonRpcRequest | JsonRpcRequest[];
@@ -78,7 +83,8 @@ Examples:
           console.error('Usage: venice rpc <network> <method> [params...]');
           console.error('       venice rpc <network> --batch <file>');
           console.error('       venice rpc networks');
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         } else {
           body = buildJsonRpcRequest(method, params);
         }
@@ -88,12 +94,13 @@ Examples:
         });
         printRpcResult(result, format);
 
+        // Let stdout drain: process.exit() would cut off piped output.
         if (jsonRpcHasError(result.body)) {
-          process.exit(1);
+          process.exitCode = 1;
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
-        process.exit(1);
+        process.exitCode = 1;
       }
     });
 }
@@ -390,17 +397,39 @@ function validateBatchItem(item: unknown, index: number): void {
 
 export function jsonRpcHasError(body: unknown): boolean {
   if (Array.isArray(body)) {
-    return body.some(isRpcErrorItem);
+    return body.length === 0 || body.some(isFailedRpcItem);
   }
-  return isRpcErrorItem(body);
+  return isFailedRpcItem(body);
 }
 
-function isRpcErrorItem(item: unknown): boolean {
+function isFailedRpcItem(item: unknown): boolean {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
-    return false;
+    return true;
   }
-  const error = (item as JsonRpcResponse).error;
-  return Boolean(error && typeof error === 'object');
+  const response = item as Record<string, unknown>;
+  if (response.error !== undefined && response.error !== null) {
+    return true;
+  }
+  return !Object.hasOwn(response, 'result');
+}
+
+function describeRpcError(error: unknown): string {
+  if (typeof error === 'string') {
+    return truncateForDisplay(error);
+  }
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const { code, message } = error as Partial<JsonRpcErrorObject>;
+    const text = typeof message === 'string' && message ? truncateForDisplay(message) : 'RPC error';
+    return code != null ? `${text} (${code})` : text;
+  }
+  return truncateForDisplay(JSON.stringify(error));
+}
+
+function truncateForDisplay(text: string): string {
+  const shortened = text.length > MAX_RPC_ERROR_DISPLAY_LENGTH
+    ? `${text.slice(0, MAX_RPC_ERROR_DISPLAY_LENGTH)}…`
+    : text;
+  return sanitizeTerminalText(shortened);
 }
 
 function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
@@ -417,24 +446,42 @@ function printRpcResult(result: CryptoRpcResult, format: OutputFormat): void {
     return;
   }
 
-  const items = Array.isArray(body) ? body : [body];
+  const items: unknown[] = Array.isArray(body) ? body : [body];
   const multiple = Array.isArray(body);
+  if (multiple && items.length === 0) {
+    console.error(`${c.red('error:')} empty JSON-RPC batch response`);
+  }
 
-  for (const [index, item] of items.entries()) {
+  for (const [index, entry] of items.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      const label = multiple ? `${c.dim(`[${index + 1}]`)} ` : '';
+      console.error(
+        `${label}${c.red('error:')} invalid JSON-RPC response item: ${truncateForDisplay(String(JSON.stringify(entry)))}`
+      );
+      continue;
+    }
+
+    const item = entry as Record<string, unknown>;
     const label = multiple ? `${c.dim(`[${item.id ?? index + 1}]`)} ` : '';
-    if (item.error) {
-      const code = item.error.code != null ? ` (${item.error.code})` : '';
-      console.error(`${label}${c.red('error:')} ${item.error.message || 'RPC error'}${code}`);
-      if (item.error.data !== undefined) {
-        console.error(c.dim(JSON.stringify(item.error.data, null, 2)));
+    const error = item.error;
+    if (error !== undefined && error !== null) {
+      console.error(`${label}${c.red('error:')} ${describeRpcError(error)}`);
+      const data = typeof error === 'object' ? (error as Partial<JsonRpcErrorObject>).data : undefined;
+      if (data !== undefined) {
+        console.error(c.dim(JSON.stringify(data, null, 2)));
       }
+      continue;
+    }
+    if (!Object.hasOwn(item, 'result')) {
+      console.error(
+        `${label}${c.red('error:')} JSON-RPC response has neither a result nor an error: ` +
+        truncateForDisplay(JSON.stringify(item))
+      );
       continue;
     }
 
     const value = item.result;
-    if (value === undefined) {
-      console.log(`${label}${JSON.stringify(item, null, 2)}`);
-    } else if (value !== null && typeof value === 'object') {
+    if (value !== null && typeof value === 'object') {
       const json = JSON.stringify(value, null, 2);
       console.log(multiple ? `${label}\n${json}` : json);
     } else {
