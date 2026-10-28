@@ -366,6 +366,7 @@ async function buildAttachmentPart(
     const mimeType = normalizeMimeType(downloaded.contentType);
     assertSupportedMimeType(kind, mimeType, source);
     assertSizeWithinLimit(downloaded.buffer.length, maxBytes, label);
+    assertContentMatchesMimeType(downloaded.buffer, mimeType, label, source);
     return buildPart(
       kind,
       downloaded.buffer.toString('base64'),
@@ -380,6 +381,7 @@ async function buildAttachmentPart(
     assertSupportedMimeType(kind, parsed.mimeType, source);
     const bytes = decodedBase64Length(parsed.base64, label);
     assertSizeWithinLimit(bytes, maxBytes, label);
+    assertContentMatchesMimeType(leadingBytes(parsed.base64), parsed.mimeType, label, 'data URL');
     return buildPart(kind, parsed.base64, parsed.mimeType, undefined, bytes);
   }
 
@@ -387,6 +389,7 @@ async function buildAttachmentPart(
     const file = readFileAsBase64(source, maxBytes, label);
     const bytes = decodedBase64Length(file.base64, label);
     assertSizeWithinLimit(bytes, maxBytes, label);
+    assertContentMatchesMimeType(leadingBytes(file.base64), file.mimeType, label, source);
     return buildPart(kind, file.base64, file.mimeType, file.filename, bytes);
   }
 
@@ -394,7 +397,98 @@ async function buildAttachmentPart(
   const parsed = parseDataUrl(file.dataUrl, label);
   const bytes = decodedBase64Length(parsed.base64, label);
   assertSizeWithinLimit(bytes, maxBytes, label);
+  assertContentMatchesMimeType(leadingBytes(parsed.base64), file.mimeType, label, source);
   return buildPart(kind, parsed.base64, file.mimeType, file.filename, bytes);
+}
+
+// 8192 base64 characters decode to the first 6 KiB, enough for every check.
+function leadingBytes(base64: string): Buffer {
+  return Buffer.from(base64.slice(0, 8192), 'base64');
+}
+
+function hasAscii(bytes: Buffer, offset: number, text: string): boolean {
+  return bytes.subarray(offset, offset + text.length).toString('latin1') === text;
+}
+
+function isWave(bytes: Buffer): boolean {
+  return ['RIFF', 'RF64', 'BW64'].some((tag) => hasAscii(bytes, 0, tag)) && hasAscii(bytes, 8, 'WAVE');
+}
+
+function isAiff(bytes: Buffer): boolean {
+  return hasAscii(bytes, 0, 'FORM') && (hasAscii(bytes, 8, 'AIFF') || hasAscii(bytes, 8, 'AIFC'));
+}
+
+function isMpegAudioFrame(bytes: Buffer): boolean {
+  return bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0 && (bytes[1] & 0x06) !== 0;
+}
+
+function isAdtsFrame(bytes: Buffer): boolean {
+  return bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0;
+}
+
+function isIsoMedia(bytes: Buffer): boolean {
+  return ['ftyp', 'moov', 'mdat', 'free', 'skip', 'wide', 'pnot'].some((box) => hasAscii(bytes, 4, box));
+}
+
+function isOgg(bytes: Buffer): boolean {
+  return hasAscii(bytes, 0, 'OggS');
+}
+
+function isEbml(bytes: Buffer): boolean {
+  return bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+}
+
+function isZip(bytes: Buffer): boolean {
+  return hasAscii(bytes, 0, 'PK\u0003\u0004');
+}
+
+const CONTENT_SIGNATURES: Record<string, (bytes: Buffer) => boolean> = {
+  'image/png': (bytes) => bytes.subarray(0, 8).equals(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  ),
+  'image/jpeg': (bytes) => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
+  'image/webp': (bytes) => hasAscii(bytes, 0, 'RIFF') && hasAscii(bytes, 8, 'WEBP'),
+  'image/gif': (bytes) => hasAscii(bytes, 0, 'GIF87a') || hasAscii(bytes, 0, 'GIF89a'),
+  'audio/wav': isWave,
+  'audio/x-wav': isWave,
+  'audio/mpeg': (bytes) => hasAscii(bytes, 0, 'ID3') || isMpegAudioFrame(bytes),
+  'audio/aiff': isAiff,
+  'audio/x-aiff': isAiff,
+  'audio/aac': (bytes) => hasAscii(bytes, 0, 'ID3') || hasAscii(bytes, 0, 'ADIF') || isAdtsFrame(bytes),
+  'audio/ogg': isOgg,
+  'audio/opus': isOgg,
+  'audio/flac': (bytes) => hasAscii(bytes, 0, 'fLaC') || hasAscii(bytes, 0, 'ID3'),
+  'audio/mp4': isIsoMedia,
+  'video/mp4': isIsoMedia,
+  'video/quicktime': isIsoMedia,
+  'video/mpeg': (bytes) =>
+    bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 1 && (bytes[3] === 0xba || bytes[3] === 0xb3),
+  'video/webm': isEbml,
+  'video/x-matroska': isEbml,
+  'application/pdf': (bytes) => bytes.subarray(0, 1024).includes('%PDF'),
+  'application/epub+zip': isZip,
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': isZip,
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': isZip,
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': isZip,
+  'application/vnd.ms-excel': (bytes) => bytes.subarray(0, 8).equals(
+    Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+  ),
+};
+
+function assertContentMatchesMimeType(
+  bytes: Buffer,
+  mimeType: string,
+  label: string,
+  source: string
+): void {
+  const normalized = normalizeMimeType(mimeType);
+  // The remaining supported types are text formats: reject binary content.
+  const matches = Object.hasOwn(CONTENT_SIGNATURES, normalized)
+    ? CONTENT_SIGNATURES[normalized](bytes)
+    : !bytes.subarray(0, 8192).includes(0);
+  if (!matches) {
+    throw new Error(`${label} ${source} does not contain ${normalized} data.`);
+  }
 }
 
 function buildPart(

@@ -37,6 +37,12 @@ async function withAttachmentServer(
   }
 }
 
+const MP4_HEADER = Buffer.concat([
+  Buffer.from([0, 0, 0, 0x18]),
+  Buffer.from('ftypmp42'),
+  Buffer.alloc(12),
+]);
+
 const visionModel: Model = {
   id: 'qwen3-vl-235b-a22b',
   type: 'text',
@@ -209,7 +215,7 @@ test('buildUserMessageContent downloads remote inputs and never passes server-fe
       return;
     }
     response.writeHead(200, { 'content-type': 'video/mp4' });
-    response.end('video');
+    response.end(MP4_HEADER);
   }, async (baseUrl) => {
     const content = await buildUserMessageContent('describe this clip', {
       images: [],
@@ -227,7 +233,7 @@ test('buildUserMessageContent downloads remote inputs and never passes server-fe
     });
     assert.deepEqual(content[2], {
       type: 'video_url',
-      video_url: { url: `data:video/mp4;base64,${Buffer.from('video').toString('base64')}` },
+      video_url: { url: `data:video/mp4;base64,${MP4_HEADER.toString('base64')}` },
     });
     assert.doesNotMatch(JSON.stringify(content), /https?:\/\//);
   });
@@ -278,7 +284,8 @@ test('remote attachments reject disallowed MIME, empty, oversized, and timed-out
 test('mixed remote and local attachments enforce the actual aggregate byte budget', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'venice-attach-aggregate-'));
   const localVideo = join(dir, 'local.mp4');
-  writeFileSync(localVideo, Buffer.alloc(50 * 1024 * 1024, 1));
+  writeFileSync(localVideo, MP4_HEADER);
+  truncateSync(localVideo, 50 * 1024 * 1024);
   try {
     await withAttachmentServer((_path, response) => {
       response.writeHead(200, {
@@ -306,15 +313,15 @@ test('actual local growth after remote preflight is charged to aggregate budget'
   const dir = mkdtempSync(join(tmpdir(), 'venice-attach-growth-'));
   const first = join(dir, 'first.mp4');
   const growing = join(dir, 'growing.mp4');
-  writeFileSync(first, '');
-  writeFileSync(growing, '');
+  writeFileSync(first, MP4_HEADER);
+  writeFileSync(growing, MP4_HEADER);
   truncateSync(first, 50 * 1024 * 1024);
   truncateSync(growing, 25 * 1024 * 1024);
   try {
     await withAttachmentServer((_path, response) => {
       truncateSync(growing, 50 * 1024 * 1024);
       response.writeHead(200, { 'content-type': 'application/pdf' });
-      response.end(Buffer.alloc(1));
+      response.end('%PDF');
     }, async (baseUrl) => {
       await assert.rejects(
         buildUserMessageContent('', {
