@@ -25,11 +25,6 @@ export function registerUsageCommand(program: Command): void {
 
       const usage = loadUsage();
 
-      if (usage.length === 0) {
-        console.log(c.dim('No usage data recorded yet.'));
-        return;
-      }
-
       // Filter by date range
       let filtered = usage;
       const now = new Date();
@@ -49,6 +44,11 @@ export function registerUsageCommand(program: Command): void {
 
       if (format === 'json') {
         console.log(formatJson(summarizeUsage(filtered)));
+        return;
+      }
+
+      if (usage.length === 0) {
+        console.log(c.dim('No usage data recorded yet.'));
         return;
       }
 
