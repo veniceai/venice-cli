@@ -403,6 +403,8 @@ venice video models
 
 `venice video models` loads the live catalog from `GET /models?type=video`. If that request fails, the CLI prints a short fallback list and says so.
 
+`video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
+
 Video transcription accepts a public HTTP(S) URL only. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
 
 ### Music & Sound Effects
@@ -424,9 +426,10 @@ venice music generate -m elevenlabs-music -d 60 --instrumental \
 venice music generate -m elevenlabs-music --lyrics lyrics.txt \
   "A folk song about the sea"
 
-# Check once, or poll until complete
+# Check once, or poll until complete (polls every 5s, times out after 10 minutes)
 venice music status <queue_id> -m elevenlabs-music
 venice music status <queue_id> -m elevenlabs-music --wait
+venice music status <queue_id> -m elevenlabs-music --wait --timeout 900
 
 # Download the finished audio
 venice music retrieve <queue_id> -m elevenlabs-music -o song.mp3
@@ -436,7 +439,8 @@ venice music retrieve <queue_id> -m elevenlabs-music -o song.mp3
 to retain it, or use `venice music complete <queue_id> -m <model>` to clean it
 up later. Optional generation fields are model-specific; inspect
 `venice music models --format json` before using lyrics, duration, or
-instrumental mode.
+instrumental mode. `music status --wait` and `music retrieve` use the same exit
+codes as their video counterparts.
 
 ### TEE Attestation
 
