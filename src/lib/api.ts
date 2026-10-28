@@ -44,8 +44,17 @@ const VENICE_API =
   process.env.NODE_ENV === 'test' && process.env.VENICE_API_BASE_URL
     ? process.env.VENICE_API_BASE_URL
     : 'https://api.venice.ai/api/v1';
+
+// Test runs may shorten the retry back-off; production ignores this.
+function durationFromTestEnv(name: string, fallback: number): number {
+  if (process.env.NODE_ENV !== 'test') return fallback;
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
 const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+const RETRY_DELAY_MS = durationFromTestEnv('VENICE_TEST_RETRY_DELAY_MS', 1000);
+const MAX_RETRY_AFTER_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
 const DOCUMENT_PARSE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
@@ -60,6 +69,15 @@ const MAX_IMAGE_GENERATION_RESPONSE_BYTES =
   Math.ceil((MAX_IMAGE_DOWNLOAD_BYTES * 4 * 4) / 3) + 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_ERROR_MESSAGE_LENGTH = 1000;
+const CONNECT_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+const MAY_HAVE_BEEN_PROCESSED =
+  'The request may already have been processed, so it was not retried. ' +
+  'Check before running it again; paid requests appear in `venice billing usage`.';
 
 function truncateErrorMessage(message: string): string {
   return message.length > MAX_ERROR_MESSAGE_LENGTH
@@ -68,6 +86,8 @@ function truncateErrorMessage(message: string): string {
 }
 
 export class VeniceApiError extends Error {
+  retryAfterMs?: number;
+
   constructor(
     message: string,
     public statusCode?: number,
@@ -113,6 +133,78 @@ export class VeniceApiError extends Error {
   }
 }
 
+function withProcessedNote<E extends Error>(error: E): E {
+  error.message = `${error.message}\n${MAY_HAVE_BEEN_PROCESSED}`;
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+// undici reports socket and DNS failures as a TypeError with a cause.
+function isNetworkError(error: unknown): error is TypeError {
+  return error instanceof TypeError && error.cause !== undefined;
+}
+
+// True only when the request provably never left the machine.
+function isConnectError(error: TypeError): boolean {
+  const failures = error.cause instanceof AggregateError ? error.cause.errors : [error.cause];
+  return failures.length > 0 && failures.every((failure) => {
+    const { code, syscall } = (failure ?? {}) as NodeJS.ErrnoException;
+    return (typeof code === 'string' && CONNECT_ERROR_CODES.has(code)) ||
+      syscall === 'connect' ||
+      syscall === 'getaddrinfo';
+  });
+}
+
+function networkFailureMessage(error: TypeError): string {
+  const cause = error.cause;
+  const detail =
+    cause instanceof AggregateError && cause.errors[0] instanceof Error
+      ? cause.errors[0].message
+      : cause instanceof Error
+        ? cause.message || (cause as NodeJS.ErrnoException).code
+        : undefined;
+  return `Connection to the Venice API failed (${detail || error.message}).`;
+}
+
+function paidRequestError(error: unknown, timeoutMessage: string): unknown {
+  if (isAbortError(error)) {
+    return new Error(`${timeoutMessage}\n${MAY_HAVE_BEEN_PROCESSED}`);
+  }
+  if (error instanceof ResponseValidationError) {
+    return withProcessedNote(error);
+  }
+  if (error instanceof VeniceApiError) {
+    return error.isRetryable() ? withProcessedNote(error) : error;
+  }
+  if (isNetworkError(error)) {
+    const failure = new Error(networkFailureMessage(error));
+    return isConnectError(error) ? failure : withProcessedNote(failure);
+  }
+  return error;
+}
+
+export function parseRetryAfter(
+  value: string | null | undefined,
+  now = Date.now()
+): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (!/[a-z]/i.test(trimmed)) return undefined;
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+}
+
+function retryDelayMs(error: VeniceApiError, attempt: number): number | undefined {
+  if (error.retryAfterMs !== undefined) {
+    return error.retryAfterMs <= MAX_RETRY_AFTER_MS ? error.retryAfterMs : undefined;
+  }
+  return RETRY_DELAY_MS * (attempt + 1) * (error.isRateLimited() ? 2 : 1);
+}
+
 function getHeaders(
   authenticated = true,
   contentType = 'application/json'
@@ -134,19 +226,19 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function checkOnline(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    
-    await fetch('https://api.venice.ai/api/v1/models', {
+    await fetch(`${VENICE_API}/models`, {
       method: 'HEAD',
       signal: controller.signal,
     });
-    
-    clearTimeout(timeout);
     return true;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -154,6 +246,10 @@ type ApiRequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   retries?: number;
+  // Safe to send again after a 5xx, a dropped connection, or an unreadable
+  // response. Defaults to false for POST: set it only for POSTs that are reads
+  // or that carry an Idempotency-Key.
+  idempotent?: boolean;
   showSpinner?: boolean;
   spinnerText?: string;
   timeoutMs?: number;
@@ -193,6 +289,7 @@ export async function apiRequest<T>(
     body,
     stream = false,
     retries = MAX_RETRIES,
+    idempotent = method !== 'POST',
     showSpinner = true,
     spinnerText = 'Processing...',
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -212,24 +309,31 @@ export async function apiRequest<T>(
     throw new ResponseValidationError('Responses require a positive, finite byte limit.');
   }
 
+  const headers = { ...getHeaders(authenticated), ...additionalHeaders };
+  const requestBody = body ? JSON.stringify(body) : undefined;
   const responseLabel = `Response from ${endpoint.split('?')[0]}`;
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
-  let lastError: VeniceApiError | null = null;
+  let connectionChecked = false;
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = attempt < retries;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let responded = false;
 
     try {
       const response = await fetch(`${VENICE_API}${endpoint}`, {
         method,
-        headers: { ...getHeaders(authenticated), ...additionalHeaders },
-        body: body ? JSON.stringify(body) : undefined,
+        headers,
+        body: requestBody,
         signal: controller.signal,
       });
+      responded = true;
 
       if (!response.ok) {
-        throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+        const error = VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+        error.retryAfterMs = parseRetryAfter(response.headers.get('retry-after'));
+        throw error;
       }
 
       onHeaders?.(response.headers);
@@ -275,22 +379,15 @@ export async function apiRequest<T>(
     } catch (error) {
       clearTimeout(timeoutId);
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (isAbortError(error)) {
         if (spinner) stopSpinner(false, 'Request timed out');
         throw new Error(
           `Request timed out after ${timeoutMs / 1000} seconds.\n` +
-          'The server may be overloaded. Please try again later.'
+          (idempotent ? 'The server may be overloaded. Please try again later.' : MAY_HAVE_BEEN_PROCESSED)
         );
       }
 
-      if (error instanceof ResponseValidationError) {
-        if (spinner) stopSpinner(false);
-        throw error;
-      }
-
       if (error instanceof VeniceApiError) {
-        lastError = error;
-
         if (error.isAuthError()) {
           if (spinner) stopSpinner(false, 'Authentication failed');
           throw new Error(
@@ -299,41 +396,58 @@ export async function apiRequest<T>(
           );
         }
 
-        if (error.isRateLimited()) {
-          if (spinner) spinner.text = `Rate limited, waiting... (attempt ${attempt + 1}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1) * 2);
+        const retryable = error.isRateLimited() || (idempotent && error.isRetryable());
+        const delayMs = retryable && canRetry ? retryDelayMs(error, attempt) : undefined;
+        if (delayMs !== undefined) {
+          if (spinner) {
+            spinner.text = error.isRateLimited()
+              ? `Rate limited, waiting... (attempt ${attempt + 2}/${retries + 1})`
+              : `Retrying... (attempt ${attempt + 2}/${retries + 1})`;
+          }
+          await sleep(delayMs);
           continue;
         }
 
-        if (error.isRetryable() && attempt < retries) {
-          if (spinner) spinner.text = `Retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
-          continue;
+        if (spinner) stopSpinner(false);
+        if (retryable && error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
+          error.message +=
+            `\nThe server asked to wait ${Math.ceil(error.retryAfterMs / 1000)} seconds before retrying.`;
         }
-      } else if (error instanceof Error) {
-        if (attempt < retries) {
-          const online = await checkOnline();
-          if (!online) {
+        throw !idempotent && error.isRetryable() ? withProcessedNote(error) : error;
+      }
+
+      if (error instanceof ResponseValidationError) {
+        if (spinner) stopSpinner(false);
+        throw idempotent ? error : withProcessedNote(error);
+      }
+
+      if (!isNetworkError(error)) {
+        if (spinner) stopSpinner(false);
+        throw error;
+      }
+
+      const neverSent = !responded && isConnectError(error);
+      if (canRetry && (idempotent || neverSent)) {
+        if (!responded && !connectionChecked) {
+          connectionChecked = true;
+          if (!(await checkOnline())) {
             if (spinner) stopSpinner(false, 'Network error');
             throw new Error(
               'Unable to connect to Venice API.\n' +
               'Please check your internet connection.'
             );
           }
-          if (spinner) spinner.text = `Connection error, retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
-          continue;
         }
-        lastError = new VeniceApiError(error.message);
+        if (spinner) spinner.text = `Connection error, retrying... (attempt ${attempt + 2}/${retries + 1})`;
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        continue;
       }
 
-      if (spinner) stopSpinner(false);
-      throw lastError || error;
+      if (spinner) stopSpinner(false, 'Network error');
+      const failure = new Error(networkFailureMessage(error));
+      throw idempotent || neverSent ? failure : withProcessedNote(failure);
     }
   }
-
-  if (spinner) stopSpinner(false);
-  throw lastError || new Error('Request failed after retries');
 }
 
 async function readErrorBody(response: Response): Promise<string> {
@@ -879,10 +993,7 @@ export async function upscaleImage(
     };
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Image upscale request timed out. Please try again later.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Image upscale request timed out. Please try again later.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -963,10 +1074,7 @@ export async function textToSpeech(
       contentType,
     };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Text-to-speech request timed out. Please try with shorter text.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Text-to-speech request timed out. Please try with shorter text.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1032,10 +1140,7 @@ export async function cloneVoice(
     return voice;
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Voice cloning request timed out. Try a shorter audio sample.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Voice cloning request timed out. Try a shorter audio sample.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1159,10 +1264,7 @@ export async function transcribe(
     return response;
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Transcription request timed out. Try a shorter audio file.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Transcription request timed out. Try a shorter audio file.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1776,6 +1878,7 @@ export async function quoteVideoGeneration(options: {
   const response = await apiRequest<unknown>('/video/quote', {
     method: 'POST',
     body,
+    idempotent: true,
     spinnerText: 'Fetching video quote...',
   });
   return parseQuoteResponse(response, '/video/quote');
@@ -1892,6 +1995,7 @@ export async function quoteAudioGeneration(
   const response = await apiRequest<unknown>('/audio/quote', {
     method: 'POST',
     body,
+    idempotent: true,
     spinnerText: 'Fetching audio quote...',
   });
   return parseQuoteResponse(response, '/audio/quote');
@@ -1991,6 +2095,7 @@ export async function retrieveGeneratedAudio(
   const response = await apiRequest<Response>('/audio/retrieve', {
     method: 'POST',
     body: { queue_id: queueId, model, delete_media_on_completion: false },
+    idempotent: true,
     stream: true,
     showSpinner: false,
   });
@@ -2214,27 +2319,25 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
     );
     const responseBody = responseBytes.toString('utf-8');
     if (responseBody.trim().length === 0) {
-      throw new Error('Document parse response was empty; expected JSON.');
+      throw new ResponseValidationError('Document parse response was empty; expected JSON.');
     }
 
     let parsedResponse: DocumentParseResponse;
     try {
       parsedResponse = JSON.parse(responseBody) as DocumentParseResponse;
     } catch {
-      throw new Error('Document parse response contained malformed JSON.');
+      throw new ResponseValidationError('Document parse response contained malformed JSON.');
     }
 
     if (spinner) stopSpinner(true);
     return parsedResponse;
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(
-        'Document parsing timed out after 10 minutes. ' +
-        'Check your connection or try a smaller document.'
-      );
-    }
-    throw error;
+    throw paidRequestError(
+      error,
+      'Document parsing timed out after 10 minutes. ' +
+      'Check your connection or try a smaller document.'
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -2382,6 +2485,7 @@ export async function cryptoRpc(
     {
       method: 'POST',
       body,
+      idempotent: true,
       maxResponseBytes: MAX_RPC_RESPONSE_BYTES,
       spinnerText: 'Sending RPC request...',
       additionalHeaders: { 'Idempotency-Key': idempotencyKey },
