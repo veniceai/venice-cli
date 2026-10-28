@@ -7,22 +7,20 @@
  * are encrypted by the TEE before being sent back—Venice never sees plaintext.
  *
  * Requirements:
- *     npm install elliptic @noble/ciphers @noble/hashes
+ *     npm install @noble/curves@1 @noble/ciphers@1 @noble/hashes@1
  *
  * Usage:
  *     export VENICE_API_KEY="your-api-key"
  *     node e2ee_chat.mjs
  */
 
-import elliptic from 'elliptic';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import { gcm } from '@noble/ciphers/aes';
 import { randomBytes } from '@noble/ciphers/webcrypto';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import crypto from 'crypto';
 import readline from 'readline';
-
-const EC = elliptic.ec;
 
 // Configuration
 const API_KEY = process.env.VENICE_API_KEY;
@@ -59,11 +57,9 @@ function hexToBytes(hex) {
  * Generate ephemeral secp256k1 key pair for E2EE session.
  */
 function generateKeyPair() {
-  const ec = new EC('secp256k1');
-  const keyPair = ec.genKeyPair();
-  const privateKey = new Uint8Array(keyPair.getPrivate().toArray('be', 32));
-  const publicKeyHex = keyPair.getPublic('hex'); // Uncompressed: 04 + x + y = 130 hex chars
-  return { privateKey, publicKeyHex, keyPair };
+  const privateKey = secp256k1.utils.randomSecretKey();
+  const publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKey, false)); // Uncompressed: 04 + x + y = 130 hex chars
+  return { privateKey, publicKeyHex };
 }
 
 /**
@@ -132,18 +128,14 @@ function normalizePublicKey(hex) {
  * Encrypt a message using ECDH + HKDF + AES-256-GCM.
  */
 function encryptMessage(plaintext, modelPublicKeyHex) {
-  const ec = new EC('secp256k1');
-
-  // Normalize and parse model's public key
-  const normalizedKey = normalizePublicKey(modelPublicKeyHex);
-  const modelPublicKey = ec.keyFromPublic(normalizedKey, 'hex');
+  // Normalize model's public key
+  const modelPublicKey = hexToBytes(normalizePublicKey(modelPublicKeyHex));
 
   // Generate ephemeral key pair for this message
-  const ephemeralKeyPair = ec.genKeyPair();
+  const ephemeralPrivateKey = secp256k1.utils.randomSecretKey();
 
-  // ECDH: compute shared secret
-  const sharedSecret = ephemeralKeyPair.derive(modelPublicKey.getPublic());
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32));
+  // ECDH: the shared secret is the X coordinate, without the point's prefix byte
+  const sharedSecretBytes = secp256k1.getSharedSecret(ephemeralPrivateKey, modelPublicKey, true).slice(1);
 
   // Derive AES key using HKDF-SHA256
   const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32);
@@ -156,7 +148,7 @@ function encryptMessage(plaintext, modelPublicKeyHex) {
   const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext));
 
   // Get ephemeral public key (uncompressed: 65 bytes)
-  const ephemeralPublic = new Uint8Array(ephemeralKeyPair.getPublic(false, 'array'));
+  const ephemeralPublic = secp256k1.getPublicKey(ephemeralPrivateKey, false);
 
   // Format: ephemeral_public (65 bytes) + nonce (12 bytes) + ciphertext
   const result = new Uint8Array(65 + 12 + encrypted.length);
@@ -170,7 +162,7 @@ function encryptMessage(plaintext, modelPublicKeyHex) {
 /**
  * Decrypt an E2EE response chunk.
  */
-function decryptChunk(ciphertextHex, clientKeyPair) {
+function decryptChunk(ciphertextHex, clientPrivateKey) {
   const raw = hexToBytes(ciphertextHex);
 
   // Parse components (65 + 12 + ciphertext)
@@ -178,12 +170,8 @@ function decryptChunk(ciphertextHex, clientKeyPair) {
   const nonce = raw.slice(65, 77);
   const ciphertext = raw.slice(77);
 
-  const ec = new EC('secp256k1');
-  const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPubKey));
-
-  // ECDH: compute shared secret
-  const sharedSecret = clientKeyPair.derive(serverKey.getPublic());
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32));
+  // ECDH: the shared secret is the X coordinate, without the point's prefix byte
+  const sharedSecretBytes = secp256k1.getSharedSecret(clientPrivateKey, serverEphemeralPubKey, true).slice(1);
 
   // Derive AES key
   const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32);
@@ -209,7 +197,7 @@ function isHexEncrypted(s) {
  */
 async function chatE2EE(prompt) {
   console.log('🔑 Generating ephemeral key pair...');
-  const { publicKeyHex, keyPair } = generateKeyPair();
+  const { publicKeyHex, privateKey } = generateKeyPair();
 
   console.log('🔍 Fetching TEE attestation...');
   const { modelPublicKey, teeProvider } = await fetchAttestation(MODEL);
@@ -272,7 +260,7 @@ async function chatE2EE(prompt) {
 
         // Decrypt if encrypted
         if (isHexEncrypted(content)) {
-          const decrypted = decryptChunk(content, keyPair);
+          const decrypted = decryptChunk(content, privateKey);
           fullContent += decrypted;
           process.stdout.write(decrypted);
         } else {
