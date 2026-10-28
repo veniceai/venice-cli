@@ -34,6 +34,7 @@ import {
   assertFileSizeWithinLimit,
   formatBytes,
   mimeTypeFromPath,
+  readWithInactivityTimeout,
   streamResponseToFile,
 } from './media.js';
 import { checkMp4Header } from './mp4.js';
@@ -49,6 +50,8 @@ const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
 const DOCUMENT_PARSE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_STATUS_BYTES = 1024 * 1024;
+const MAX_AUDIO_STATUS_BYTES = 1024 * 1024;
+const AUDIO_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 120000;
 
 export class VeniceApiError extends Error {
   constructor(
@@ -1874,10 +1877,80 @@ export async function queueAudioGeneration(
   return queued;
 }
 
+async function readBodyBeforeDeadline(
+  response: Response,
+  maxBytes: number,
+  timeoutMs: number,
+  label: string
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+
+  const deadline = Date.now() + timeoutMs;
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`)),
+            Math.max(0, deadline - Date.now())
+          );
+        }),
+      ]).finally(() => clearTimeout(timeoutId));
+      if (done) break;
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new Error(`${label} exceeded the maximum expected size.`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString('utf-8');
+}
+
+function withInactivityTimeout(response: Response, timeoutMs: number): Response {
+  if (!response.body) return response;
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await readWithInactivityTimeout(reader, timeoutMs);
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 // Music and sound effects - retrieve processing status or completed binary audio
 export async function retrieveGeneratedAudio(
   queueId: string,
-  model: string
+  model: string,
+  options: { statusTimeoutMs?: number; inactivityTimeoutMs?: number } = {}
 ): Promise<AudioRetrieveResult> {
   const response = await apiRequest<Response>('/audio/retrieve', {
     method: 'POST',
@@ -1888,10 +1961,16 @@ export async function retrieveGeneratedAudio(
   const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || '';
 
   if (contentType === 'application/json') {
+    const body = await readBodyBeforeDeadline(
+      response,
+      MAX_AUDIO_STATUS_BYTES,
+      options.statusTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+      'Audio status response'
+    );
     return {
       kind: 'processing',
       status: parseJobStatus<AudioProcessingStatus>(
-        parseJsonText(await response.text(), '/audio/retrieve'),
+        parseJsonText(body, '/audio/retrieve'),
         '/audio/retrieve',
         AUDIO_STATUS_FIELDS
       ),
@@ -1906,7 +1985,10 @@ export async function retrieveGeneratedAudio(
 
   return {
     kind: 'audio',
-    response,
+    response: withInactivityTimeout(
+      response,
+      options.inactivityTimeoutMs ?? AUDIO_DOWNLOAD_INACTIVITY_TIMEOUT_MS
+    ),
     contentType,
     sizeBytes: (() => {
       const value = response.headers.get('content-length');

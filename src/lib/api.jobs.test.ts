@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -14,6 +14,7 @@ import {
   retrieveGeneratedAudio,
   retrieveVideo,
 } from './api.js';
+import { writeResponseToFile } from './media.js';
 
 function mp4Bytes(tail = ''): Buffer {
   const header = Buffer.alloc(24);
@@ -98,6 +99,96 @@ test('retrieveVideo saves an MP4 whose ftyp box follows a free box and arrives i
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+function stalledResponse(firstChunk: Buffer, contentType: string, onCancel: () => void): Response {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(firstChunk);
+    },
+    cancel() {
+      onCancel();
+    },
+  }), {
+    headers: { 'Content-Type': contentType },
+  });
+}
+
+test('music downloads fail once the audio body stalls, without leaving a file', { timeout: 5_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-api-jobs-'));
+  const outputPath = join(dir, 'song.mp3');
+  let cancelled = false;
+  try {
+    const result = await withFetch(
+      () => stalledResponse(Buffer.alloc(16, 0xff), 'audio/mpeg', () => {
+        cancelled = true;
+      }),
+      () => retrieveGeneratedAudio('q1', 'test-model', { inactivityTimeoutMs: 50 })
+    );
+    assert.equal(result.kind, 'audio');
+    if (result.kind !== 'audio') return;
+
+    await assert.rejects(
+      writeResponseToFile(result.response, outputPath, {
+        maxBytes: 1024,
+        expectedContentTypePrefixes: ['audio/'],
+      }),
+      /Download stalled/
+    );
+    assert.equal(cancelled, true);
+    assert.deepEqual(readdirSync(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('music downloads keep going while audio keeps arriving', { timeout: 5_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-api-jobs-'));
+  const outputPath = join(dir, 'song.mp3');
+  const chunks = [1, 2, 3, 4, 5].map((value) => Buffer.alloc(8, value));
+  try {
+    const result = await withFetch(
+      () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          chunks.forEach((chunk, index) => {
+            setTimeout(() => controller.enqueue(chunk), 20 * (index + 1));
+          });
+          setTimeout(() => controller.close(), 20 * (chunks.length + 1));
+        },
+      }), { headers: { 'Content-Type': 'audio/mpeg' } }),
+      () => retrieveGeneratedAudio('q1', 'test-model', { inactivityTimeoutMs: 200 })
+    );
+    assert.equal(result.kind, 'audio');
+    if (result.kind !== 'audio') return;
+
+    await writeResponseToFile(result.response, outputPath, {
+      maxBytes: 1024,
+      expectedContentTypePrefixes: ['audio/'],
+    });
+    assert.equal(readFileSync(outputPath).equals(Buffer.concat(chunks)), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('music status fails when its JSON body stalls or grows too large', { timeout: 5_000 }, async () => {
+  let cancelled = false;
+  await assert.rejects(
+    withFetch(
+      () => stalledResponse(Buffer.from('{"status":'), 'application/json', () => {
+        cancelled = true;
+      }),
+      () => retrieveGeneratedAudio('q1', 'test-model', { statusTimeoutMs: 50 })
+    ),
+    /Audio status response timed out/
+  );
+  assert.equal(cancelled, true);
+
+  const oversized = JSON.stringify({ status: 'PROCESSING', pad: 'x'.repeat(1024 * 1024) });
+  await assert.rejects(
+    withFetch(() => jsonResponse(oversized), () => retrieveGeneratedAudio('q1', 'test-model')),
+    /Audio status response exceeded the maximum expected size/
+  );
 });
 
 test('queue responses need a queue_id and fall back to the requested model', async () => {
