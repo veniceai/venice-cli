@@ -19,6 +19,19 @@ Or use without installing:
 npx veniceai-cli chat 'Hello, world!'
 ```
 
+## Updates
+
+The CLI never checks for updates on its own. To see whether a newer release
+is available, run:
+
+```bash
+venice update --check
+```
+
+This sends one request, without credentials, to registry.npmjs.org and prints
+the installed and latest versions. Add `-f json` for machine-readable output.
+To upgrade, run `npm install -g veniceai-cli@latest`.
+
 ## Quick Start
 
 1. **Get your API key** from [Venice AI Settings](https://venice.ai/settings/api)
@@ -28,17 +41,21 @@ npx veniceai-cli chat 'Hello, world!'
    venice config set api_key
    ```
 
-   The CLI prompts for the key without displaying it. For non-interactive use,
-   pipe the key over standard input with `venice config set api_key --stdin`.
-   
-   Or use an environment variable:
+   The CLI prompts for the key without displaying it and saves it to
+   `~/.venice/config.json`, which only your user account can read. To set the
+   key and your default models in one go, run `venice config init` instead.
+   For non-interactive use, pipe the key over standard input with
+   `venice config set api_key --stdin`.
+
+   Alternatively, set an environment variable, which takes precedence over the
+   config file:
    ```bash
    export VENICE_API_KEY=YOUR_API_KEY
    ```
 
-   Environment variables are convenient for CI and headless use, but can be
-   inherited by child processes or captured in diagnostic output. Scope them
-   to the process that needs them.
+   A key exported in your shell is visible to every process started from that
+   shell. Prefer the config file for everyday use; in CI and other headless
+   environments, scope the variable to the step that needs it.
 
 3. **Start chatting**:
    ```bash
@@ -739,7 +756,7 @@ Venice CLI is designed with privacy in mind:
 - **End-to-End Encryption (E2EE)**: Messages are encrypted client-side to the enclave key named in the server's attestation report, which the CLI checks for consistency but cannot yet verify independently (see [TEE Attestation](#tee-attestation))
 - **TEE Attestation**: Check the server's attestation report for consistency before sending data; the Intel TDX quote signature and enclave measurements are not yet verified client-side
 - **No browser tracking**: Terminal interactions don't expose browser metadata
-- **No telemetry**: The CLI doesn't collect or send usage data
+- **No telemetry**: The CLI sends no analytics or usage data and never checks for updates in the background. It connects only to the Venice API, to attachment URLs you give it, to download links the API returns, and to registry.npmjs.org when you run `venice update --check`
 - **Local configuration**: API key stored locally with restricted permissions
 - **Transparent**: You can see exactly what's being sent to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
