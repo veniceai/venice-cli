@@ -13,8 +13,10 @@ import { messageContentToText } from '../types/index.js';
 import {
   formatSuccess,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 
 export function registerHistoryCommand(program: Command): void {
@@ -42,13 +44,13 @@ export function registerHistoryCommand(program: Command): void {
         const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const firstUser = conv.messages.find(m => m.role === 'user');
-        const preview = messageContentToText(firstUser?.content ?? '').slice(0, 50) || '(no content)';
+        const preview = terminalSafe(messageContentToText(firstUser?.content ?? '')).slice(0, 50) || '(no content)';
         const truncated = preview.length >= 50 ? preview + '...' : preview;
 
-        console.log(`${c.dim(dateStr)} ${c.dim(timeStr)} ${c.cyan(conv.model)}`);
+        console.log(`${c.dim(dateStr)} ${c.dim(timeStr)} ${c.cyan(terminalSafe(conv.model))}`);
         console.log(`  ${truncated}`);
         if (conv.character) {
-          console.log(`  ${c.dim(`Character: ${conv.character}`)}`);
+          console.log(`  ${c.dim(`Character: ${terminalSafe(conv.character)}`)}`);
         }
         console.log('');
       }
@@ -78,7 +80,7 @@ export function registerHistoryCommand(program: Command): void {
       const recent = conversations.slice(-limit).reverse();
 
       if (format === 'json') {
-        console.log(JSON.stringify(recent, null, 2));
+        console.log(formatJson(recent));
         return;
       }
 
@@ -90,13 +92,13 @@ export function registerHistoryCommand(program: Command): void {
         const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         const firstUser = conv.messages.find(m => m.role === 'user');
-        const preview = messageContentToText(firstUser?.content ?? '').slice(0, 50) || '(no content)';
+        const preview = terminalSafe(messageContentToText(firstUser?.content ?? '')).slice(0, 50) || '(no content)';
         const truncated = preview.length >= 50 ? preview + '...' : preview;
 
-        console.log(`${c.dim(dateStr)} ${c.dim(timeStr)} ${c.cyan(conv.model)}`);
+        console.log(`${c.dim(dateStr)} ${c.dim(timeStr)} ${c.cyan(terminalSafe(conv.model))}`);
         console.log(`  ${truncated}`);
         if (conv.character) {
-          console.log(`  ${c.dim(`Character: ${conv.character}`)}`);
+          console.log(`  ${c.dim(`Character: ${terminalSafe(conv.character)}`)}`);
         }
         console.log('');
       }
@@ -133,26 +135,27 @@ export function registerHistoryCommand(program: Command): void {
       }
 
       if (format === 'json') {
-        console.log(JSON.stringify(conv, null, 2));
+        console.log(formatJson(conv));
         return;
       }
 
       const date = new Date(conv.timestamp);
 
-      console.log(c.bold(`\n📜 Conversation ${conv.id.slice(0, 8)}`));
+      console.log(c.bold(`\n📜 Conversation ${terminalSafe(conv.id).slice(0, 8)}`));
       console.log(c.dim(`Date: ${date.toLocaleString()}`));
-      console.log(c.dim(`Model: ${conv.model}`));
+      console.log(c.dim(`Model: ${terminalSafe(conv.model)}`));
       if (conv.character) {
-        console.log(c.dim(`Character: ${conv.character}`));
+        console.log(c.dim(`Character: ${terminalSafe(conv.character)}`));
       }
       console.log(c.dim('─'.repeat(50)));
       console.log('');
 
       for (const msg of conv.messages) {
         const roleColor = msg.role === 'user' ? c.green : msg.role === 'assistant' ? c.cyan : c.yellow;
-        const roleName = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+        const role = terminalSafe(msg.role);
+        const roleName = role.charAt(0).toUpperCase() + role.slice(1);
 
-        const text = messageContentToText(msg.content);
+        const text = terminalSafe(messageContentToText(msg.content));
         if (format === 'markdown') {
           console.log(`**${roleName}:** ${text}\n`);
         } else {
