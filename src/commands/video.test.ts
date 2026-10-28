@@ -118,7 +118,7 @@ test('waitForVideoStatus polls lowercase processing and returns the final respon
   assert.deepEqual(result, responses[1]);
 });
 
-test('waitForVideoStatus times out even when a status request does not settle', async () => {
+test('waitForVideoStatus times out even when a status request does not settle', { timeout: 5_000 }, async () => {
   await assert.rejects(
     waitForVideoStatus(
       () => new Promise<VideoStatusResult>(() => undefined),
