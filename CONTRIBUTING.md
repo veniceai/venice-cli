@@ -99,6 +99,10 @@ venice-cli/
 
 ### Testing
 
+- Run `npm test`, which builds the project and runs the compiled tests with a
+  temporary `HOME`, so your own `~/.venice` is never read or changed. Options
+  after `--` are passed to `node --test`, for example
+  `npm test -- --test-concurrency=2`
 - Test new features manually before submitting
 - Test with and without API key configured
 - Test with `--no-color` flag
