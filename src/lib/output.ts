@@ -32,18 +32,32 @@ export function getChalk() {
   return createChalk();
 }
 
+interface TerminalStream {
+  isTTY?: boolean;
+  columns?: number;
+}
+
 // Spinner wrapper
 let currentSpinner: Ora | null = null;
 
-export function startSpinner(text: string): Ora | null {
-  if (!process.stdout.isTTY) return null;
-  
+export function canShowSpinner(stream: TerminalStream): boolean {
+  return stream.isTTY === true && (stream.columns ?? 0) > 0;
+}
+
+export function startSpinner(
+  text: string,
+  stream: NodeJS.WritableStream & TerminalStream = process.stderr
+): Ora | null {
+  // ora divides by the stream's width, and a pseudo-terminal can report 0 columns.
+  if (!process.stdout.isTTY || !canShowSpinner(stream)) return null;
+
   currentSpinner = ora({
     text,
     color: 'cyan',
     spinner: 'dots',
+    stream,
   }).start();
-  
+
   return currentSpinner;
 }
 
