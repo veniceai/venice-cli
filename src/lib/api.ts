@@ -78,6 +78,8 @@ const CONNECT_ERROR_CODES = new Set([
 const MAY_HAVE_BEEN_PROCESSED =
   'The request may already have been processed, so it was not retried. ' +
   'Check before running it again; paid requests appear in `venice billing usage`.';
+const REDIRECT_REFUSED =
+  'The Venice API answered with a redirect. API requests do not follow redirects.';
 
 function truncateErrorMessage(message: string): string {
   return message.length > MAX_ERROR_MESSAGE_LENGTH
@@ -142,7 +144,7 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-// undici reports socket and DNS failures as a TypeError with a cause.
+// undici reports socket, DNS and redirect failures as a TypeError with a cause.
 function isNetworkError(error: unknown): error is TypeError {
   return error instanceof TypeError && error.cause !== undefined;
 }
@@ -156,6 +158,10 @@ function isConnectError(error: TypeError): boolean {
       syscall === 'connect' ||
       syscall === 'getaddrinfo';
   });
+}
+
+function isRedirectError(error: TypeError): boolean {
+  return error.cause instanceof Error && error.cause.message === 'unexpected redirect';
 }
 
 function networkFailureMessage(error: TypeError): string {
@@ -180,6 +186,7 @@ function paidRequestError(error: unknown, timeoutMessage: string): unknown {
     return error.isRetryable() ? withProcessedNote(error) : error;
   }
   if (isNetworkError(error)) {
+    if (isRedirectError(error)) return new Error(REDIRECT_REFUSED);
     const failure = new Error(networkFailureMessage(error));
     return isConnectError(error) ? failure : withProcessedNote(failure);
   }
@@ -233,6 +240,7 @@ async function checkOnline(): Promise<boolean> {
     await fetch(`${VENICE_API}/models`, {
       method: 'HEAD',
       signal: controller.signal,
+      redirect: 'manual',
     });
     return true;
   } catch {
@@ -327,6 +335,7 @@ export async function apiRequest<T>(
         headers,
         body: requestBody,
         signal: controller.signal,
+        redirect: 'error',
       });
       responded = true;
 
@@ -424,6 +433,11 @@ export async function apiRequest<T>(
       if (!isNetworkError(error)) {
         if (spinner) stopSpinner(false);
         throw error;
+      }
+
+      if (isRedirectError(error)) {
+        if (spinner) stopSpinner(false);
+        throw new Error(REDIRECT_REFUSED);
       }
 
       const neverSent = !responded && isConnectError(error);
@@ -958,6 +972,7 @@ export async function upscaleImage(
       headers: getHeaders(),
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
@@ -1038,6 +1053,7 @@ export async function textToSpeech(
       headers: getHeaders(),
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
@@ -1125,6 +1141,7 @@ export async function cloneVoice(
       headers: getHeaders(true, ''),
       body: form,
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
@@ -1235,6 +1252,7 @@ export async function transcribe(
       body: multipartBody as unknown as RequestInit['body'],
       duplex: 'half',
       signal: controller.signal,
+      redirect: 'error',
     };
 
     const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
@@ -2305,6 +2323,7 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
       body: multipartBody as unknown as RequestInit['body'],
       duplex: 'half',
       signal: controller.signal,
+      redirect: 'error',
     };
     const response = await fetch(`${VENICE_API}/augment/text-parser`, requestInit);
 
