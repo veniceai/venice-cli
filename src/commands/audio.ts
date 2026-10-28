@@ -21,6 +21,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { apiId, shellCommand } from '../lib/shell-quote.js';
 
 export function registerAudioCommands(program: Command): void {
   // Text to speech
@@ -104,7 +105,7 @@ export function registerAudioCommands(program: Command): void {
 
         console.log(formatSuccess(`Cloned voice: ${result.id}`));
         console.log(`Model: ${terminalSafe(result.model)}`);
-        console.log(`Use: venice tts -m ${result.model} -v ${result.id} "Hello"`);
+        console.log(`Use: ${shellCommand`venice tts -m ${apiId(result.model)} -v ${apiId(result.id)} "Hello"`}`);
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
