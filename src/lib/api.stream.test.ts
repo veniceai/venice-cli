@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test, { after } from 'node:test';
+import test, { after, beforeEach } from 'node:test';
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => void | Promise<void>;
 
@@ -27,6 +27,10 @@ process.env.VENICE_API_BASE_URL = `${origin}/api/v1`;
 process.env.VENICE_API_KEY = 'test-key';
 process.env.VENICE_TEST_STREAM_IDLE_TIMEOUT_MS = '300';
 const api = await import('./api.js');
+
+beforeEach(() => {
+  rmSync(join(homeDir, '.venice', 'usage.json'), { force: true });
+});
 
 after(() => {
   server.closeAllConnections();
@@ -69,6 +73,11 @@ async function collect(
 
 function content(chunks: StreamChunk[]): string {
   return chunks.map((value) => String(value.content ?? '')).join('');
+}
+
+function usageEntries(): Array<Record<string, unknown>> {
+  const file = join(homeDir, '.venice', 'usage.json');
+  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
 }
 
 test('spec-valid framing is parsed: optional space, CR line endings, multi-line data', async () => {
@@ -198,4 +207,53 @@ test('finish_reason, usage and the completion id are still yielded', async () =>
     { finish_reason: 'stop', done: false, completionId: 'cmpl-9' },
     { done: true, usage, completionId: 'cmpl-9' },
   ]);
+});
+
+test('a streamed usage record keeps only token counts and the CLI-chosen command and model', async () => {
+  serveEvents([
+    `data: ${chunk({ content: 'Hi' })}\n\n`,
+    `data: ${JSON.stringify({
+      id: 'cmpl-1',
+      choices: [],
+      usage: {
+        prompt_tokens: 3,
+        completion_tokens: 4,
+        total_tokens: 7,
+        command: 'server-command',
+        model: 'server-model',
+        note: '\u001b]52;c;Zm9v\u0007',
+      },
+    })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+
+  await collect();
+  const entries = usageEntries();
+  assert.equal(entries.length, 1);
+  const { timestamp, ...entry } = entries[0];
+  assert.equal(typeof timestamp, 'string');
+  assert.deepEqual(entry, {
+    prompt_tokens: 3,
+    completion_tokens: 4,
+    total_tokens: 7,
+    command: 'chat',
+    model: 'stream-model',
+  });
+});
+
+test('a non-streamed usage record drops counts that are not non-negative integers', async () => {
+  handler = (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: 'Hi' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: -1, completion_tokens: 2.5, total_tokens: '9', command: 'server-command' },
+    }));
+  };
+
+  await api.chatCompletion([{ role: 'user', content: 'hello' }], { model: 'plain-model' });
+  const entries = usageEntries();
+  assert.equal(entries.length, 1);
+  const { timestamp, ...entry } = entries[0];
+  assert.equal(typeof timestamp, 'string');
+  assert.deepEqual(entry, { command: 'chat', model: 'plain-model' });
 });

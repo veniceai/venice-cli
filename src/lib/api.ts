@@ -4,7 +4,7 @@
  * Handles all API communication with retry logic and error handling.
  */
 
-import { requireApiKey, trackUsage } from './config.js';
+import { requireApiKey, trackUsage, type UsageEntry } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { ServerSentEventParser } from './sse.js';
 import { getVersion } from './version.js';
@@ -525,6 +525,29 @@ export interface ChatCompletionRequestOptions {
   prompt_cache_retention?: PromptCacheRetention;
 }
 
+function tokenCounts(
+  usage: unknown
+): Pick<UsageEntry, 'prompt_tokens' | 'completion_tokens' | 'total_tokens'> {
+  const counts: Pick<UsageEntry, 'prompt_tokens' | 'completion_tokens' | 'total_tokens'> = {};
+  if (usage === null || typeof usage !== 'object') return counts;
+  for (const field of ['prompt_tokens', 'completion_tokens', 'total_tokens'] as const) {
+    const value = (usage as Record<string, unknown>)[field];
+    if (Number.isSafeInteger(value) && (value as number) >= 0) {
+      counts[field] = value as number;
+    }
+  }
+  return counts;
+}
+
+function recordChatUsage(usage: unknown, options: ChatCompletionRequestOptions): void {
+  if (!usage) return;
+  trackUsage({
+    ...tokenCounts(usage),
+    command: 'chat',
+    model: options.model || 'kimi-k2-5',
+  });
+}
+
 export function buildChatCompletionBody(
   messages: Message[],
   options: ChatCompletionRequestOptions,
@@ -600,14 +623,7 @@ export async function chatCompletion(
   const choice = response.choices?.[0];
   const usage = response.usage;
 
-  // Track usage
-  if (usage) {
-    trackUsage({
-      command: 'chat',
-      model: options.model || 'kimi-k2-5',
-      ...usage,
-    });
-  }
+  recordChatUsage(usage, options);
 
   return {
     content: choice?.message?.content || '',
@@ -674,13 +690,7 @@ export async function* chatCompletionStream(
         const data = event.data.trim();
         if (!data) continue;
         if (data === '[DONE]') {
-          if (totalUsage) {
-            trackUsage({
-              command: 'chat',
-              model: options.model || 'kimi-k2-5',
-              ...totalUsage,
-            });
-          }
+          recordChatUsage(totalUsage, options);
           yield { done: true, usage: totalUsage, completionId };
           return;
         }
