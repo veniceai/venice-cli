@@ -497,3 +497,31 @@ test('parseRetryAfter reads delta-seconds and HTTP dates', () => {
     assert.equal(api.parseRetryAfter(invalid, now), undefined, String(invalid));
   }
 });
+
+test('API requests refuse redirects instead of following them', async () => {
+  const redirected: string[] = [];
+  const elsewhere = createServer((request, response) => {
+    redirected.push(`${request.method} ${request.url}`);
+    sendJson(response, 200, {
+      choices: [{ message: { content: 'from elsewhere' }, finish_reason: 'stop' }],
+    });
+  });
+  await listen(elsewhere);
+  const target = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}`;
+  handler = (request, response) => {
+    response.writeHead(307, { Location: `${target}${request.url}` });
+    response.end();
+  };
+
+  try {
+    await assert.rejects(
+      api.chatCompletion([{ role: 'user', content: 'SECRET PROMPT' }], { model: 'redirect-model' }),
+      /answered with a redirect/
+    );
+    await assert.rejects(api.textToSpeech('SECRET TEXT'), /answered with a redirect/);
+    assert.deepEqual(redirected, []);
+  } finally {
+    elsewhere.closeAllConnections();
+    elsewhere.close();
+  }
+});
