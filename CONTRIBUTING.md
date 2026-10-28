@@ -103,6 +103,10 @@ venice-cli/
   temporary `HOME`, so your own `~/.venice` is never read or changed. Options
   after `--` are passed to `node --test`, for example
   `npm test -- --test-concurrency=2`
+- Name test files `*.test.ts`. They compile into `dist/` for the test runner
+  but are left out of the npm package; `npm run check:package` (run in CI)
+  fails if the package would contain anything other than the compiled CLI,
+  `examples/`, `README.md` and `LICENSE`
 - Test new features manually before submitting
 - Test with and without API key configured
 - Test with `--no-color` flag
