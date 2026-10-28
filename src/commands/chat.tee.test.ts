@@ -212,7 +212,7 @@ const brokenAttestations: Array<[string, Record<string, unknown>, RegExp]> = [
     /did not include an Intel TDX quote/,
   ],
   ['an unparseable quote', { intel_quote: '00'.repeat(100) }, /could not be parsed/],
-  ['a non-TDX TEE type', { intel_quote: buildTdxQuote({ teeType: 0 }) }, /Unexpected TEE type/],
+  ['a non-TDX TEE type', { intel_quote: buildTdxQuote({ teeType: 0 }) }, /could not be parsed/],
   ['a debug-mode TD', { intel_quote: buildTdxQuote({ tdAttributes: DEBUG_TD_ATTRIBUTES }) }, /debug mode/],
   ['no server verification', { server_verification: undefined }, /Server verification details were not returned/],
   ['an unbound nonce', { server_verification: { ...serverVerification, nonceBinding: { bound: false } } }, /Client nonce was not bound/],

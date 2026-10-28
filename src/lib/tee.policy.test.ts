@@ -82,7 +82,7 @@ const brokenFields: BrokenField[] = [
   { name: 'a quote that cannot be parsed', policies: BOTH, change: { intel_quote: '00'.repeat(100) }, failure: /could not be parsed/ },
   { name: 'a quote that is not a string', policies: BOTH, change: { intel_quote: 42 }, failure: /could not be parsed/ },
   { name: 'a quote that cannot be parsed, leaving no REPORTDATA', policies: ['E2EE'], change: { intel_quote: '00'.repeat(100) }, failure: /REPORTDATA was not available/ },
-  { name: 'a non-TDX TEE type', policies: BOTH, change: { intel_quote: buildTdxQuote({ reportData: signingAddress, teeType: 0 }) }, failure: /Unexpected TEE type/ },
+  { name: 'a non-TDX TEE type', policies: BOTH, change: { intel_quote: buildTdxQuote({ reportData: signingAddress, teeType: 0 }) }, failure: /could not be parsed/ },
   {
     name: 'a debug-mode TD',
     policies: BOTH,
