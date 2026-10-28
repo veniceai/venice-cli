@@ -6,8 +6,10 @@
 
 import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
+import { ServerSentEventParser } from './sse.js';
 import { getVersion } from './version.js';
 import { Readable } from 'stream';
+import type { ReadableStreamReadResult } from 'stream/web';
 import { randomBytes, randomUUID } from 'crypto';
 import type {
   Message,
@@ -45,7 +47,7 @@ const VENICE_API =
     ? process.env.VENICE_API_BASE_URL
     : 'https://api.venice.ai/api/v1';
 
-// Test runs may shorten the retry back-off; production ignores this.
+// Test runs may shorten back-off and stall timeouts; production ignores these.
 function durationFromTestEnv(name: string, fallback: number): number {
   if (process.env.NODE_ENV !== 'test') return fallback;
   const value = Number(process.env[name]);
@@ -56,6 +58,7 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = durationFromTestEnv('VENICE_TEST_RETRY_DELAY_MS', 1000);
 const MAX_RETRY_AFTER_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
+const STREAM_IDLE_TIMEOUT_MS = durationFromTestEnv('VENICE_TEST_STREAM_IDLE_TIMEOUT_MS', 120000);
 const DOCUMENT_PARSE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_STATUS_BYTES = 1024 * 1024;
@@ -69,6 +72,7 @@ const MAX_IMAGE_GENERATION_RESPONSE_BYTES =
   Math.ceil((MAX_IMAGE_DOWNLOAD_BYTES * 4 * 4) / 3) + 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_ERROR_MESSAGE_LENGTH = 1000;
+const MAX_EVENT_STREAM_LINE_LENGTH = 1024 * 1024;
 const CONNECT_ERROR_CODES = new Set([
   'ECONNREFUSED',
   'ENOTFOUND',
@@ -637,78 +641,141 @@ export async function* chatCompletionStream(
     additionalHeaders: options.additionalHeaders,
   });
 
+  const contentType = response.headers.get('content-type');
+  if ((contentType || '').split(';')[0].trim().toLowerCase() !== 'text/event-stream') {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Chat stream returned Content-Type ${contentType || '(missing)'} instead of text/event-stream.`
+    );
+  }
+
   const reader = response.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
-  let buffer = '';
+  const parser = new ServerSentEventParser(MAX_EVENT_STREAM_LINE_LENGTH);
   let totalUsage: any = null;
   let completionId: string | undefined;
+  // Only data events push the deadline back; keepalive comments do not.
+  let deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const { done, value } = await readBeforeDeadline(reader, deadline);
+      const events = done
+        ? parser.end(decoder.decode())
+        : parser.push(decoder.decode(value, { stream: true }));
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      for (const event of events) {
+        if (event.type === 'error') {
+          throw new Error(`Chat stream failed: ${streamErrorMessage(event.data)}`);
+        }
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') {
-            if (totalUsage) {
-              trackUsage({
-                command: 'chat',
-                model: options.model || 'kimi-k2-5',
-                ...totalUsage,
-              });
-            }
-            yield { done: true, usage: totalUsage, completionId };
-            return;
+        const data = event.data.trim();
+        if (!data) continue;
+        if (data === '[DONE]') {
+          if (totalUsage) {
+            trackUsage({
+              command: 'chat',
+              model: options.model || 'kimi-k2-5',
+              ...totalUsage,
+            });
           }
+          yield { done: true, usage: totalUsage, completionId };
+          return;
+        }
 
-          try {
-            const json = JSON.parse(data);
-            const choice = json.choices?.[0];
-            const delta = choice?.delta;
-            
-            // Capture completion ID for E2EE signature verification
-            if (json.id && !completionId) {
-              completionId = json.id;
-            }
+        let json: any;
+        try {
+          json = JSON.parse(data);
+        } catch {
+          throw new Error('Chat stream sent an event that is not valid JSON.');
+        }
+        if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+          throw new Error('Chat stream sent an event that is not a JSON object.');
+        }
+        if (json.error) {
+          throw new Error(`Chat stream failed: ${streamErrorMessage(data)}`);
+        }
+        deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
 
-            if (json.usage) {
-              totalUsage = json.usage;
-            }
+        const choice = json.choices?.[0];
+        const delta = choice?.delta;
 
-            if (delta?.reasoning_content) {
-              yield { reasoning_content: delta.reasoning_content, done: false, completionId };
-            }
+        // Capture completion ID for E2EE signature verification
+        if (json.id && !completionId) {
+          completionId = json.id;
+        }
 
-            if (delta?.content) {
-              yield { content: delta.content, done: false, completionId };
-            }
+        if (json.usage) {
+          totalUsage = json.usage;
+        }
 
-            if (delta?.tool_calls) {
-              yield { tool_calls: delta.tool_calls, done: false, completionId };
-            }
+        if (delta?.reasoning_content) {
+          yield { reasoning_content: delta.reasoning_content, done: false, completionId };
+        }
 
-            if (choice?.finish_reason) {
-              yield { finish_reason: choice.finish_reason, done: false, completionId };
-            }
-          } catch {
-            // Skip malformed JSON
-          }
+        if (delta?.content) {
+          yield { content: delta.content, done: false, completionId };
+        }
+
+        if (delta?.tool_calls) {
+          yield { tool_calls: delta.tool_calls, done: false, completionId };
+        }
+
+        if (choice?.finish_reason) {
+          yield { finish_reason: choice.finish_reason, done: false, completionId };
         }
       }
+
+      if (done) break;
     }
+  } catch (error) {
+    throw isNetworkError(error) ? new Error(networkFailureMessage(error)) : error;
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 
-  yield { done: true, usage: totalUsage, completionId };
+  throw new Error('Chat stream ended before the response was complete.');
+}
+
+async function readBeforeDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(
+            `Chat stream stalled: no data for ${STREAM_IDLE_TIMEOUT_MS / 1000} seconds.`
+          ));
+        }, Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+function streamErrorMessage(data: string): string {
+  let payload: unknown = data;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    // Plain-text error event.
+  }
+  const error = (payload as { error?: unknown } | null)?.error ?? payload;
+  const message = typeof error === 'string'
+    ? error
+    : (error as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message.trim()
+    ? truncateErrorMessage(message)
+    : 'the server reported an error.';
 }
 
 // Image generation (Venice-native endpoint)
