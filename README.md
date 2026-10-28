@@ -694,15 +694,21 @@ venice voices
 ### Shell Completions
 
 ```bash
-# Bash
-venice completions bash >> ~/.bashrc
+# Bash: add this line to ~/.bashrc
+eval "$(venice completions bash)"
 
-# Zsh
-venice completions zsh >> ~/.zshrc
+# Zsh: add this line to ~/.zshrc after compinit runs (or after your framework, such as Oh My Zsh, loads)
+eval "$(venice completions zsh)"
+
+# Zsh, faster startup: save the script as _venice in a directory on $fpath instead,
+# and add `fpath=(~/.zfunc $fpath)` to ~/.zshrc before compinit runs
+mkdir -p ~/.zfunc && venice completions zsh > ~/.zfunc/_venice
 
 # Fish
 venice completions fish > ~/.config/fish/completions/venice.fish
 ```
+
+The scripts are generated from the commands and options of the installed CLI. Regenerate saved scripts after upgrading.
 
 ## Built-in Tools
 
