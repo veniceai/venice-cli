@@ -15,10 +15,17 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import * as formatsModule from 'ajv-formats';
 
 export const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
+export const MAX_SCHEMA_NODES = 1000;
+export const MAX_SCHEMA_DEPTH = 64;
+export const MAX_SCHEMA_ENUM_VALUES = 1000;
 export const MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RESPONSE_FORMAT_NAME_LENGTH = 64;
 const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const URL_FORMAT_PROTOCOLS = new Set(['http:', 'https:', 'ftp:']);
+
+// Keyed by schema object: loading the schema, building each request and
+// validating the reply all pass the same object, so a run compiles it once.
+const compiledSchemas = new WeakMap<object, ValidateFunction>();
 
 export const REASONING_EFFORTS = [
   'none',
@@ -258,12 +265,20 @@ function compileSchema(
   schema: Record<string, unknown>,
   source: string
 ): ValidateFunction {
+  const cached = compiledSchemas.get(schema);
+  if (cached) {
+    return cached;
+  }
+  assertSchemaWithinLimits(schema, source);
+
   const schemaUri = typeof schema.$schema === 'string' ? schema.$schema : '';
   const options = {
     allErrors: true,
     strict: true,
     validateSchema: true,
     allowUnionTypes: true,
+    inlineRefs: false,
+    logger: false,
   } as const;
   const ajv = schemaUri.includes('2020-12')
     ? new Ajv2020(options)
@@ -285,10 +300,48 @@ function compileSchema(
     validate: validateUniqueItems,
   });
 
+  let validate: ValidateFunction;
   try {
-    return ajv.compile(schema);
+    validate = ajv.compile(schema);
   } catch (error) {
     throw new Error(`Invalid or unsupported JSON schema in "${source}": ${errorMessage(error)}`);
+  }
+  compiledSchemas.set(schema, validate);
+  return validate;
+}
+
+// ajv's compile time and stack use grow faster than linearly with the
+// number of sibling subschemas, so bound the schema before compiling it.
+function assertSchemaWithinLimits(schema: Record<string, unknown>, source: string): void {
+  const pending: Array<{ value: object; depth: number }> = [{ value: schema, depth: 1 }];
+  let nodes = 0;
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    nodes++;
+    if (nodes > MAX_SCHEMA_NODES) {
+      throw new Error(
+        `JSON schema in "${source}" has more than ${MAX_SCHEMA_NODES} objects and arrays.`
+      );
+    }
+    if (next.depth > MAX_SCHEMA_DEPTH) {
+      throw new Error(
+        `JSON schema in "${source}" is nested more than ${MAX_SCHEMA_DEPTH} levels deep.`
+      );
+    }
+
+    const children = Array.isArray(next.value) ? next.value : Object.values(next.value);
+    if (!Array.isArray(next.value)) {
+      const enumValues = (next.value as Record<string, unknown>).enum;
+      if (Array.isArray(enumValues) && enumValues.length > MAX_SCHEMA_ENUM_VALUES) {
+        throw new Error(
+          `JSON schema in "${source}" has an enum with more than ${MAX_SCHEMA_ENUM_VALUES} values.`
+        );
+      }
+    }
+    for (const child of children) {
+      if (child !== null && typeof child === 'object') {
+        pending.push({ value: child, depth: next.depth + 1 });
+      }
+    }
   }
 }
 
