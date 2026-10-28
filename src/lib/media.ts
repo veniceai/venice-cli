@@ -4,6 +4,12 @@ import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import type { ReadableStreamReadResult } from 'stream/web';
 import { fetchDownload } from './download-guard.js';
+import {
+  createTemporaryFile,
+  type TemporaryFile,
+  writeNewFile,
+  writeOutputFile,
+} from './safe-write.js';
 
 const MB = 1024 * 1024;
 
@@ -119,11 +125,10 @@ function readFileWithinLimit(
   }
 }
 
-export function writeBufferToFile(
+function assertWritableBuffer(
   bytes: Buffer,
-  outputPath: string,
   options: { maxBytes: number; label: string }
-): { bytesWritten: number } {
+): void {
   if (bytes.length > options.maxBytes) {
     throw new Error(
       `${options.label} is too large (${formatBytes(bytes.length)}). ` +
@@ -134,11 +139,27 @@ export function writeBufferToFile(
   if (bytes.length === 0) {
     throw new Error(`${options.label} response was empty.`);
   }
+}
 
-  const outputDir = path.dirname(outputPath);
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(outputPath, bytes);
+export function writeBufferToFile(
+  bytes: Buffer,
+  outputPath: string,
+  options: { maxBytes: number; label: string }
+): { bytesWritten: number } {
+  assertWritableBuffer(bytes, options);
+  writeOutputFile(outputPath, bytes);
   return { bytesWritten: bytes.length };
+}
+
+/** Writes to `preferredPath`, or a numbered variant of it, without replacing an existing file. */
+export function writeBufferToNewFile(
+  bytes: Buffer,
+  preferredPath: string,
+  options: { maxBytes: number; label: string }
+): { bytesWritten: number; outputPath: string } {
+  assertWritableBuffer(bytes, options);
+  const outputPath = writeNewFile(preferredPath, bytes);
+  return { bytesWritten: bytes.length, outputPath };
 }
 
 export function mimeTypeFromPath(filePath: string, fallback = 'application/octet-stream'): string {
@@ -335,12 +356,8 @@ export async function writeResponseToFile(
     throw new Error('Download response has no body.');
   }
 
-  const outputDir = path.dirname(outputPath);
-  fs.mkdirSync(outputDir, { recursive: true });
-  const tempPath = path.join(
-    outputDir,
-    `.${path.basename(outputPath)}.${Date.now()}.${Math.random().toString(16).slice(2)}.part`
-  );
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const temporaryFile = createTemporaryFile(outputPath);
 
   try {
     let bytesWritten = 0;
@@ -363,18 +380,16 @@ export async function writeResponseToFile(
     await pipeline(
       Readable.fromWeb(response.body as unknown as globalThis.ReadableStream<Uint8Array>),
       limiter,
-      fs.createWriteStream(tempPath)
+      temporaryFile.createWriteStream()
     );
 
     if (bytesWritten === 0) {
       throw new Error('Download response was empty.');
     }
-    fs.renameSync(tempPath, outputPath);
+    temporaryFile.commit();
     return { bytesWritten, contentType };
   } catch (error) {
-    if (fs.existsSync(tempPath)) {
-      fs.rmSync(tempPath, { force: true });
-    }
+    temporaryFile.discard();
     throw error;
   }
 }
@@ -390,7 +405,7 @@ export async function streamResponseToFile(
     inactivityTimeoutMs?: number;
   }
 ): Promise<{ bytesWritten: number; contentType: string }> {
-  let tempPath: string | null = null;
+  let temporaryFile: TemporaryFile | undefined;
   let bytesWritten = 0;
   const inactivityTimeoutMs =
     options.inactivityTimeoutMs ?? DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS;
@@ -404,12 +419,8 @@ export async function streamResponseToFile(
       );
     }
 
-    const outputDir = path.dirname(outputPath);
-    fs.mkdirSync(outputDir, { recursive: true });
-    tempPath = path.join(
-      outputDir,
-      `.${path.basename(outputPath)}.${Date.now()}.${Math.random().toString(16).slice(2)}.part`
-    );
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    temporaryFile = createTemporaryFile(outputPath);
 
     const source = Readable.from((async function* () {
       for (const chunk of initialChunks) {
@@ -440,21 +451,18 @@ export async function streamResponseToFile(
       },
     });
 
-    await pipeline(source, limiter, fs.createWriteStream(tempPath));
+    await pipeline(source, limiter, temporaryFile.createWriteStream());
     if (bytesWritten === 0) {
       throw new Error(`${options.label} response was empty.`);
     }
-    fs.renameSync(tempPath, outputPath);
-    tempPath = null;
+    temporaryFile.commit();
     return {
       bytesWritten,
       contentType: response.headers.get('content-type') || 'video/mp4',
     };
   } catch (error) {
+    temporaryFile?.discard();
     await reader.cancel().catch(() => undefined);
-    if (tempPath && fs.existsSync(tempPath)) {
-      fs.rmSync(tempPath, { force: true });
-    }
     throw error;
   } finally {
     reader.releaseLock();

@@ -3,9 +3,9 @@
  */
 
 import { Command } from 'commander';
-import * as fs from 'fs';
 import * as path from 'path';
 import { parseDocument, scrapeWebPage } from '../lib/api.js';
+import { writeOutputFile } from '../lib/safe-write.js';
 import {
   detectOutputFormat,
   formatError,
@@ -72,12 +72,6 @@ export function registerAugmentCommands(program: Command): void {
         process.exit(1);
       }
     });
-}
-
-function writeOutputFile(outputPath: string, content: string): void {
-  const resolvedPath = path.resolve(outputPath);
-  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-  fs.writeFileSync(resolvedPath, content, 'utf-8');
 }
 
 function assertPublicWebUrl(value: string): void {
