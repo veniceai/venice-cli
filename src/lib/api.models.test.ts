@@ -38,7 +38,7 @@ test('listModels returns defensive copies of the cached model array', async () =
 
     assert.notStrictEqual(first, second);
     assert.deepEqual(second.map((model) => model.id), ['zeta', 'alpha']);
-    assert.equal(fetchCount, 10);
+    assert.equal(fetchCount, 9);
   } finally {
     clearModelsCache();
     globalThis.fetch = originalFetch;

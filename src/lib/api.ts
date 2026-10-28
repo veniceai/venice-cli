@@ -1399,6 +1399,8 @@ export function clearModelsCache(): void {
   modelsCache = null;
 }
 
+// The first listing of a model wins, so a typed query can never re-type a
+// model the base (text) list already returned: E2EE detection needs type text.
 function mergeModel(merged: Map<string, Model>, model: Model, requestedType?: string): void {
   const normalized: Model = { ...model };
 
@@ -1407,16 +1409,7 @@ function mergeModel(merged: Map<string, Model>, model: Model, requestedType?: st
   }
 
   const key = normalized.id || JSON.stringify(normalized);
-  const existing = merged.get(key);
-
-  if (!existing) {
-    merged.set(key, normalized);
-    return;
-  }
-
-  const existingType = (existing.type || '').toLowerCase();
-  const normalizedType = (normalized.type || '').toLowerCase();
-  if (existingType === 'text' && normalizedType && normalizedType !== 'text') {
+  if (!merged.has(key)) {
     merged.set(key, normalized);
   }
 }
@@ -1448,7 +1441,8 @@ export async function listModels(
     return [...modelsCache.models];
   }
 
-  const modelTypes = ['text', 'asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video', 'music'];
+  // The base list is the text catalog; other types are best-effort extras.
+  const modelTypes = ['asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video', 'music'];
   const merged = new Map<string, Model>();
 
   const base = apiRequest<{ data: Model[] }>('/models', {
@@ -1462,6 +1456,7 @@ export async function listModels(
     apiRequest<{ data: Model[] }>(`/models?type=${encodeURIComponent(type)}`, {
       method: 'GET',
       showSpinner: false,
+      retries: 0,
       maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
     })
       .then((response) => ({ type, response }))
