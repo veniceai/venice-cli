@@ -5,8 +5,10 @@
 import { Command } from 'commander';
 import { loadUsage, UsageEntry } from '../lib/config.js';
 import {
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 
 export function registerUsageCommand(program: Command): void {
@@ -46,7 +48,7 @@ export function registerUsageCommand(program: Command): void {
       }
 
       if (format === 'json') {
-        console.log(JSON.stringify(summarizeUsage(filtered), null, 2));
+        console.log(formatJson(summarizeUsage(filtered)));
         return;
       }
 
@@ -64,14 +66,14 @@ export function registerUsageCommand(program: Command): void {
       // By command
       console.log(c.bold('By Command:'));
       for (const [cmd, stats] of Object.entries(summary.by_command)) {
-        console.log(`  ${c.cyan(cmd.padEnd(15))} ${stats.calls} calls, ${stats.tokens.toLocaleString()} tokens`);
+        console.log(`  ${c.cyan(terminalSafe(cmd).padEnd(15))} ${stats.calls} calls, ${stats.tokens.toLocaleString()} tokens`);
       }
       console.log('');
 
       // By model
       console.log(c.bold('By Model:'));
       for (const [model, stats] of Object.entries(summary.by_model)) {
-        console.log(`  ${c.cyan(model.padEnd(25))} ${stats.calls} calls, ${stats.tokens.toLocaleString()} tokens`);
+        console.log(`  ${c.cyan(terminalSafe(model).padEnd(25))} ${stats.calls} calls, ${stats.tokens.toLocaleString()} tokens`);
       }
       console.log('');
 
@@ -82,9 +84,9 @@ export function registerUsageCommand(program: Command): void {
       
       for (const day of days) {
         const dayData = daily[day];
-        const tokens = dayData.reduce((sum, u) => sum + (u.total_tokens || 0), 0);
+        const tokens = dayData.reduce((sum, u) => sum + tokenCount(u.total_tokens), 0);
         const bar = '█'.repeat(Math.min(20, Math.ceil(tokens / 1000)));
-        console.log(`  ${c.dim(day)} ${bar} ${tokens.toLocaleString()}`);
+        console.log(`  ${c.dim(terminalSafe(day))} ${bar} ${tokens.toLocaleString()}`);
       }
 
       console.log(`\n${c.dim('Tip: Use "venice config set show_usage false" to hide per-request usage')}`);
@@ -111,11 +113,11 @@ function summarizeUsage(usage: UsageEntry[]): UsageSummary {
   };
 
   for (const entry of usage) {
-    const tokens = entry.total_tokens || 0;
+    const tokens = tokenCount(entry.total_tokens);
     
     summary.total_tokens += tokens;
-    summary.prompt_tokens += entry.prompt_tokens || 0;
-    summary.completion_tokens += entry.completion_tokens || 0;
+    summary.prompt_tokens += tokenCount(entry.prompt_tokens);
+    summary.completion_tokens += tokenCount(entry.completion_tokens);
 
     // By command
     if (!summary.by_command[entry.command]) {
@@ -133,6 +135,11 @@ function summarizeUsage(usage: UsageEntry[]): UsageSummary {
   }
 
   return summary;
+}
+
+// usage.json can hold values the server sent in place of token counts.
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function groupByDay(usage: UsageEntry[]): Record<string, UsageEntry[]> {
