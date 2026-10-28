@@ -8,7 +8,7 @@ import { requireApiKey, trackUsage } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { getVersion } from './version.js';
 import { Readable } from 'stream';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import type {
   Message,
   ToolDefinition,
@@ -2060,11 +2060,7 @@ export type TeeSignatureResponse = {
 };
 
 function generateClientNonce(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return randomBytes(32).toString('hex');
 }
 
 // Fetch TEE attestation for a model
