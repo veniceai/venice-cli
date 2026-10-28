@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import elliptic from 'elliptic';
 
 import {
   buildChatUserMessage,
@@ -546,7 +545,7 @@ function buildTdxQuote(signingAddress: string): string {
 
 async function runE2EEChat(args: string[], replyChunks: string[]) {
   const model = 'e2ee-test-model';
-  const signingKey = new elliptic.ec('secp256k1').genKeyPair().getPublic(false, 'hex');
+  const signingKey = generateEphemeralKeyPair().publicKeyHex;
   const signingAddress = deriveSigningAddressFromKey(signingKey);
   assert.ok(signingAddress);
   const requests: string[] = [];

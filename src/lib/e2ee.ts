@@ -1,11 +1,9 @@
 import { gcm } from '@noble/ciphers/aes'
 import { randomBytes } from '@noble/ciphers/webcrypto'
+import { secp256k1 } from '@noble/curves/secp256k1'
 import { hkdf } from '@noble/hashes/hkdf'
 import { sha256 } from '@noble/hashes/sha2'
 import { keccak_256 } from '@noble/hashes/sha3'
-import elliptic from 'elliptic'
-
-const EC = elliptic.ec
 
 const HKDF_INFO = 'ecdsa_encryption'
 const EPHEMERAL_PUB_LENGTH = 65
@@ -60,39 +58,39 @@ const normalizeUncompressedPublicKey = (signingKeyHex: string): Uint8Array | und
 }
 
 /**
+ * Derive the AES-256-GCM key from the ECDH shared secret's X coordinate.
+ */
+const deriveAesKey = (privateKey: Uint8Array, publicKey: Uint8Array | string): Uint8Array => {
+  const sharedPoint = secp256k1.getSharedSecret(privateKey, publicKey)
+  const aesKey = hkdf(sha256, sharedPoint.subarray(1), undefined, HKDF_INFO, 32)
+  zeroFill(sharedPoint)
+  return aesKey
+}
+
+/**
  * Generate ephemeral key pair for E2EE using secp256k1 curve.
  */
 export const generateEphemeralKeyPair = (): { privateKey: Uint8Array; publicKeyHex: string } => {
-  const ec = new EC('secp256k1')
-  const keyPair = ec.genKeyPair()
-  const clientPublicKeyHex = keyPair.getPublic('hex')
-  const privateKeyArray = keyPair.getPrivate().toArray('be', 32)
-  const privateKey = new Uint8Array(privateKeyArray)
-  return { privateKey, publicKeyHex: clientPublicKeyHex }
+  const privateKey = secp256k1.utils.randomSecretKey()
+  const publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKey, false))
+  return { privateKey, publicKeyHex }
 }
 
 /**
  * Encrypt plaintext for the model using ECDH + HKDF + AES-GCM.
  */
 export const encryptMessage = (plaintext: string, modelPublicKeyHex: string): string => {
-  const ec = new EC('secp256k1')
-
   const normalizedModelKey = normalizePublicKey(modelPublicKeyHex)
-  const modelPublicKey = ec.keyFromPublic(normalizedModelKey, 'hex')
 
-  const ephemeralKeyPair = ec.genKeyPair()
-
-  const sharedSecret = ephemeralKeyPair.derive(modelPublicKey.getPublic())
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
-
-  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
+  const ephemeralPrivateKey = secp256k1.utils.randomSecretKey()
+  const ephemeralPublic = secp256k1.getPublicKey(ephemeralPrivateKey, false)
+  const aesKey = deriveAesKey(ephemeralPrivateKey, normalizedModelKey)
+  zeroFill(ephemeralPrivateKey)
 
   const nonce = randomBytes(NONCE_LENGTH)
   const cipher = gcm(aesKey, nonce)
   const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext))
-
-  const ephemeralPublicArray = ephemeralKeyPair.getPublic(false, 'array')
-  const ephemeralPublic = new Uint8Array(ephemeralPublicArray)
+  zeroFill(aesKey)
 
   const result = new Uint8Array(EPHEMERAL_PUB_LENGTH + NONCE_LENGTH + encrypted.length)
   result.set(ephemeralPublic, 0)
@@ -122,18 +120,13 @@ export const decryptChunk = (ciphertextHex: string, ephemeralPrivateKey: Uint8Ar
   const nonce = raw.slice(EPHEMERAL_PUB_LENGTH, EPHEMERAL_PUB_LENGTH + NONCE_LENGTH)
   const ciphertext = raw.slice(EPHEMERAL_PUB_LENGTH + NONCE_LENGTH)
 
-  const ec = new EC('secp256k1')
-  const clientKey = ec.keyFromPrivate(Buffer.from(ephemeralPrivateKey))
-  const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPubKey))
-  const sharedSecret = clientKey.derive(serverKey.getPublic())
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
-
-  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
-
-  const cipher = gcm(aesKey, nonce)
-  const plaintext = cipher.decrypt(ciphertext)
-
-  return new TextDecoder().decode(plaintext)
+  const aesKey = deriveAesKey(ephemeralPrivateKey, serverEphemeralPubKey)
+  try {
+    const cipher = gcm(aesKey, nonce)
+    return new TextDecoder().decode(cipher.decrypt(ciphertext))
+  } finally {
+    zeroFill(aesKey)
+  }
 }
 
 /**
@@ -180,8 +173,6 @@ export const recoverSignerAddress = (message: string, signatureHex: string): str
     const sigBytes = hexToBytes(signatureHex)
     if (sigBytes.length !== 65) return null
 
-    const r = sigBytes.slice(0, 32)
-    const s = sigBytes.slice(32, 64)
     let v = sigBytes[64]
 
     // Normalize v: Ethereum uses 27/28, but some implementations use 0/1
@@ -196,12 +187,8 @@ export const recoverSignerAddress = (message: string, signatureHex: string): str
     prefixed.set(messageBytes, prefix.length)
     const msgHash = keccak_256(prefixed)
 
-    const ec = new EC('secp256k1')
-    const rHex = bytesToHex(r)
-    const sHex = bytesToHex(s)
-
-    const pubKey = ec.recoverPubKey(msgHash, { r: rHex, s: sHex }, v)
-    const pubKeyBytes = new Uint8Array((pubKey.encode('array', false) as number[]).slice(1)) // remove 0x04 prefix
+    const signature = secp256k1.Signature.fromBytes(sigBytes.subarray(0, 64), 'compact').addRecoveryBit(v)
+    const pubKeyBytes = signature.recoverPublicKey(msgHash).toBytes(false).subarray(1) // remove 0x04 prefix
 
     const address = bytesToHex(keccak_256(pubKeyBytes).slice(12))
     return address.toLowerCase()
