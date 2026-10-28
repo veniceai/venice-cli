@@ -183,6 +183,37 @@ test('music status --wait accepts a --timeout beyond the 32-bit timer limit', { 
   }
 }));
 
+test('music commands fail clearly on a 200 response of the wrong shape', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, {}),
+    'POST /api/v1/audio/quote': (_request, response) => sendJson(response, {}),
+    [RETRIEVE]: (_request, response) => sendJson(response, {}),
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, {}),
+  });
+  const cases: Array<[string[], string]> = [
+    [['music', 'generate', 'a song'], '/audio/queue'],
+    [['music', 'quote'], '/audio/quote'],
+    [['music', 'status', 'mq1'], '/audio/retrieve'],
+    [['music', 'retrieve', 'mq1', '-o', join(dir, 'out.mp3')], '/audio/retrieve'],
+    [['music', 'complete', 'mq1', '-f', 'json'], '/audio/complete'],
+  ];
+  try {
+    for (const [args, endpoint] of cases) {
+      const result = await runCli(args, dir, stub.origin);
+      const label = args.join(' ');
+
+      assert.equal(result.status, 1, `${label}: ${result.stdout}`);
+      assert.ok(
+        result.stderr.includes(`Unexpected response from Venice (${endpoint})`),
+        `${label}: ${result.stderr}`
+      );
+      assert.doesNotMatch(result.stdout, /undefined|queued!/, label);
+    }
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('music status without --wait reports a failed job and exits 0', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     [RETRIEVE]: (_request, response) => sendJson(response, { status: 'FAILED', error: 'generation failed' }),

@@ -51,7 +51,7 @@ function printProcessingStatus(status: AudioProcessingStatus): void {
   const color = colorForJobStatus(status.status, c);
 
   console.log(`${c.dim('Status:')} ${color(status.status)}`);
-  if (status.average_execution_time !== undefined) {
+  if (typeof status.average_execution_time === 'number') {
     const remainingMs = Math.max(
       0,
       status.average_execution_time - (status.execution_duration || 0)

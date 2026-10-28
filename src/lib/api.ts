@@ -1369,6 +1369,96 @@ export function videoUrlFromStatus(status: VideoStatusResult): string | undefine
   return status.video_url || status.url || status.download_url;
 }
 
+class UnexpectedResponseError extends Error {}
+
+type FieldTypes = Record<string, 'string' | 'number' | 'boolean'>;
+
+const VIDEO_STATUS_FIELDS: FieldTypes = {
+  average_execution_time: 'number',
+  execution_duration: 'number',
+  video_url: 'string',
+  url: 'string',
+  download_url: 'string',
+  error: 'string',
+};
+
+const AUDIO_STATUS_FIELDS: FieldTypes = {
+  average_execution_time: 'number',
+  execution_duration: 'number',
+  error: 'string',
+};
+
+function unexpectedResponse(endpoint: string, problem: string): UnexpectedResponseError {
+  return new UnexpectedResponseError(`Unexpected response from Venice (${endpoint}): ${problem}.`);
+}
+
+function parseJsonText(text: string, endpoint: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw unexpectedResponse(endpoint, 'the body is not valid JSON');
+  }
+}
+
+function jsonObject(value: unknown, endpoint: string, optionalFields: FieldTypes = {}): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw unexpectedResponse(endpoint, 'expected a JSON object');
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const [field, type] of Object.entries(optionalFields)) {
+    const fieldValue = record[field];
+    if (fieldValue !== undefined && fieldValue !== null && typeof fieldValue !== type) {
+      throw unexpectedResponse(endpoint, `"${field}" is not a ${type}`);
+    }
+  }
+  return record;
+}
+
+function parseQueueResponse(
+  value: unknown,
+  endpoint: string,
+  requestedModel: string
+): { queue_id: string; model: string; status?: string } {
+  const record = jsonObject(value, endpoint, { model: 'string', status: 'string' });
+  if (typeof record.queue_id !== 'string' || !record.queue_id) {
+    throw unexpectedResponse(endpoint, 'missing queue_id');
+  }
+  return {
+    ...record,
+    queue_id: record.queue_id,
+    model: typeof record.model === 'string' && record.model ? record.model : requestedModel,
+  };
+}
+
+function parseQuoteResponse(value: unknown, endpoint: string): { quote: number } {
+  const record = jsonObject(value, endpoint);
+  if (typeof record.quote !== 'number' || !Number.isFinite(record.quote) || record.quote < 0) {
+    throw unexpectedResponse(endpoint, 'missing or invalid quote');
+  }
+  return { ...record, quote: record.quote };
+}
+
+function parseCompleteResponse(value: unknown, endpoint: string): { success: boolean } {
+  const record = jsonObject(value, endpoint);
+  if (typeof record.success !== 'boolean') {
+    throw unexpectedResponse(endpoint, 'missing success flag');
+  }
+  return { ...record, success: record.success };
+}
+
+function parseJobStatus<T extends { status: string }>(
+  value: unknown,
+  endpoint: string,
+  optionalFields: FieldTypes
+): T {
+  const record = jsonObject(value, endpoint, optionalFields);
+  if (typeof record.status !== 'string' || !record.status.trim()) {
+    throw unexpectedResponse(endpoint, 'missing status');
+  }
+  return record as T;
+}
+
 async function retrieveVideoResponse(
   queueId: string,
   model: string,
@@ -1456,6 +1546,7 @@ async function retrieveVideoResponse(
         !fileWriteStarted &&
         attempt < MAX_RETRIES &&
         !(error instanceof VideoRetrieveValidationError) &&
+        !(error instanceof UnexpectedResponseError) &&
         (
           !(error instanceof VeniceApiError) ||
           error.isRetryable() ||
@@ -1541,7 +1632,11 @@ async function inspectVideoRetrieveResponse(
     const buffered = Buffer.concat(chunks, totalBytes);
     const firstNonWhitespace = buffered.find((byte) => byte > 0x20);
     if (readingJson || firstNonWhitespace === 0x7b) {
-      const status = JSON.parse(buffered.toString('utf-8')) as VideoStatusResult;
+      const status = parseJobStatus<VideoStatusResult>(
+        parseJsonText(buffered.toString('utf-8'), '/video/retrieve'),
+        '/video/retrieve',
+        VIDEO_STATUS_FIELDS
+      );
       reader.releaseLock();
       return { kind: 'status', status };
     }
@@ -1582,21 +1677,19 @@ export async function queueVideoGeneration(
     body.image_url = options.imageUrl;
   }
 
-  const response = await apiRequest<{
-    queue_id: string;
-    model: string;
-  }>('/video/queue', {
+  const response = await apiRequest<unknown>('/video/queue', {
     method: 'POST',
     body,
     spinnerText: 'Queueing video generation...',
   });
+  const queued = parseQueueResponse(response, '/video/queue', String(body.model));
 
   trackUsage({
     command: 'video',
     model: options.model || 'wan-2.6-text-to-video',
   });
 
-  return response;
+  return queued;
 }
 
 export async function queueVideoUpscale(
@@ -1607,7 +1700,7 @@ export async function queueVideoUpscale(
   } = {}
 ): Promise<{ queue_id: string; model: string }> {
   const model = options.model || 'topaz-video-upscale';
-  const response = await apiRequest<{ queue_id: string; model: string }>('/video/queue', {
+  const response = await apiRequest<unknown>('/video/queue', {
     method: 'POST',
     body: {
       model,
@@ -1616,9 +1709,10 @@ export async function queueVideoUpscale(
     },
     spinnerText: 'Queueing video upscale...',
   });
+  const queued = parseQueueResponse(response, '/video/queue', model);
 
   trackUsage({ command: 'video', model });
-  return response;
+  return queued;
 }
 
 export async function quoteVideoGeneration(options: {
@@ -1640,22 +1734,24 @@ export async function quoteVideoGeneration(options: {
   if (options.audio !== undefined) body.audio = options.audio;
   if (options.videoUrl) body.video_url = options.videoUrl;
 
-  return apiRequest('/video/quote', {
+  const response = await apiRequest<unknown>('/video/quote', {
     method: 'POST',
     body,
     spinnerText: 'Fetching video quote...',
   });
+  return parseQuoteResponse(response, '/video/quote');
 }
 
 export async function completeVideo(
   queueId: string,
   model: string
 ): Promise<{ success: boolean }> {
-  return apiRequest('/video/complete', {
+  const response = await apiRequest<unknown>('/video/complete', {
     method: 'POST',
     body: { queue_id: queueId, model },
     spinnerText: 'Cleaning up video...',
   });
+  return parseCompleteResponse(response, '/video/complete');
 }
 
 export async function transcribeVideo(
@@ -1754,30 +1850,28 @@ export async function quoteAudioGeneration(
     body.character_count = options.characterCount;
   }
 
-  return apiRequest('/audio/quote', {
+  const response = await apiRequest<unknown>('/audio/quote', {
     method: 'POST',
     body,
     spinnerText: 'Fetching audio quote...',
   });
+  return parseQuoteResponse(response, '/audio/quote');
 }
 
 // Music and sound effects - queue a generation job
 export async function queueAudioGeneration(
   prompt: string,
   options: AudioGenerationOptions
-): Promise<{ model: string; queue_id: string; status: string }> {
-  const response = await apiRequest<{
-    model: string;
-    queue_id: string;
-    status: string;
-  }>('/audio/queue', {
+): Promise<{ model: string; queue_id: string; status?: string }> {
+  const response = await apiRequest<unknown>('/audio/queue', {
     method: 'POST',
     body: audioGenerationBody(prompt, options),
     spinnerText: 'Queueing audio generation...',
   });
+  const queued = parseQueueResponse(response, '/audio/queue', options.model);
 
   trackUsage({ command: 'music', model: options.model });
-  return response;
+  return queued;
 }
 
 // Music and sound effects - retrieve processing status or completed binary audio
@@ -1796,7 +1890,11 @@ export async function retrieveGeneratedAudio(
   if (contentType === 'application/json') {
     return {
       kind: 'processing',
-      status: await response.json() as AudioProcessingStatus,
+      status: parseJobStatus<AudioProcessingStatus>(
+        parseJsonText(await response.text(), '/audio/retrieve'),
+        '/audio/retrieve',
+        AUDIO_STATUS_FIELDS
+      ),
     };
   }
 
@@ -1824,11 +1922,12 @@ export async function completeAudioGeneration(
   queueId: string,
   model: string
 ): Promise<{ success: boolean }> {
-  return apiRequest('/audio/complete', {
+  const response = await apiRequest<unknown>('/audio/complete', {
     method: 'POST',
     body: { queue_id: queueId, model },
     spinnerText: 'Cleaning up generated audio...',
   });
+  return parseCompleteResponse(response, '/audio/complete');
 }
 
 // Web search via chat
