@@ -40,7 +40,11 @@ const LIMIT_PERIODS = ['EPOCH', 'MONTH', 'LIFETIME'] as const;
 export function registerKeysCommand(program: Command): void {
   const keys = program
     .command('keys')
-    .description('Manage Venice API keys (requires an admin API key)');
+    .description('Manage Venice API keys (requires an admin API key)')
+    // Subcommands read --format after their request, which for create and delete changes the account.
+    .hook('preAction', (_keys, subcommand) => {
+      detectOutputFormat(subcommand.opts().format);
+    });
 
   keys
     .command('list')
