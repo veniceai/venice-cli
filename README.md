@@ -49,7 +49,7 @@ npx veniceai-cli chat 'Hello, world!'
 
 - 🤖 **Chat** with state-of-the-art AI models
 - 🔐 **End-to-End Encryption (E2EE)** for maximum privacy
-- 🛡️ **TEE Attestation** verification for trusted execution
+- 🛡️ **TEE Attestation** report checks before sending to TEE models
 - 🔍 **Web Search** with AI-powered synthesis
 - 📄 **Document Parsing** without model inference
 - 🌐 **Standalone Web Search & Scraping** for structured retrieval
@@ -119,14 +119,14 @@ cat error.log | venice chat "find the root cause"
 # Disable streaming
 venice chat --no-stream "Quick question"
 
-# E2EE encrypted chat (auto-enabled based on model capabilities)
+# E2EE chat (required for model IDs containing "e2ee"; the catalog must advertise E2EE)
 venice chat -m e2ee-qwen3-5-122b-a10b "This message is end-to-end encrypted"
 
-# TEE-only mode (attestation verified, no encryption)
-venice chat -m e2ee-qwen3-5-122b-a10b --no-e2ee "Verified but not encrypted"
+# TEE mode without E2EE (Venice's proxy can read the prompt; announced on stderr)
+venice chat -m e2ee-qwen3-5-122b-a10b --no-e2ee "This message is not end-to-end encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-qwen3-5-122b-a10b --tee-verify "Verify the secure enclave"
+venice chat -m e2ee-qwen3-5-122b-a10b --tee-verify "Show the attestation details"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
 venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like normal chat"
@@ -158,10 +158,10 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `--strip-thinking` | Strip thinking blocks from response |
 | `--no-venice-prompt` | Disable Venice system prompts |
 | `--search-results-in-stream` | Include search results in stream |
-| `--e2ee` | Enable E2EE encryption (auto-enabled for models with E2EE capability) |
-| `--no-e2ee` | Disable E2EE, use TEE-only mode (verifies attestation without encryption) |
+| `--e2ee` | Require E2EE (implied by model IDs containing `e2ee`; also used when the catalog advertises E2EE) |
+| `--no-e2ee` | Disable E2EE; private models fall back to TEE mode, where Venice's proxy can read the prompt (announced on stderr) |
 | `--tee-verify` | Show TEE attestation details |
-| `-q, --quiet` | Hide E2EE/TEE status messages (show only response) |
+| `-q, --quiet` | Hide E2EE/TEE status messages (show only response; a `--no-e2ee` downgrade is still announced) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
 Schema files are limited to 1 MiB and are compiled locally with strict JSON
@@ -423,32 +423,38 @@ instrumental mode.
 
 ### TEE Attestation
 
-Venice supports Trusted Execution Environment (TEE) attestation for models running in secure enclaves. This provides cryptographic proof that your data is processed in a trusted environment.
+Venice supports Trusted Execution Environment (TEE) attestation for models running in secure enclaves. The attestation report comes from Venice's API. The CLI checks it for internal consistency: the requested model, the echo of a fresh client nonce, the server's own verdict, debug mode, and the binding between the enclave signing key and the quote's REPORTDATA. The CLI does not yet verify the Intel TDX quote signature or the enclave measurements client-side, so a passing check rests on the server's report (see [#43](https://github.com/veniceai/venice-cli/issues/43)).
 
 ```bash
-# Fetch and display TEE attestation for a model
+# Fetch and display the server's attestation report for a model
 venice tee attestation tee-qwen3-5-122b-a10b
 
 # With verbose TDX quote details
 venice tee attestation --verbose tee-qwen3-5-122b-a10b
 
-# Run TEE attestation policy verification
+# Check the attestation report against the E2EE policy
 venice tee verify tee-qwen3-5-122b-a10b
 
-# Verify a response signature (requires completion ID from a previous request)
+# Show a response signature (requires the completion ID of a previous request)
 venice tee signature e2ee-qwen3-5-122b-a10b <completion-id>
 
-# Verify signature matches expected signer address
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123...
+# Check the signature against the exact reply text you received; the expected
+# signer comes from a fresh attestation that must pass the E2EE policy
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --expect-content reply.txt
+
+# Or compare with the reply's SHA-256 and a signer address you already trust
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --expect-sha256 <sha256> --verify-signer 0x123...
 ```
 
 **TEE Commands:**
 
 | Command | Description |
 |---------|-------------|
-| `attestation <model>` | Fetch and display TEE attestation report |
-| `verify <model>` | Run TEE attestation policy verification |
-| `signature <model> <id>` | Fetch and verify TEE response signature |
+| `attestation <model>` | Fetch and display the server's TEE attestation report |
+| `verify <model>` | Check the server's attestation report against the E2EE policy (internal consistency only) |
+| `signature <model> <id>` | Fetch a TEE response signature and check it with `--expect-content`, `--expect-sha256`, or `--verify-signer` |
+
+`tee signature` exits non-zero when the response is for a different request ID or when any requested check fails. `--expect-content` compares the file byte for byte with the signed response, so a trailing newline counts. Without `--verify-signer`, the expected signer is the signing key of a fresh attestation that passes the same policy as `tee verify`. With `--verify-signer` alone, the CLI checks only who signed the text, not what the text says.
 
 ### Models
 
@@ -730,8 +736,8 @@ venice chat "Generate code" | pbcopy
 
 Venice CLI is designed with privacy in mind:
 
-- **End-to-End Encryption (E2EE)**: Messages encrypted client-side, decrypted only in the TEE—Venice cannot read your data
-- **TEE Attestation**: Cryptographically verify that models run in secure enclaves before sending data
+- **End-to-End Encryption (E2EE)**: Messages are encrypted client-side to the enclave key named in the server's attestation report, which the CLI checks for consistency but cannot yet verify independently (see [TEE Attestation](#tee-attestation))
+- **TEE Attestation**: Check the server's attestation report for consistency before sending data; the Intel TDX quote signature and enclave measurements are not yet verified client-side
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI doesn't collect or send usage data
 - **Local configuration**: API key stored locally with restricted permissions
@@ -740,37 +746,36 @@ Venice CLI is designed with privacy in mind:
 
 ### E2EE Models
 
-E2EE models provide the highest level of privacy. The CLI automatically detects E2EE support via model capabilities (not model names). When using an E2EE-capable model:
+E2EE is the strongest privacy mode the CLI offers. The CLI uses it when the model catalog advertises E2EE support (`supportsE2EE`). A model ID that contains `e2ee`, or the `--e2ee` flag, requires E2EE: if the catalog does not advertise it for that model, the CLI exits without sending the prompt. `--no-e2ee` turns E2EE off and falls back to TEE mode, and the CLI says so on stderr, even with `-q`. With E2EE on:
 
-1. The CLI fetches and verifies TEE attestation
+1. The CLI fetches the server's attestation report and checks it (see [TEE Attestation](#tee-attestation))
 2. An ephemeral key pair is generated for the session
-3. All messages are encrypted client-side using ECDH + AES-GCM
-4. Only the TEE enclave can decrypt and process your data
-5. Responses are encrypted and decrypted client-side
+3. All messages are encrypted client-side using ECDH + AES-GCM to the enclave key named in the attestation report
+4. Responses are decrypted client-side as they stream. If a chunk is not encrypted or fails to decrypt, or the stream ends without a finish reason, output stops and the command exits with an error. "Response decrypted end-to-end" appears only after a complete reply
 
 ```bash
 # List E2EE-capable models
 venice models --e2ee
 
-# Chat with E2EE (auto-enabled based on model capabilities)
+# Chat with E2EE
 venice chat -m <e2ee-capable-model> "Your private message here"
 
-# TEE-only mode: verify attestation without encryption
-venice chat -m <e2ee-capable-model> --no-e2ee "TEE verified, not encrypted"
+# TEE mode without E2EE: Venice's proxy can read the prompt
+venice chat -m <e2ee-capable-model> --no-e2ee "Not end-to-end encrypted"
 ```
 
 **Note:** E2EE mode disables tools and web search to maintain end-to-end encryption. Multimodal attachments (`--image`, `--file`, `--audio`, `--video`) are not supported with E2EE or TEE models.
 
 ### TEE Models
 
-TEE (Trusted Execution Environment) models run in secure enclaves with cryptographic attestation. The CLI automatically verifies attestation for models with TEE support.
+TEE (Trusted Execution Environment) models run in secure enclaves, according to the server's attestation report. For models with TEE support, the CLI fetches that report and refuses to send the prompt if it fails the checks described in [TEE Attestation](#tee-attestation). TEE mode does not encrypt the prompt end to end: Venice's API proxy can read it, and the attestation is not bound to the request.
 
 ```bash
 # List TEE-capable models
 venice models --tee
 
-# Chat with TEE attestation verification
-venice chat -m <tee-capable-model> "Verified secure execution"
+# Chat in TEE mode (the attestation report is checked first)
+venice chat -m <tee-capable-model> "Hello from the command line"
 ```
 
 ## Environment Variables

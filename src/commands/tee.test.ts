@@ -156,7 +156,7 @@ test('tee verify exits 1 on nonce mismatch in both formats', async () => {
 
   const pretty = await runTeeVerify(mismatched);
   assert.equal(pretty.status, 1);
-  assert.match(pretty.stderr, /nonce mismatch/);
+  assert.match(pretty.stdout, /nonce mismatch/);
 });
 
 const SIGNED_TEXT = 'request-hash:response-hash';
@@ -193,7 +193,8 @@ test('tee signature --verify-signer exits 0 when the recovered signer matches', 
   const pretty = await runTeeSignature(payload, ['--verify-signer', expected]);
   assert.equal(pretty.status, 0, pretty.stdout + pretty.stderr);
   assert.match(pretty.stdout, new RegExp(`Recovered Signer: ${signer}`));
-  assert.match(pretty.stdout, /Signer Verified: ✓ Yes/);
+  assert.match(pretty.stdout, /Signer Match: Yes/);
+  assert.match(pretty.stdout, /Verified: ✓ Yes \(signer only/);
 
   const json = await runTeeSignature(payload, ['--verify-signer', expected, '-f', 'json']);
   assert.equal(json.status, 0, json.stdout + json.stderr);
@@ -208,7 +209,7 @@ test('tee signature --verify-signer exits 1 when the recovered signer does not m
 
   const pretty = await runTeeSignature(payload, ['--verify-signer', WRONG_SIGNER]);
   assert.equal(pretty.status, 1, pretty.stdout + pretty.stderr);
-  assert.match(pretty.stdout, new RegExp(`Signer Verified: ✗ No \\(expected ${WRONG_SIGNER}\\)`));
+  assert.match(pretty.stdout, new RegExp(`Signer Match: No \\(expected ${WRONG_SIGNER}\\)`));
 
   const json = await runTeeSignature(payload, ['--verify-signer', WRONG_SIGNER, '-f', 'json']);
   assert.equal(json.status, 1, json.stdout + json.stderr);
@@ -230,7 +231,7 @@ test('tee signature --verify-signer exits 1 when the signer cannot be recovered'
   for (const unrecoverable of cases) {
     const pretty = await runTeeSignature(unrecoverable, ['--verify-signer', signer]);
     assert.equal(pretty.status, 1, pretty.stdout + pretty.stderr);
-    assert.match(pretty.stdout, /Signer Verified: ✗ No \(could not recover signer\)/);
+    assert.match(pretty.stdout, /Signer Match: No \(could not recover signer\)/);
 
     const json = await runTeeSignature(unrecoverable, ['--verify-signer', signer, '-f', 'json']);
     assert.equal(json.status, 1, json.stdout + json.stderr);
