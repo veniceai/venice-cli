@@ -11,8 +11,10 @@ import {
 } from '../lib/api.js';
 import {
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 import {
   parseTdxQuote,
@@ -88,15 +90,15 @@ export function registerTeeCommand(program: Command): void {
         const { response, clientNonce } = await fetchTeeAttestation(modelId);
 
         if (format === 'json') {
-          console.log(JSON.stringify(response, null, 2));
+          console.log(formatJson(response));
           return;
         }
 
         console.log(c.bold('\n🔐 TEE Attestation Report\n'));
 
         // Basic info
-        console.log(`${c.dim('Model:')} ${response.model}`);
-        console.log(`${c.dim('TEE Provider:')} ${response.tee_provider || 'Unknown'}`);
+        console.log(`${c.dim('Model:')} ${terminalSafe(response.model)}`);
+        console.log(`${c.dim('TEE Provider:')} ${terminalSafe(response.tee_provider || 'Unknown')}`);
         console.log(`${c.dim('Server Verified:')} ${response.verified ? c.green('✓ Yes') : c.red('✗ No')}`);
         console.log(`${c.dim('Nonce Match:')} ${response.nonce === clientNonce ? c.green('✓ Yes') : c.red('✗ No')}`);
 
@@ -104,8 +106,8 @@ export function registerTeeCommand(program: Command): void {
         const signingKey = response.signing_key || response.signing_public_key;
         if (signingKey) {
           const derivedAddress = deriveSigningAddressFromKey(signingKey);
-          console.log(`${c.dim('Signing Key:')} ${signingKey.slice(0, 32)}...`);
-          console.log(`${c.dim('Signing Address:')} ${response.signing_address || derivedAddress || 'N/A'}`);
+          console.log(`${c.dim('Signing Key:')} ${terminalSafe(signingKey).slice(0, 32)}...`);
+          console.log(`${c.dim('Signing Address:')} ${terminalSafe(response.signing_address || derivedAddress || 'N/A')}`);
         }
 
         // TDX Quote info
@@ -138,8 +140,8 @@ export function registerTeeCommand(program: Command): void {
           console.log(`\n${c.bold('NVIDIA GPU Attestation:')}`);
           try {
             const payload = JSON.parse(response.nvidia_payload);
-            console.log(`  ${c.dim('Architecture:')} ${payload.arch || 'Unknown'}`);
-            console.log(`  ${c.dim('Evidence Count:')} ${payload.evidence_list?.length || 0}`);
+            console.log(`  ${c.dim('Architecture:')} ${terminalSafe(payload.arch || 'Unknown')}`);
+            console.log(`  ${c.dim('Evidence Count:')} ${terminalSafe(payload.evidence_list?.length || 0)}`);
 
             if (options.verbose && payload.evidence_list?.length > 0) {
               console.log(`\n${c.dim('GPU attestation verification curl:')}`);
@@ -157,12 +159,12 @@ export function registerTeeCommand(program: Command): void {
 
           if (sv.tdx) {
             console.log(`  ${c.dim('TDX Valid:')} ${sv.tdx.valid ? c.green('✓ Yes') : c.red('✗ No')}`);
-            if (sv.tdx.error) console.log(`    ${c.red(sv.tdx.error)}`);
+            if (sv.tdx.error) console.log(`    ${c.red(terminalSafe(sv.tdx.error))}`);
           }
 
           if (sv.nvidia) {
             console.log(`  ${c.dim('NVIDIA Valid:')} ${sv.nvidia.valid ? c.green('✓ Yes') : c.red('✗ No')}`);
-            if (sv.nvidia.error) console.log(`    ${c.red(sv.nvidia.error)}`);
+            if (sv.nvidia.error) console.log(`    ${c.red(terminalSafe(sv.nvidia.error))}`);
           }
 
           if (sv.nonceBinding) {
@@ -177,8 +179,8 @@ export function registerTeeCommand(program: Command): void {
             );
           }
 
-          console.log(`  ${c.dim('Verified At:')} ${sv.verifiedAt}`);
-          console.log(`  ${c.dim('Duration:')} ${sv.verificationDurationMs}ms`);
+          console.log(`  ${c.dim('Verified At:')} ${terminalSafe(sv.verifiedAt)}`);
+          console.log(`  ${c.dim('Duration:')} ${terminalSafe(sv.verificationDurationMs)}ms`);
         }
 
         console.log(c.dim(`\n${ATTESTATION_SCOPE_NOTE}`));
@@ -206,25 +208,21 @@ export function registerTeeCommand(program: Command): void {
 
         if (format === 'json') {
           console.log(
-            JSON.stringify(
-              {
-                model: modelId,
-                passed: policy.passed,
-                failures: policy.failures,
-                attestation: {
-                  verified: response.verified,
-                  nonceMatch: attestation.nonce === attestation.clientNonce,
-                  signingKey: signingKey ? signingKey.slice(0, 32) + '...' : null,
-                  signingAddress: response.signing_address,
-                  teeProvider: response.tee_provider,
-                  hasIntelQuote: !!response.intel_quote,
-                  hasNvidiaPayload: !!response.nvidia_payload,
-                },
-                note: VERIFY_SCOPE_NOTE,
+            formatJson({
+              model: modelId,
+              passed: policy.passed,
+              failures: policy.failures,
+              attestation: {
+                verified: response.verified,
+                nonceMatch: attestation.nonce === attestation.clientNonce,
+                signingKey: signingKey ? signingKey.slice(0, 32) + '...' : null,
+                signingAddress: response.signing_address,
+                teeProvider: response.tee_provider,
+                hasIntelQuote: !!response.intel_quote,
+                hasNvidiaPayload: !!response.nvidia_payload,
               },
-              null,
-              2
-            )
+              note: VERIFY_SCOPE_NOTE,
+            })
           );
           process.exit(policy.passed ? 0 : 1);
         }
@@ -234,14 +232,14 @@ export function registerTeeCommand(program: Command): void {
 
         if (policy.passed) {
           console.log(`${c.bold(c.green('✓ PASSED'))} - The server's attestation report passed the E2EE policy checks\n`);
-          console.log(`${c.dim('Signing Address:')} ${response.signing_address || 'N/A'}`);
-          console.log(`${c.dim('TEE Provider:')} ${response.tee_provider || 'Unknown'}`);
+          console.log(`${c.dim('Signing Address:')} ${terminalSafe(response.signing_address || 'N/A')}`);
+          console.log(`${c.dim('TEE Provider:')} ${terminalSafe(response.tee_provider || 'Unknown')}`);
           console.log(c.dim(`\n${VERIFY_SCOPE_NOTE}`));
         } else {
           console.log(`${c.bold(c.red('✗ FAILED'))} - Attestation policy check failed\n`);
           console.log(c.red('Failures:'));
           for (const failure of policy.failures) {
-            console.log(`  ${c.red('•')} ${failure}`);
+            console.log(`  ${c.red('•')} ${terminalSafe(failure)}`);
           }
         }
 
@@ -304,7 +302,7 @@ export function registerTeeCommand(program: Command): void {
 
         if (format === 'json') {
           if (!checking) {
-            console.log(JSON.stringify(response, null, 2));
+            console.log(formatJson(response));
             return;
           }
           const verification: Record<string, unknown> = { expectedSigner: expectedSigner ?? null, recoveredSigner };
@@ -317,24 +315,24 @@ export function registerTeeCommand(program: Command): void {
             verification.responseMatch = responseMatch;
           }
           verification.verified = verified;
-          console.log(JSON.stringify({ ...response, verification }, null, 2));
+          console.log(formatJson({ ...response, verification }));
           process.exit(verified ? 0 : 1);
         }
 
         console.log(c.bold('\n📝 TEE Response Signature\n'));
 
-        console.log(`${c.dim('Model:')} ${response.model || modelId}`);
-        console.log(`${c.dim('Request ID:')} ${response.request_id || 'N/A'}`);
-        console.log(`${c.dim('Requested ID:')} ${response.requested_request_id || 'N/A'}`);
-        console.log(`${c.dim('TEE Provider:')} ${response.tee_provider || 'Unknown'}`);
-        console.log(`${c.dim('TEE Hardware:')} ${response.tee_hardware || 'Unknown'}`);
+        console.log(`${c.dim('Model:')} ${terminalSafe(response.model || modelId)}`);
+        console.log(`${c.dim('Request ID:')} ${terminalSafe(response.request_id || 'N/A')}`);
+        console.log(`${c.dim('Requested ID:')} ${terminalSafe(response.requested_request_id || 'N/A')}`);
+        console.log(`${c.dim('TEE Provider:')} ${terminalSafe(response.tee_provider || 'Unknown')}`);
+        console.log(`${c.dim('TEE Hardware:')} ${terminalSafe(response.tee_hardware || 'Unknown')}`);
 
         if (response.signing_address) {
-          console.log(`${c.dim('Signing Address:')} ${response.signing_address}`);
+          console.log(`${c.dim('Signing Address:')} ${terminalSafe(response.signing_address)}`);
         }
 
         if (signatureHex) {
-          console.log(`${c.dim('Signature:')} ${signatureHex.slice(0, 32)}...`);
+          console.log(`${c.dim('Signature:')} ${terminalSafe(signatureHex).slice(0, 32)}...`);
         }
         if (recoveredSigner) {
           console.log(`${c.dim('Recovered Signer:')} ${recoveredSigner}`);
@@ -350,7 +348,7 @@ export function registerTeeCommand(program: Command): void {
           } else {
             console.log(`${c.dim('Expected Signer:')} ${c.red('unavailable: the attestation did not pass the E2EE policy')}`);
             for (const failure of attestationPolicy?.failures ?? []) {
-              console.log(`  ${c.red('•')} ${failure}`);
+              console.log(`  ${c.red('•')} ${terminalSafe(failure)}`);
             }
           }
 
@@ -378,20 +376,21 @@ export function registerTeeCommand(program: Command): void {
 
         if (signedText) {
           console.log(`\n${c.dim('Signed Text:')}`);
-          const truncated = signedText.length > 200 ? signedText.slice(0, 200) + '...' : signedText;
+          const shownText = terminalSafe(signedText);
+          const truncated = shownText.length > 200 ? shownText.slice(0, 200) + '...' : shownText;
           console.log(`  ${truncated}`);
         }
 
         if (response.payload) {
           console.log(`\n${c.dim('Payload:')}`);
           if (response.payload.request_hash) {
-            console.log(`  ${c.dim('Request Hash:')} ${response.payload.request_hash}`);
+            console.log(`  ${c.dim('Request Hash:')} ${terminalSafe(response.payload.request_hash)}`);
           }
           if (response.payload.response_hash) {
-            console.log(`  ${c.dim('Response Hash:')} ${response.payload.response_hash}`);
+            console.log(`  ${c.dim('Response Hash:')} ${terminalSafe(response.payload.response_hash)}`);
           }
           if (response.payload.timestamp) {
-            console.log(`  ${c.dim('Timestamp:')} ${response.payload.timestamp}`);
+            console.log(`  ${c.dim('Timestamp:')} ${terminalSafe(response.payload.timestamp)}`);
           }
         }
 

@@ -8,8 +8,10 @@ import { getDefaultModel } from '../lib/config.js';
 import {
   formatUsage,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 
 export function registerSearchCommand(program: Command): void {
@@ -53,15 +55,15 @@ export function registerSearchCommand(program: Command): void {
           });
 
           if (format === 'json') {
-            console.log(JSON.stringify(result, null, 2));
+            console.log(formatJson(result));
           } else if (format === 'raw') {
-            console.log(JSON.stringify(result));
+            console.log(formatJson(result, 0));
           } else {
             for (const [index, item] of result.results.entries()) {
-              console.log(`${c.bold(`${index + 1}. ${item.title}`)}`);
-              console.log(c.cyan(item.url));
-              if (item.content) console.log(item.content);
-              if (item.date) console.log(c.dim(item.date));
+              console.log(`${c.bold(`${index + 1}. ${terminalSafe(item.title)}`)}`);
+              console.log(c.cyan(terminalSafe(item.url)));
+              if (item.content) console.log(terminalSafe(item.content));
+              if (item.date) console.log(c.dim(terminalSafe(item.date)));
               if (index < result.results.length - 1) console.log();
             }
           }
@@ -76,15 +78,15 @@ export function registerSearchCommand(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else {
-          console.log(result.content);
+          console.log(terminalSafe(result.content));
 
           if (result.citations?.length && format === 'pretty') {
             console.log('\n' + c.bold('📚 Sources:'));
             for (const citation of result.citations.slice(0, 5)) {
-              console.log(`  ${c.dim('•')} ${c.cyan(citation.title)}`);
-              console.log(`    ${c.dim(citation.url)}`);
+              console.log(`  ${c.dim('•')} ${c.cyan(terminalSafe(citation.title))}`);
+              console.log(`    ${c.dim(terminalSafe(citation.url))}`);
             }
           }
 

@@ -223,7 +223,8 @@ test('config init does not print API key input', () => {
 
   try {
     const result = runCli(['config', 'init'], homeDir, `${apiKey}\n\n\n\n`);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /venice config set api_key --stdin/);
     assert.ok(!result.stdout.includes(apiKey));
     assert.ok(!result.stderr.includes(apiKey));
   } finally {
