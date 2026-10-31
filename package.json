@@ -21,6 +21,7 @@
     "dist",
     "!dist/**/*.test.*",
     "!dist/**/*.map",
+    "!dist/**/test-*",
     "examples",
     "README.md",
     "LICENSE"
