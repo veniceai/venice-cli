@@ -1000,6 +1000,9 @@ test('non-streaming chat stops after the maximum tool rounds', async () => {
   const completion: NonNullable<NonNullable<Parameters<typeof nonStreamChat>[5]>['completion']> =
     async () => {
       completionCalls++;
+      if (completionCalls > MAX_TOOL_ROUNDS + 1) {
+        throw new Error('completion was called after the round limit');
+      }
       return {
         content: '',
         tool_calls: [{
@@ -1031,6 +1034,9 @@ test('streaming chat stops after the maximum tool rounds', async () => {
   const completionStream: NonNullable<NonNullable<Parameters<typeof streamChat>[5]>['completionStream']> =
     async function* () {
       completionCalls++;
+      if (completionCalls > MAX_TOOL_ROUNDS + 1) {
+        throw new Error('completion was called after the round limit');
+      }
       yield {
         tool_calls: [{
           index: 0,
@@ -1056,6 +1062,75 @@ test('streaming chat stops after the maximum tool rounds', async () => {
     new RegExp(`limit of ${MAX_TOOL_ROUNDS} rounds`)
   );
   assert.equal(completionCalls, MAX_TOOL_ROUNDS + 1);
+});
+
+test('non-streaming tool rounds resend the assistant turn without its reasoning', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'What day is it?' }];
+  const sent: Message[][] = [];
+  const completion: NonNullable<NonNullable<Parameters<typeof nonStreamChat>[5]>['completion']> =
+    async (history) => {
+      sent.push(JSON.parse(JSON.stringify(history)) as Message[]);
+      if (sent.length > 2) {
+        throw new Error('completion was called more than twice');
+      }
+      return sent.length === 1
+        ? {
+            content: '<think>secret plan</think>Checking the date',
+            tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'datetime', arguments: '{}' } }],
+            finish_reason: 'tool_calls',
+          }
+        : { content: 'done', finish_reason: 'stop' };
+    };
+
+  await nonStreamChat(
+    messages,
+    'test-model',
+    getToolDefinitions(['datetime']),
+    false,
+    'raw',
+    { quiet: true, completion }
+  );
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].find((message) => message.role === 'assistant')?.content, 'Checking the date');
+  assert.doesNotMatch(JSON.stringify(sent[1]), /secret plan/);
+});
+
+test('streaming tool rounds resend the assistant turn without its reasoning', async () => {
+  const messages: Message[] = [{ role: 'user', content: 'What day is it?' }];
+  const sent: Message[][] = [];
+  const completionStream: NonNullable<NonNullable<Parameters<typeof streamChat>[5]>['completionStream']> =
+    async function* (history) {
+      sent.push(JSON.parse(JSON.stringify(history)) as Message[]);
+      if (sent.length > 2) {
+        throw new Error('completion was called more than twice');
+      }
+      if (sent.length === 1) {
+        yield { content: '<think>secret plan</think>Checking the date', done: false };
+        yield {
+          tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'datetime', arguments: '{}' } }],
+          done: false,
+        };
+        yield { finish_reason: 'tool_calls', done: false };
+      } else {
+        yield { content: 'done', done: false };
+        yield { finish_reason: 'stop', done: false };
+      }
+      yield { done: true };
+    };
+
+  await streamChat(
+    messages,
+    'test-model',
+    getToolDefinitions(['datetime']),
+    false,
+    'raw',
+    { quiet: true, completionStream }
+  );
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].find((message) => message.role === 'assistant')?.content, 'Checking the date');
+  assert.doesNotMatch(JSON.stringify(sent[1]), /secret plan/);
 });
 
 test('buildChatUserMessage uses prompt when only args are provided', () => {

@@ -7,6 +7,7 @@ export type JobStatusPhase = 'processing' | 'completed' | 'failed' | 'other';
 type StatusColors = Record<'blue' | 'green' | 'red' | 'yellow', (text: string) => string>;
 
 export const DEFAULT_JOB_WAIT_TIMEOUT_SECONDS = 600;
+export const MAX_JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 // setTimeout fires almost immediately for delays above this.
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;

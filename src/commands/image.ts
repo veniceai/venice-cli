@@ -9,11 +9,13 @@ import {
   editImage,
   generateImage,
   listImageStyles,
+  looksLikeImageBytes,
   multiEditImage,
   removeImageBackground,
   upscaleImage,
 } from '../lib/api.js';
-import { writeBufferToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
+import { formatBytes, writeBufferToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
+import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { getDefaultImageModel } from '../lib/config.js';
 import type {
   ImageGenerationOptions,
@@ -53,38 +55,6 @@ function collect(value: string, previous: string[]): string[] {
   return previous.concat(value);
 }
 
-function parseInteger(value: string | undefined, name: string, min: number, max: number): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^-?\d+$/.test(value)) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}`);
-  }
-
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}`);
-  }
-  return parsed;
-}
-
-function parseNumber(
-  value: string | undefined,
-  name: string,
-  min: number,
-  max: number,
-  exclusiveMin = false
-): number | undefined {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (
-    !Number.isFinite(parsed) ||
-    (exclusiveMin ? parsed <= min : parsed < min) ||
-    parsed > max
-  ) {
-    throw new Error(`${name} must be a number between ${min} and ${max}`);
-  }
-  return parsed;
-}
-
 function parseStyleReference(value: string): ImageStyleReference {
   const strengthSuffix = value.match(/^(.*)::(\d*\.?\d+)$/);
   if (!strengthSuffix) {
@@ -92,8 +62,8 @@ function parseStyleReference(value: string): ImageStyleReference {
   }
 
   const image = strengthSuffix[1];
-  const strength = parseNumber(strengthSuffix[2], 'Style reference strength', 0.1, 1);
-  if (!image || strength === undefined) {
+  const strength = parseDecimalOption(strengthSuffix[2], '--style-reference strength', { min: 0.1, max: 1 });
+  if (!image) {
     throw new Error('Style reference must use IMAGE or IMAGE::STRENGTH');
   }
   return { image, strength };
@@ -102,9 +72,9 @@ function parseStyleReference(value: string): ImageStyleReference {
 export function parseImageGenerationOptions(
   options: ImageCommandOptions
 ): Omit<ImageGenerationOptions, 'output' | 'format'> {
-  const width = parseInteger(options.width, 'Width', 1, 1280);
-  const height = parseInteger(options.height, 'Height', 1, 1280);
-  const count = parseInteger(options.count, 'Count', 1, 4);
+  const width = parseIntegerOption(options.width, '--width', { min: 1, max: 1280 });
+  const height = parseIntegerOption(options.height, '--height', { min: 1, max: 1280 });
+  const count = parseIntegerOption(options.count, '--count', { min: 1, max: 4 });
 
   if ((width === undefined) !== (height === undefined)) {
     throw new Error('Width and height must be provided together');
@@ -157,10 +127,10 @@ export function parseImageGenerationOptions(
       ? options.styleReference.map(parseStyleReference)
       : undefined,
     negativePrompt: options.negative,
-    seed: parseInteger(options.seed, 'Seed', -999999999, 999999999),
-    cfgScale: parseNumber(options.cfgScale, 'CFG scale', 0, 20, true),
-    steps: parseInteger(options.steps, 'Steps', 1, Number.MAX_SAFE_INTEGER),
-    loraStrength: parseInteger(options.loraStrength, 'LoRA strength', 0, 100),
+    seed: parseIntegerOption(options.seed, '--seed', { min: -999999999, max: 999999999 }),
+    cfgScale: parseDecimalOption(options.cfgScale, '--cfg-scale', { min: 0, max: 20, exclusiveMin: true }),
+    steps: parseIntegerOption(options.steps, '--steps', { min: 1 }),
+    loraStrength: parseIntegerOption(options.loraStrength, '--lora-strength', { min: 0, max: 100 }),
     hideWatermark: options.hideWatermark,
     safeMode: options.safeMode,
     embedExifMetadata: options.embedExifMetadata,
@@ -213,7 +183,7 @@ export function registerImageCommand(program: Command): void {
         }
 
         for (let i = 0; i < images.length; i++) {
-          const imageData = Buffer.from(images[i], 'base64');
+          const imageData = decodeGeneratedImage(images[i]);
 
           let outputPath = options.output || `image_${Date.now()}.png`;
           if (images.length > 1) {
@@ -337,9 +307,11 @@ export function registerImageCommand(program: Command): void {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
-      const scale = parseInt(options.scale, 10);
-      if (isNaN(scale) || (scale !== 2 && scale !== 4)) {
-        console.error(formatError('Scale must be either 2 or 4'));
+      let scale: number;
+      try {
+        scale = parseIntegerOption(options.scale, '--scale', { allowed: [2, 4] });
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
 
@@ -382,6 +354,26 @@ export function registerImageCommand(program: Command): void {
         process.exit(1);
       }
     });
+}
+
+export function decodeGeneratedImage(base64: string): Buffer {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  const decodedBytes = Math.floor((base64.length * 3) / 4) - padding;
+  if (decodedBytes > MAX_IMAGE_DOWNLOAD_BYTES) {
+    throw new Error(
+      `Generated image is too large (${formatBytes(decodedBytes)}). ` +
+      `Maximum allowed size is ${formatBytes(MAX_IMAGE_DOWNLOAD_BYTES)}.`
+    );
+  }
+
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length === 0) {
+    throw new Error('Generated image response was empty.');
+  }
+  if (!looksLikeImageBytes(bytes)) {
+    throw new Error('Generated image did not contain a supported PNG, JPEG, or WebP image.');
+  }
+  return bytes;
 }
 
 function writeImageResult(
