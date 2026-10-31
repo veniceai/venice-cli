@@ -149,8 +149,9 @@ export function requireApiKey(): string {
     throw new Error(
       'No API key found.\n\n' +
       'Set your API key using one of these methods:\n' +
-      '  1. venice config set api_key\n' +
-      '  2. export VENICE_API_KEY=<your-key>\n\n' +
+      '  1. venice config set api_key (prompts without showing the key)\n' +
+      '  2. venice config set api_key --stdin (reads the key from standard input)\n' +
+      '  3. export VENICE_API_KEY=<your-key>\n\n' +
       'Get your API key at: https://venice.ai/settings/api'
     );
   }

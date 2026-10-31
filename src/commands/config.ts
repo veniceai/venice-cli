@@ -10,7 +10,7 @@ import {
   deleteConfigValue,
   getConfigPath,
 } from '../lib/config.js';
-import { formatSuccess, formatError, getChalk } from '../lib/output.js';
+import { formatSuccess, formatError, getChalk, detectOutputFormat } from '../lib/output.js';
 import { askHidden, question } from '../lib/prompt.js';
 import type { VeniceConfig } from '../types/index.js';
 
@@ -53,10 +53,11 @@ export function registerConfigCommand(program: Command): void {
     .description('Show current configuration')
     .option('--format <format>', 'Output format (pretty|json)', 'pretty')
     .action((options) => {
+      const format = detectOutputFormat(options.format);
       const cfg = loadConfig();
       const c = getChalk();
       
-      if (options.format === 'json') {
+      if (format === 'json') {
         const maskedCfg: VeniceConfig = { ...cfg };
         if (typeof maskedCfg.api_key === 'string' && maskedCfg.api_key.length > 0) {
           maskedCfg.api_key = maskApiKey(maskedCfg.api_key);
@@ -86,7 +87,8 @@ export function registerConfigCommand(program: Command): void {
         console.log(`  ${c.cyan(key.padEnd(20))} ${displayValue}`);
       }
 
-      console.log(`\n${c.dim('Tip: Use "venice config set <key> <value>" to update settings')}`);
+      console.log(`\n${c.dim('Tip: Set the API key with "venice config set api_key" or pipe it to "venice config set api_key --stdin".')}`);
+      console.log(c.dim('     Use "venice config set <key> <value>" for other settings.'));
     });
 
   // Set a config value

@@ -403,6 +403,8 @@ venice video models
 
 `venice video models` loads the live catalog from `GET /models?type=video`. If that request fails, the CLI prints a short fallback list and says so.
 
+`video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
+
 Video transcription accepts a public HTTP(S) URL only. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
 
 ### Music & Sound Effects
@@ -424,9 +426,10 @@ venice music generate -m elevenlabs-music -d 60 --instrumental \
 venice music generate -m elevenlabs-music --lyrics lyrics.txt \
   "A folk song about the sea"
 
-# Check once, or poll until complete
+# Check once, or poll until complete (polls every 5s, times out after 10 minutes)
 venice music status <queue_id> -m elevenlabs-music
 venice music status <queue_id> -m elevenlabs-music --wait
+venice music status <queue_id> -m elevenlabs-music --wait --timeout 900
 
 # Download the finished audio
 venice music retrieve <queue_id> -m elevenlabs-music -o song.mp3
@@ -436,7 +439,8 @@ venice music retrieve <queue_id> -m elevenlabs-music -o song.mp3
 to retain it, or use `venice music complete <queue_id> -m <model>` to clean it
 up later. Optional generation fields are model-specific; inspect
 `venice music models --format json` before using lyrics, duration, or
-instrumental mode.
+instrumental mode. `music status --wait` and `music retrieve` use the same exit
+codes as their video counterparts.
 
 ### TEE Attestation
 
@@ -694,15 +698,21 @@ venice voices
 ### Shell Completions
 
 ```bash
-# Bash
-venice completions bash >> ~/.bashrc
+# Bash: add this line to ~/.bashrc
+eval "$(venice completions bash)"
 
-# Zsh
-venice completions zsh >> ~/.zshrc
+# Zsh: add this line to ~/.zshrc after compinit runs (or after your framework, such as Oh My Zsh, loads)
+eval "$(venice completions zsh)"
+
+# Zsh, faster startup: save the script as _venice in a directory on $fpath instead,
+# and add `fpath=(~/.zfunc $fpath)` to ~/.zshrc before compinit runs
+mkdir -p ~/.zfunc && venice completions zsh > ~/.zfunc/_venice
 
 # Fish
 venice completions fish > ~/.config/fish/completions/venice.fish
 ```
+
+The scripts are generated from the commands and options of the installed CLI. Regenerate saved scripts after upgrading.
 
 ## Built-in Tools
 
@@ -739,13 +749,15 @@ that limit is exceeded.
 | `markdown` | Markdown formatted | Documentation |
 | `raw` | Plain text, no decoration | Pipes, simple output |
 
-The CLI automatically detects when output is being piped and switches to `raw` format.
+Each command's `--help` lists the formats it supports. An unknown `--format` value is an error. Commands without a separate `markdown` or `raw` form print their `pretty` output for those values.
+
+When output is piped or redirected and no `--format` is given, the CLI turns off colors and spinners and selects `raw`. Commands that print a single result, such as `chat`, `search`, `transcribe`, and `parse`, then print only that result; most other commands print the same text as `pretty`. Use `-f json` when a script needs to parse the output.
 
 ```bash
 # Explicit format
 venice chat -f json "List items" | jq '.'
 
-# Auto-detected raw format when piped
+# Raw output is selected automatically when piped
 venice chat "Generate code" | pbcopy
 ```
 
@@ -758,7 +770,7 @@ Venice CLI is designed with privacy in mind:
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI sends no analytics or usage data and never checks for updates in the background. It connects only to the Venice API, to attachment URLs you give it, to download links the API returns, and to registry.npmjs.org when you run `venice update --check`
 - **Local configuration**: API key stored locally with restricted permissions
-- **Transparent**: You can see exactly what's being sent to the API
+- **Open source**: The code is public, so you can read exactly what the CLI sends to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
 
 ### E2EE Models

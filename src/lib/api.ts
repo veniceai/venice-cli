@@ -1264,7 +1264,10 @@ export async function listTtsModels(): Promise<Model[]> {
     spinnerText: 'Fetching voices...',
   });
 
-  return (response.data || []).map((model) => ({
+  if (!Array.isArray(response.data)) {
+    throw new Error('Unexpected response from Venice: the TTS model list is missing.');
+  }
+  return response.data.map((model) => ({
     ...model,
     type: model.type && model.type.toLowerCase() !== 'text' ? model.type : 'tts',
   }));
