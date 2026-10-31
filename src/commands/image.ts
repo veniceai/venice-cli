@@ -25,8 +25,10 @@ import type {
 import {
   formatSuccess,
   formatError,
+  formatJson,
   getChalk,
   detectOutputFormat,
+  terminalSafe,
 } from '../lib/output.js';
 
 interface ImageCommandOptions {
@@ -178,7 +180,7 @@ export function registerImageCommand(program: Command): void {
         const images = await generateImage(prompt, generationOptions);
 
         if (format === 'json') {
-          console.log(JSON.stringify({ images: images.map(b64 => ({ b64_json: b64 })) }, null, 2));
+          console.log(formatJson({ images: images.map(b64 => ({ b64_json: b64 })) }));
           return;
         }
 
@@ -285,9 +287,9 @@ export function registerImageCommand(program: Command): void {
       try {
         const styles = await listImageStyles();
         if (format === 'json') {
-          console.log(JSON.stringify({ data: styles, object: 'list' }, null, 2));
+          console.log(formatJson({ data: styles, object: 'list' }));
         } else {
-          console.log(styles.join('\n'));
+          console.log(terminalSafe(styles.join('\n')));
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -329,13 +331,13 @@ export function registerImageCommand(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify({
+          console.log(formatJson({
             images: [{
               b64_json: result.bytes.toString('base64'),
               content_type: result.contentType,
               bytes: result.bytes.length,
             }],
-          }, null, 2));
+          }));
           return;
         }
 
@@ -384,7 +386,7 @@ function writeImageResult(
 ): void {
   const imageData = Buffer.from(result);
   if (format === 'json') {
-    console.log(JSON.stringify({ image: { b64_json: imageData.toString('base64') } }, null, 2));
+    console.log(formatJson({ image: { b64_json: imageData.toString('base64') } }));
     return;
   }
 
