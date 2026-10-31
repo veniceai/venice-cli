@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 import { dedicatedWebSearch, webSearch } from '../lib/api.js';
 import { getDefaultModel } from '../lib/config.js';
+import { parseIntegerOption } from '../lib/options.js';
 import {
   formatUsage,
   formatError,
@@ -30,12 +31,9 @@ export function registerSearchCommand(program: Command): void {
       const model = options.model || getDefaultModel();
       const format = detectOutputFormat(options.format);
       const c = getChalk();
-      const maxResults = Number.parseInt(options.results, 10);
 
       try {
-        if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 20) {
-          throw new Error('--results must be an integer between 1 and 20');
-        }
+        const maxResults = parseIntegerOption(options.results, '--results', { min: 1, max: 20 });
         if (!options.raw && options.provider) {
           throw new Error('--provider can only be used with --raw');
         }

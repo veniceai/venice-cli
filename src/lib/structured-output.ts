@@ -4,14 +4,31 @@
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
+import {
+  Ajv,
+  type ErrorObject,
+  type SchemaValidateFunction,
+  type ValidateFunction,
+} from 'ajv';
 import { Ajv2019 } from 'ajv/dist/2019.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import * as formatsModule from 'ajv-formats';
 
 export const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
+export const MAX_SCHEMA_NODES = 1000;
+export const MAX_SCHEMA_DEPTH = 64;
+export const MAX_SCHEMA_ENUM_VALUES = 1000;
+export const MAX_STRUCTURED_RESPONSE_BYTES = 1024 * 1024;
 const MAX_RESPONSE_FORMAT_NAME_LENGTH = 64;
 const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const URL_FORMAT_PROTOCOLS = new Set(['http:', 'https:', 'ftp:']);
+const MAX_REPORTED_SCHEMA_ERRORS = 20;
+const MAX_ERROR_DETAIL_LENGTH = 200;
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+// Keyed by schema object: loading the schema, building each request and
+// validating the reply all pass the same object, so a run compiles it once.
+const compiledSchemas = new WeakMap<object, ValidateFunction>();
 
 export const REASONING_EFFORTS = [
   'none',
@@ -202,6 +219,12 @@ function normalizeJsonSchemaWrapper(
 }
 
 export function parseStructuredContent(content: string): unknown {
+  if (Buffer.byteLength(content, 'utf8') > MAX_STRUCTURED_RESPONSE_BYTES) {
+    throw new Error(
+      `Model response exceeds the ${MAX_STRUCTURED_RESPONSE_BYTES}-byte (1 MiB) structured output limit.`
+    );
+  }
+
   const trimmed = content.trim();
   if (!trimmed) {
     throw new Error('Model returned an empty response; expected JSON.');
@@ -212,16 +235,25 @@ export function parseStructuredContent(content: string): unknown {
     return JSON.parse(extracted);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Model response was not valid JSON: ${reason}`);
+    throw new Error(`Model response was not valid JSON: ${displayText(reason)}`);
   }
 }
 
 function extractJson(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    return fenced[1].trim();
+  const fence = '```';
+  const open = text.indexOf(fence);
+  if (open === -1) {
+    return text;
   }
-  return text;
+  let start = open + fence.length;
+  if (text.slice(start, start + 4).toLowerCase() === 'json') {
+    start += 4;
+  }
+  const close = text.indexOf(fence, start);
+  if (close === -1) {
+    return text;
+  }
+  return text.slice(start, close).trim() || text;
 }
 
 export function validateAgainstSchema(
@@ -236,12 +268,20 @@ function compileSchema(
   schema: Record<string, unknown>,
   source: string
 ): ValidateFunction {
+  const cached = compiledSchemas.get(schema);
+  if (cached) {
+    return cached;
+  }
+  assertSchemaWithinLimits(schema, source);
+
   const schemaUri = typeof schema.$schema === 'string' ? schema.$schema : '';
   const options = {
-    allErrors: true,
+    allErrors: false,
     strict: true,
     validateSchema: true,
     allowUnionTypes: true,
+    inlineRefs: false,
+    logger: false,
   } as const;
   const ajv = schemaUri.includes('2020-12')
     ? new Ajv2020(options)
@@ -251,25 +291,138 @@ function compileSchema(
   const addFormats = formatsModule.default as unknown as
     (instance: typeof ajv) => typeof ajv;
   addFormats(ajv);
+  // ajv-formats' "url" regex and ajv's pairwise uniqueItems are quadratic in
+  // the reply. The replacement keyword also covers the meta-schema's check
+  // that enum values are unique.
+  ajv.addFormat('url', isUrl);
+  ajv.removeKeyword('uniqueItems');
+  ajv.addKeyword({
+    keyword: 'uniqueItems',
+    type: 'array',
+    schemaType: 'boolean',
+    validate: validateUniqueItems,
+  });
 
+  let validate: ValidateFunction;
   try {
-    return ajv.compile(schema);
+    validate = ajv.compile(schema);
   } catch (error) {
     throw new Error(`Invalid or unsupported JSON schema in "${source}": ${errorMessage(error)}`);
   }
+  compiledSchemas.set(schema, validate);
+  return validate;
+}
+
+// ajv's compile time and stack use grow faster than linearly with the
+// number of sibling subschemas, so bound the schema before compiling it.
+function assertSchemaWithinLimits(schema: Record<string, unknown>, source: string): void {
+  const pending: Array<{ value: object; depth: number }> = [{ value: schema, depth: 1 }];
+  let nodes = 0;
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    nodes++;
+    if (nodes > MAX_SCHEMA_NODES) {
+      throw new Error(
+        `JSON schema in "${source}" has more than ${MAX_SCHEMA_NODES} objects and arrays.`
+      );
+    }
+    if (next.depth > MAX_SCHEMA_DEPTH) {
+      throw new Error(
+        `JSON schema in "${source}" is nested more than ${MAX_SCHEMA_DEPTH} levels deep.`
+      );
+    }
+
+    const children = Array.isArray(next.value) ? next.value : Object.values(next.value);
+    if (!Array.isArray(next.value)) {
+      const enumValues = (next.value as Record<string, unknown>).enum;
+      if (Array.isArray(enumValues) && enumValues.length > MAX_SCHEMA_ENUM_VALUES) {
+        throw new Error(
+          `JSON schema in "${source}" has an enum with more than ${MAX_SCHEMA_ENUM_VALUES} values.`
+        );
+      }
+    }
+    for (const child of children) {
+      if (child !== null && typeof child === 'object') {
+        pending.push({ value: child, depth: next.depth + 1 });
+      }
+    }
+  }
+}
+
+function isUrl(value: string): boolean {
+  if (/\s/.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return URL_FORMAT_PROTOCOLS.has(url.protocol) && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+const validateUniqueItems: SchemaValidateFunction = (unique: boolean, data: unknown[]) => {
+  validateUniqueItems.errors = undefined;
+  if (!unique) {
+    return true;
+  }
+  const seen = new Map<string, number>();
+  for (const [i, item] of data.entries()) {
+    const key = canonicalJson(item);
+    const j = seen.get(key);
+    if (j !== undefined) {
+      validateUniqueItems.errors = [{
+        keyword: 'uniqueItems',
+        message: `must NOT have duplicate items (items ## ${j} and ${i} are identical)`,
+        params: { i, j },
+      }];
+      return false;
+    }
+    seen.set(key, i);
+  }
+  return true;
+};
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const members = Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+    return `{${members.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
 }
 
 function formatValidationErrors(errors: ErrorObject[] | null | undefined): string[] {
-  return (errors ?? []).map((error) => {
-    const path = error.instancePath ? `$${error.instancePath}` : '$';
+  const all = errors ?? [];
+  const lines = all.slice(0, MAX_REPORTED_SCHEMA_ERRORS).map((error) => {
+    const path = displayText(error.instancePath ? `$${error.instancePath}` : '$');
     if (error.keyword === 'required') {
-      return `${path}: missing required property "${String(error.params.missingProperty)}"`;
+      return `${path}: missing required property "${displayText(String(error.params.missingProperty))}"`;
     }
     if (error.keyword === 'additionalProperties') {
-      return `${path}: unexpected property "${String(error.params.additionalProperty)}"`;
+      return `${path}: unexpected property "${displayText(String(error.params.additionalProperty))}"`;
     }
-    return `${path}: ${error.message ?? `failed ${error.keyword} validation`}`;
+    return `${path}: ${displayText(error.message ?? `failed ${error.keyword} validation`)}`;
   });
+  if (all.length > MAX_REPORTED_SCHEMA_ERRORS) {
+    lines.push(`(${all.length - MAX_REPORTED_SCHEMA_ERRORS} more errors not shown)`);
+  }
+  return lines;
+}
+
+// Paths, property names and parser messages can carry text from the reply.
+function displayText(value: string): string {
+  const shortened = value.length > MAX_ERROR_DETAIL_LENGTH
+    ? `${value.slice(0, MAX_ERROR_DETAIL_LENGTH)}…`
+    : value;
+  return shortened.replace(
+    UNSAFE_DISPLAY_CHARACTERS,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
 }
 
 function schemaSizeError(filePath: string): Error {
