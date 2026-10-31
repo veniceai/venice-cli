@@ -585,6 +585,7 @@ export function registerChatCommand(program: Command): void {
         reasoningEffort,
         promptCacheKey: options.promptCacheKey,
         promptCacheRetention,
+        recordUsage: !useE2EE && !useTEE,
       };
 
       // E2EE responses can only be decrypted on the streaming path, so piped
@@ -734,6 +735,7 @@ export interface ChatRunExtras {
   reasoningEffort?: ReasoningEffort;
   promptCacheKey?: string;
   promptCacheRetention?: PromptCacheRetention;
+  recordUsage?: boolean;
   completion?: ChatCompletionFn;
   completionStream?: ChatCompletionStreamFn;
 }
@@ -766,6 +768,9 @@ function buildRequestOptions(
   }
   if (extras.promptCacheRetention) {
     request.prompt_cache_retention = extras.promptCacheRetention;
+  }
+  if (extras.recordUsage === false) {
+    request.recordUsage = false;
   }
 
   return request;

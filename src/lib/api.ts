@@ -4,10 +4,12 @@
  * Handles all API communication with retry logic and error handling.
  */
 
-import { requireApiKey, trackUsage } from './config.js';
+import { requireApiKey, trackUsage, type UsageEntry } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
+import { ServerSentEventParser } from './sse.js';
 import { getVersion } from './version.js';
 import { Readable } from 'stream';
+import type { ReadableStreamReadResult } from 'stream/web';
 import { randomBytes, randomUUID } from 'crypto';
 import type {
   Message,
@@ -44,16 +46,54 @@ const VENICE_API =
   process.env.NODE_ENV === 'test' && process.env.VENICE_API_BASE_URL
     ? process.env.VENICE_API_BASE_URL
     : 'https://api.venice.ai/api/v1';
+
+// Test runs may shorten back-off and stall timeouts; production ignores these.
+function durationFromTestEnv(name: string, fallback: number): number {
+  if (process.env.NODE_ENV !== 'test') return fallback;
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
 const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+const RETRY_DELAY_MS = durationFromTestEnv('VENICE_TEST_RETRY_DELAY_MS', 1000);
+const MAX_RETRY_AFTER_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
+const STREAM_IDLE_TIMEOUT_MS = durationFromTestEnv('VENICE_TEST_STREAM_IDLE_TIMEOUT_MS', 120000);
 const DOCUMENT_PARSE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_STATUS_BYTES = 1024 * 1024;
 const MAX_AUDIO_STATUS_BYTES = 1024 * 1024;
 const AUDIO_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 120000;
+const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_MODELS_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_RPC_RESPONSE_BYTES = 64 * 1024 * 1024;
+// Up to four base64-encoded images of MAX_IMAGE_DOWNLOAD_BYTES each.
+const MAX_IMAGE_GENERATION_RESPONSE_BYTES =
+  Math.ceil((MAX_IMAGE_DOWNLOAD_BYTES * 4 * 4) / 3) + 1024 * 1024;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+const MAX_ERROR_MESSAGE_LENGTH = 1000;
+const MAX_EVENT_STREAM_LINE_LENGTH = 1024 * 1024;
+const CONNECT_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+const MAY_HAVE_BEEN_PROCESSED =
+  'The request may already have been processed, so it was not retried. ' +
+  'Check before running it again; paid requests appear in `venice billing usage`.';
+const REDIRECT_REFUSED =
+  'The Venice API answered with a redirect. API requests do not follow redirects.';
+
+function truncateErrorMessage(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LENGTH
+    ? `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH)}… (truncated)`
+    : message;
+}
 
 export class VeniceApiError extends Error {
+  retryAfterMs?: number;
+
   constructor(
     message: string,
     public statusCode?: number,
@@ -64,14 +104,24 @@ export class VeniceApiError extends Error {
   }
 
   static fromResponse(status: number, body: string): VeniceApiError {
+    let message: unknown;
+    let code: unknown;
     try {
       const json = JSON.parse(body);
-      const message = json.error?.message || json.message || body;
-      const code = json.error?.code;
-      return new VeniceApiError(message, status, code);
+      const error = json?.error;
+      message = typeof error === 'string' ? error : error?.message || json?.message;
+      code = error?.code;
     } catch {
-      return new VeniceApiError(body || `HTTP ${status}`, status);
+      // Not JSON: the body text is the message.
     }
+    const text = typeof message === 'string' && message.trim()
+      ? message
+      : body.trim() || `HTTP ${status}`;
+    return new VeniceApiError(
+      truncateErrorMessage(text),
+      status,
+      typeof code === 'string' ? code : undefined
+    );
   }
 
   isRetryable(): boolean {
@@ -81,12 +131,93 @@ export class VeniceApiError extends Error {
   }
 
   isAuthError(): boolean {
-    return this.statusCode === 401 || this.statusCode === 403;
+    return this.statusCode === 401;
+  }
+
+  isForbidden(): boolean {
+    return this.statusCode === 403;
   }
 
   isRateLimited(): boolean {
     return this.statusCode === 429;
   }
+}
+
+function withProcessedNote<E extends Error>(error: E): E {
+  error.message = `${error.message}\n${MAY_HAVE_BEEN_PROCESSED}`;
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+// undici reports socket, DNS and redirect failures as a TypeError with a cause.
+function isNetworkError(error: unknown): error is TypeError {
+  return error instanceof TypeError && error.cause !== undefined;
+}
+
+// True only when the request provably never left the machine.
+function isConnectError(error: TypeError): boolean {
+  const failures = error.cause instanceof AggregateError ? error.cause.errors : [error.cause];
+  return failures.length > 0 && failures.every((failure) => {
+    const { code, syscall } = (failure ?? {}) as NodeJS.ErrnoException;
+    return (typeof code === 'string' && CONNECT_ERROR_CODES.has(code)) ||
+      syscall === 'connect' ||
+      syscall === 'getaddrinfo';
+  });
+}
+
+function isRedirectError(error: TypeError): boolean {
+  return error.cause instanceof Error && error.cause.message === 'unexpected redirect';
+}
+
+function networkFailureMessage(error: TypeError): string {
+  const cause = error.cause;
+  const detail =
+    cause instanceof AggregateError && cause.errors[0] instanceof Error
+      ? cause.errors[0].message
+      : cause instanceof Error
+        ? cause.message || (cause as NodeJS.ErrnoException).code
+        : undefined;
+  return `Connection to the Venice API failed (${detail || error.message}).`;
+}
+
+function paidRequestError(error: unknown, timeoutMessage: string): unknown {
+  if (isAbortError(error)) {
+    return new Error(`${timeoutMessage}\n${MAY_HAVE_BEEN_PROCESSED}`);
+  }
+  if (error instanceof ResponseValidationError) {
+    return withProcessedNote(error);
+  }
+  if (error instanceof VeniceApiError) {
+    return error.isRetryable() ? withProcessedNote(error) : error;
+  }
+  if (isNetworkError(error)) {
+    if (isRedirectError(error)) return new Error(REDIRECT_REFUSED);
+    const failure = new Error(networkFailureMessage(error));
+    return isConnectError(error) ? failure : withProcessedNote(failure);
+  }
+  return error;
+}
+
+export function parseRetryAfter(
+  value: string | null | undefined,
+  now = Date.now()
+): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (!/[a-z]/i.test(trimmed)) return undefined;
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+}
+
+function retryDelayMs(error: VeniceApiError, attempt: number): number | undefined {
+  if (error.retryAfterMs !== undefined) {
+    return error.retryAfterMs <= MAX_RETRY_AFTER_MS ? error.retryAfterMs : undefined;
+  }
+  return RETRY_DELAY_MS * (attempt + 1) * (error.isRateLimited() ? 2 : 1);
 }
 
 function getHeaders(
@@ -110,19 +241,20 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function checkOnline(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    
-    await fetch('https://api.venice.ai/api/v1/models', {
+    await fetch(`${VENICE_API}/models`, {
       method: 'HEAD',
       signal: controller.signal,
+      redirect: 'manual',
     });
-    
-    clearTimeout(timeout);
     return true;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -130,6 +262,10 @@ type ApiRequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   retries?: number;
+  // Safe to send again after a 5xx, a dropped connection, or an unreadable
+  // response. Defaults to false for POST: set it only for POSTs that are reads
+  // or that carry an Idempotency-Key.
+  idempotent?: boolean;
   showSpinner?: boolean;
   spinnerText?: string;
   timeoutMs?: number;
@@ -140,7 +276,7 @@ type ApiRequestOptions = {
   | {
       responseType?: 'json';
       stream?: boolean;
-      maxResponseBytes?: never;
+      maxResponseBytes?: number;
       responseLabel?: never;
       expectedContentType?: never;
     }
@@ -153,10 +289,10 @@ type ApiRequestOptions = {
     }
 );
 
-class BinaryResponseValidationError extends Error {
+class ResponseValidationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'BinaryResponseValidationError';
+    this.name = 'ResponseValidationError';
   }
 }
 
@@ -169,104 +305,86 @@ export async function apiRequest<T>(
     body,
     stream = false,
     retries = MAX_RETRIES,
+    idempotent = method !== 'POST',
     showSpinner = true,
     spinnerText = 'Processing...',
     timeoutMs = DEFAULT_TIMEOUT_MS,
     additionalHeaders = {},
     onHeaders,
     authenticated = true,
+    maxResponseBytes = MAX_JSON_RESPONSE_BYTES,
   } = options;
 
   const binaryOptions = options.responseType === 'arrayBuffer' ? options : undefined;
   if (binaryOptions && stream) {
-    throw new BinaryResponseValidationError(
+    throw new ResponseValidationError(
       'Binary responses cannot be returned as an unvalidated stream.'
     );
   }
-  if (
-    binaryOptions &&
-    (!Number.isSafeInteger(binaryOptions.maxResponseBytes) || binaryOptions.maxResponseBytes <= 0)
-  ) {
-    throw new BinaryResponseValidationError(
-      'Binary responses require a positive, finite byte limit.'
-    );
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+    throw new ResponseValidationError('Responses require a positive, finite byte limit.');
   }
 
+  const headers = { ...getHeaders(authenticated), ...additionalHeaders };
+  const requestBody = body ? JSON.stringify(body) : undefined;
+  const responseLabel = `Response from ${endpoint.split('?')[0]}`;
   let spinner = showSpinner && !stream ? startSpinner(spinnerText) : null;
-  let lastError: VeniceApiError | null = null;
+  let connectionChecked = false;
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = attempt < retries;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let responded = false;
 
     try {
       const response = await fetch(`${VENICE_API}${endpoint}`, {
         method,
-        headers: { ...getHeaders(authenticated), ...additionalHeaders },
-        body: body ? JSON.stringify(body) : undefined,
+        headers,
+        body: requestBody,
         signal: controller.signal,
+        redirect: 'error',
       });
+      responded = true;
 
       if (!response.ok) {
-        let errorBody: string;
-        if (binaryOptions) {
-          const errorBytes = await readResponseBodyWithLimit(
-            response,
-            binaryOptions.maxResponseBytes,
-            `${binaryOptions.responseLabel} API error response`
-          );
-          errorBody = errorBytes.toString('utf-8');
-        } else {
-          // Preserve the existing JSON/stream behavior: only binary response
-          // bodies retain the request timeout while they are consumed.
-          clearTimeout(timeoutId);
-          errorBody = await response.text();
-        }
-        throw VeniceApiError.fromResponse(response.status, errorBody);
+        const error = VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+        error.retryAfterMs = parseRetryAfter(response.headers.get('retry-after'));
+        throw error;
       }
 
       onHeaders?.(response.headers);
 
+      let result: T;
       if (stream) {
-        clearTimeout(timeoutId);
-        if (spinner) {
-          stopSpinner(true);
-          spinner = null;
-        }
-        return response as unknown as T;
-      }
-
-      if (binaryOptions) {
+        result = response as unknown as T;
+      } else if (binaryOptions) {
         const bytes = await readResponseBodyWithLimit(
           response,
           binaryOptions.maxResponseBytes,
           binaryOptions.responseLabel
         );
         if (bytes.length === 0) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} response was empty.`
           );
         }
 
         const contentType = response.headers.get('content-type');
         if (binaryOptions.expectedContentType === 'image' && !isImageContentType(contentType)) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} did not return an image Content-Type ` +
             `(received: ${contentType || 'missing'}).`
           );
         }
         if (binaryOptions.expectedContentType === 'image' && !looksLikeImageBytes(bytes)) {
-          throw new BinaryResponseValidationError(
+          throw new ResponseValidationError(
             `${binaryOptions.responseLabel} did not contain a supported PNG, JPEG, or WebP image.`
           );
         }
-
-        clearTimeout(timeoutId);
-        if (spinner) {
-          stopSpinner(true);
-          spinner = null;
-        }
-        return Uint8Array.from(bytes).buffer as T;
+        result = Uint8Array.from(bytes).buffer as T;
+      } else {
+        result = await readJsonResponse<T>(response, maxResponseBytes, responseLabel);
       }
 
       clearTimeout(timeoutId);
@@ -274,26 +392,19 @@ export async function apiRequest<T>(
         stopSpinner(true);
         spinner = null;
       }
-      return await response.json() as T;
+      return result;
     } catch (error) {
       clearTimeout(timeoutId);
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (isAbortError(error)) {
         if (spinner) stopSpinner(false, 'Request timed out');
         throw new Error(
           `Request timed out after ${timeoutMs / 1000} seconds.\n` +
-          'The server may be overloaded. Please try again later.'
+          (idempotent ? 'The server may be overloaded. Please try again later.' : MAY_HAVE_BEEN_PROCESSED)
         );
       }
 
-      if (error instanceof BinaryResponseValidationError) {
-        if (spinner) stopSpinner(false);
-        throw error;
-      }
-
       if (error instanceof VeniceApiError) {
-        lastError = error;
-
         if (error.isAuthError()) {
           if (spinner) stopSpinner(false, 'Authentication failed');
           throw new Error(
@@ -302,41 +413,104 @@ export async function apiRequest<T>(
           );
         }
 
-        if (error.isRateLimited()) {
-          if (spinner) spinner.text = `Rate limited, waiting... (attempt ${attempt + 1}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1) * 2);
+        if (error.isForbidden()) {
+          if (spinner) stopSpinner(false, 'Permission denied');
+          throw new VeniceApiError(`Permission denied: ${error.message}`, 403, error.code);
+        }
+
+        const retryable = error.isRateLimited() || (idempotent && error.isRetryable());
+        const delayMs = retryable && canRetry ? retryDelayMs(error, attempt) : undefined;
+        if (delayMs !== undefined) {
+          if (spinner) {
+            spinner.text = error.isRateLimited()
+              ? `Rate limited, waiting... (attempt ${attempt + 2}/${retries + 1})`
+              : `Retrying... (attempt ${attempt + 2}/${retries + 1})`;
+          }
+          await sleep(delayMs);
           continue;
         }
 
-        if (error.isRetryable() && attempt < retries) {
-          if (spinner) spinner.text = `Retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
-          continue;
+        if (spinner) stopSpinner(false);
+        if (retryable && error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
+          error.message +=
+            `\nThe server asked to wait ${Math.ceil(error.retryAfterMs / 1000)} seconds before retrying.`;
         }
-      } else if (error instanceof Error) {
-        if (attempt < retries) {
-          const online = await checkOnline();
-          if (!online) {
+        throw !idempotent && error.isRetryable() ? withProcessedNote(error) : error;
+      }
+
+      if (error instanceof ResponseValidationError) {
+        if (spinner) stopSpinner(false);
+        throw idempotent ? error : withProcessedNote(error);
+      }
+
+      if (!isNetworkError(error)) {
+        if (spinner) stopSpinner(false);
+        throw error;
+      }
+
+      if (isRedirectError(error)) {
+        if (spinner) stopSpinner(false);
+        throw new Error(REDIRECT_REFUSED);
+      }
+
+      const neverSent = !responded && isConnectError(error);
+      if (canRetry && (idempotent || neverSent)) {
+        if (!responded && !connectionChecked) {
+          connectionChecked = true;
+          if (!(await checkOnline())) {
             if (spinner) stopSpinner(false, 'Network error');
             throw new Error(
               'Unable to connect to Venice API.\n' +
               'Please check your internet connection.'
             );
           }
-          if (spinner) spinner.text = `Connection error, retrying... (attempt ${attempt + 2}/${retries + 1})`;
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
-          continue;
         }
-        lastError = new VeniceApiError(error.message);
+        if (spinner) spinner.text = `Connection error, retrying... (attempt ${attempt + 2}/${retries + 1})`;
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        continue;
       }
 
-      if (spinner) stopSpinner(false);
-      throw lastError || error;
+      if (spinner) stopSpinner(false, 'Network error');
+      const failure = new Error(networkFailureMessage(error));
+      throw idempotent || neverSent ? failure : withProcessedNote(failure);
     }
   }
+}
 
-  if (spinner) stopSpinner(false);
-  throw lastError || new Error('Request failed after retries');
+async function readErrorBody(response: Response): Promise<string> {
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (totalBytes < MAX_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+      totalBytes += value.byteLength;
+    }
+  } catch {
+    // Report the status with whatever part of the body arrived.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).subarray(0, MAX_ERROR_BODY_BYTES).toString('utf-8');
+}
+
+async function readJsonResponse<T>(
+  response: Response,
+  maxBytes: number,
+  label: string
+): Promise<T> {
+  const bytes = await readResponseBodyWithLimit(response, maxBytes, label);
+  try {
+    return JSON.parse(bytes.toString('utf-8')) as T;
+  } catch {
+    throw new ResponseValidationError(`${label} was not valid JSON.`);
+  }
 }
 
 export interface ChatCompletionRequestOptions {
@@ -349,6 +523,30 @@ export interface ChatCompletionRequestOptions {
   reasoning_effort?: ReasoningEffort;
   prompt_cache_key?: string;
   prompt_cache_retention?: PromptCacheRetention;
+  recordUsage?: boolean;
+}
+
+function tokenCounts(
+  usage: unknown
+): Pick<UsageEntry, 'prompt_tokens' | 'completion_tokens' | 'total_tokens'> {
+  const counts: Pick<UsageEntry, 'prompt_tokens' | 'completion_tokens' | 'total_tokens'> = {};
+  if (usage === null || typeof usage !== 'object') return counts;
+  for (const field of ['prompt_tokens', 'completion_tokens', 'total_tokens'] as const) {
+    const value = (usage as Record<string, unknown>)[field];
+    if (Number.isSafeInteger(value) && (value as number) >= 0) {
+      counts[field] = value as number;
+    }
+  }
+  return counts;
+}
+
+function recordChatUsage(usage: unknown, options: ChatCompletionRequestOptions): void {
+  if (!usage || options.recordUsage === false) return;
+  trackUsage({
+    ...tokenCounts(usage),
+    command: 'chat',
+    model: options.model || 'kimi-k2-5',
+  });
 }
 
 export function buildChatCompletionBody(
@@ -426,14 +624,7 @@ export async function chatCompletion(
   const choice = response.choices?.[0];
   const usage = response.usage;
 
-  // Track usage
-  if (usage) {
-    trackUsage({
-      command: 'chat',
-      model: options.model || 'kimi-k2-5',
-      ...usage,
-    });
-  }
+  recordChatUsage(usage, options);
 
   return {
     content: choice?.message?.content || '',
@@ -467,78 +658,135 @@ export async function* chatCompletionStream(
     additionalHeaders: options.additionalHeaders,
   });
 
+  const contentType = response.headers.get('content-type');
+  if ((contentType || '').split(';')[0].trim().toLowerCase() !== 'text/event-stream') {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Chat stream returned Content-Type ${contentType || '(missing)'} instead of text/event-stream.`
+    );
+  }
+
   const reader = response.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
-  let buffer = '';
+  const parser = new ServerSentEventParser(MAX_EVENT_STREAM_LINE_LENGTH);
   let totalUsage: any = null;
   let completionId: string | undefined;
+  // Only data events push the deadline back; keepalive comments do not.
+  let deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const { done, value } = await readBeforeDeadline(reader, deadline);
+      const events = done
+        ? parser.end(decoder.decode())
+        : parser.push(decoder.decode(value, { stream: true }));
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      for (const event of events) {
+        if (event.type === 'error') {
+          throw new Error(`Chat stream failed: ${streamErrorMessage(event.data)}`);
+        }
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') {
-            if (totalUsage) {
-              trackUsage({
-                command: 'chat',
-                model: options.model || 'kimi-k2-5',
-                ...totalUsage,
-              });
-            }
-            yield { done: true, usage: totalUsage, completionId };
-            return;
-          }
+        const data = event.data.trim();
+        if (!data) continue;
+        if (data === '[DONE]') {
+          recordChatUsage(totalUsage, options);
+          yield { done: true, usage: totalUsage, completionId };
+          return;
+        }
 
-          try {
-            const json = JSON.parse(data);
-            const choice = json.choices?.[0];
-            const delta = choice?.delta;
-            
-            // Capture completion ID for E2EE signature verification
-            if (json.id && !completionId) {
-              completionId = json.id;
-            }
+        let json: any;
+        try {
+          json = JSON.parse(data);
+        } catch {
+          throw new Error('Chat stream sent an event that is not valid JSON.');
+        }
+        if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+          throw new Error('Chat stream sent an event that is not a JSON object.');
+        }
+        if (json.error) {
+          throw new Error(`Chat stream failed: ${streamErrorMessage(data)}`);
+        }
+        deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
 
-            if (json.usage) {
-              totalUsage = json.usage;
-            }
+        const choice = json.choices?.[0];
+        const delta = choice?.delta;
 
-            if (delta?.reasoning_content) {
-              yield { reasoning_content: delta.reasoning_content, done: false, completionId };
-            }
+        // Capture completion ID for E2EE signature verification
+        if (json.id && !completionId) {
+          completionId = json.id;
+        }
 
-            if (delta?.content) {
-              yield { content: delta.content, done: false, completionId };
-            }
+        if (json.usage) {
+          totalUsage = json.usage;
+        }
 
-            if (delta?.tool_calls) {
-              yield { tool_calls: delta.tool_calls, done: false, completionId };
-            }
+        if (delta?.reasoning_content) {
+          yield { reasoning_content: delta.reasoning_content, done: false, completionId };
+        }
 
-            if (choice?.finish_reason) {
-              yield { finish_reason: choice.finish_reason, done: false, completionId };
-            }
-          } catch {
-            // Skip malformed JSON
-          }
+        if (delta?.content) {
+          yield { content: delta.content, done: false, completionId };
+        }
+
+        if (delta?.tool_calls) {
+          yield { tool_calls: delta.tool_calls, done: false, completionId };
+        }
+
+        if (choice?.finish_reason) {
+          yield { finish_reason: choice.finish_reason, done: false, completionId };
         }
       }
+
+      if (done) break;
     }
+  } catch (error) {
+    throw isNetworkError(error) ? new Error(networkFailureMessage(error)) : error;
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 
-  yield { done: true, usage: totalUsage, completionId };
+  throw new Error('Chat stream ended before the response was complete.');
+}
+
+async function readBeforeDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(
+            `Chat stream stalled: no data for ${STREAM_IDLE_TIMEOUT_MS / 1000} seconds.`
+          ));
+        }, Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+function streamErrorMessage(data: string): string {
+  let payload: unknown = data;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    // Plain-text error event.
+  }
+  const error = (payload as { error?: unknown } | null)?.error ?? payload;
+  const message = typeof error === 'string'
+    ? error
+    : (error as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message.trim()
+    ? truncateErrorMessage(message)
+    : 'the server reported an error.';
 }
 
 // Image generation (Venice-native endpoint)
@@ -596,6 +844,7 @@ export async function generateImage(
     method: 'POST',
     body,
     spinnerText: 'Generating image...',
+    maxResponseBytes: MAX_IMAGE_GENERATION_RESPONSE_BYTES,
   });
 
   trackUsage({
@@ -740,7 +989,7 @@ async function readResponseBodyWithLimit(
     const contentLength = Number(contentLengthHeader);
     if (Number.isFinite(contentLength) && contentLength >= 0 && contentLength > maxBytes) {
       await response.body?.cancel().catch(() => undefined);
-      throw new BinaryResponseValidationError(
+      throw new ResponseValidationError(
         `${label} is too large (${formatBytes(contentLength)}). ` +
         `Maximum allowed size is ${formatBytes(maxBytes)}.`
       );
@@ -763,7 +1012,7 @@ async function readResponseBodyWithLimit(
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new BinaryResponseValidationError(
+        throw new ResponseValidationError(
           `${label} exceeded the limit of ${formatBytes(maxBytes)}.`
         );
       }
@@ -810,18 +1059,18 @@ export async function upscaleImage(
       headers: getHeaders(),
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
+
+    if (!response.ok) {
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+    }
 
     const bytes = await readResponseBodyWithLimit(
       response,
       MAX_IMAGE_DOWNLOAD_BYTES,
-      response.ok ? 'Upscaled image response' : 'Upscale API error response'
+      'Upscaled image response'
     );
-
-    if (!response.ok) {
-      const errorBody = bytes.toString('utf-8');
-      throw VeniceApiError.fromResponse(response.status, errorBody);
-    }
 
     const contentType = response.headers.get('content-type') || '';
 
@@ -846,10 +1095,7 @@ export async function upscaleImage(
     };
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Image upscale request timed out. Please try again later.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Image upscale request timed out. Please try again later.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -894,15 +1140,11 @@ export async function textToSpeech(
       headers: getHeaders(),
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
-      const errorBytes = await readResponseBodyWithLimit(
-        response,
-        MAX_AUDIO_DOWNLOAD_BYTES,
-        'Text-to-speech API error response'
-      );
-      throw VeniceApiError.fromResponse(response.status, errorBytes.toString('utf-8'));
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
     }
 
     const contentType = response.headers.get('content-type')?.split(';')[0].trim();
@@ -935,10 +1177,7 @@ export async function textToSpeech(
       contentType,
     };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Text-to-speech request timed out. Please try with shorter text.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Text-to-speech request timed out. Please try with shorter text.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -989,21 +1228,23 @@ export async function cloneVoice(
       headers: getHeaders(true, ''),
       body: form,
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
-      throw VeniceApiError.fromResponse(response.status, errorBody);
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
     }
 
+    const voice = await readJsonResponse<{ id: string; model: string }>(
+      response,
+      MAX_JSON_RESPONSE_BYTES,
+      'Voice cloning response'
+    );
     if (spinner) stopSpinner(true);
-    return await response.json() as { id: string; model: string };
+    return voice;
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Voice cloning request timed out. Try a shorter audio sample.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Voice cloning request timed out. Try a shorter audio sample.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1098,29 +1339,27 @@ export async function transcribe(
       body: multipartBody as unknown as RequestInit['body'],
       duplex: 'half',
       signal: controller.signal,
+      redirect: 'error',
     };
 
     const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
       ...requestInit,
     });
 
-    clearTimeout(timeoutId);
-
     if (!res.ok) {
-      const errorBody = await res.text();
-      throw VeniceApiError.fromResponse(res.status, errorBody);
+      throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
     }
 
-    if (spinner) stopSpinner(true);
-
-    const response = await res.json() as {
+    const response = await readJsonResponse<{
       text: string;
       duration?: number;
       timestamps?: {
         word?: Array<{ word: string; start: number; end: number }>;
         segment?: Array<{ text: string; start: number; end: number }>;
       };
-    };
+    }>(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+
+    if (spinner) stopSpinner(true);
 
     trackUsage({
       command: 'transcribe',
@@ -1129,12 +1368,10 @@ export async function transcribe(
 
     return response;
   } catch (error) {
-    clearTimeout(timeoutId);
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Transcription request timed out. Try a shorter audio file.');
-    }
-    throw error;
+    throw paidRequestError(error, 'Transcription request timed out. Try a shorter audio file.');
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -1173,6 +1410,8 @@ export function clearModelsCache(): void {
   modelsCache = null;
 }
 
+// The first listing of a model wins, so a typed query can never re-type a
+// model the base (text) list already returned: E2EE detection needs type text.
 function mergeModel(merged: Map<string, Model>, model: Model, requestedType?: string): void {
   const normalized: Model = { ...model };
 
@@ -1181,16 +1420,7 @@ function mergeModel(merged: Map<string, Model>, model: Model, requestedType?: st
   }
 
   const key = normalized.id || JSON.stringify(normalized);
-  const existing = merged.get(key);
-
-  if (!existing) {
-    merged.set(key, normalized);
-    return;
-  }
-
-  const existingType = (existing.type || '').toLowerCase();
-  const normalizedType = (normalized.type || '').toLowerCase();
-  if (existingType === 'text' && normalizedType && normalizedType !== 'text') {
+  if (!merged.has(key)) {
     merged.set(key, normalized);
   }
 }
@@ -1208,6 +1438,7 @@ export async function listModels(
         method: 'GET',
         spinnerText: 'Fetching models...',
         showSpinner: showSpinnerOption,
+        maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
       }
     );
     return (response.data || []).map((model) =>
@@ -1221,19 +1452,23 @@ export async function listModels(
     return [...modelsCache.models];
   }
 
-  const modelTypes = ['text', 'asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video', 'music'];
+  // The base list is the text catalog; other types are best-effort extras.
+  const modelTypes = ['asr', 'embedding', 'image', 'tts', 'upscale', 'inpaint', 'video', 'music'];
   const merged = new Map<string, Model>();
 
   const base = apiRequest<{ data: Model[] }>('/models', {
     method: 'GET',
     spinnerText: 'Fetching models...',
     showSpinner: showSpinnerOption,
+    maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
   });
 
   const typed = modelTypes.map((type) =>
     apiRequest<{ data: Model[] }>(`/models?type=${encodeURIComponent(type)}`, {
       method: 'GET',
       showSpinner: false,
+      retries: 0,
+      maxResponseBytes: MAX_MODELS_RESPONSE_BYTES,
     })
       .then((response) => ({ type, response }))
       .catch(() => null)
@@ -1502,11 +1737,11 @@ async function retrieveVideoResponse(
         headers: getHeaders(),
         body: JSON.stringify(body),
         signal: controller.signal,
+        redirect: 'error',
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        throw VeniceApiError.fromResponse(response.status, errorBody);
+        throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
       }
 
       const inspected = await inspectVideoRetrieveResponse(response);
@@ -1548,6 +1783,10 @@ async function retrieveVideoResponse(
       if (spinner) stopSpinner(true);
       return { kind: 'video', ...saved };
     } catch (error) {
+      if (isNetworkError(error) && isRedirectError(error)) {
+        if (spinner) stopSpinner(false);
+        throw new Error(REDIRECT_REFUSED);
+      }
       const retryable =
         !fileWriteStarted &&
         attempt < MAX_RETRIES &&
@@ -1743,6 +1982,7 @@ export async function quoteVideoGeneration(options: {
   const response = await apiRequest<unknown>('/video/quote', {
     method: 'POST',
     body,
+    idempotent: true,
     spinnerText: 'Fetching video quote...',
   });
   return parseQuoteResponse(response, '/video/quote');
@@ -1859,6 +2099,7 @@ export async function quoteAudioGeneration(
   const response = await apiRequest<unknown>('/audio/quote', {
     method: 'POST',
     body,
+    idempotent: true,
     spinnerText: 'Fetching audio quote...',
   });
   return parseQuoteResponse(response, '/audio/quote');
@@ -1958,6 +2199,7 @@ export async function retrieveGeneratedAudio(
   const response = await apiRequest<Response>('/audio/retrieve', {
     method: 'POST',
     body: { queue_id: queueId, model, delete_media_on_completion: false },
+    idempotent: true,
     stream: true,
     showSpinner: false,
   });
@@ -2167,41 +2409,40 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
       body: multipartBody as unknown as RequestInit['body'],
       duplex: 'half',
       signal: controller.signal,
+      redirect: 'error',
     };
     const response = await fetch(`${VENICE_API}/augment/text-parser`, requestInit);
+
+    if (!response.ok) {
+      throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
+    }
+
     const responseBytes = await readResponseBodyWithLimit(
       response,
       MAX_DOCUMENT_PARSE_RESPONSE_BYTES,
-      response.ok ? 'Document parse response' : 'Document parse API error response'
+      'Document parse response'
     );
-
-    if (!response.ok) {
-      throw VeniceApiError.fromResponse(response.status, responseBytes.toString('utf-8'));
-    }
-
     const responseBody = responseBytes.toString('utf-8');
     if (responseBody.trim().length === 0) {
-      throw new Error('Document parse response was empty; expected JSON.');
+      throw new ResponseValidationError('Document parse response was empty; expected JSON.');
     }
 
     let parsedResponse: DocumentParseResponse;
     try {
       parsedResponse = JSON.parse(responseBody) as DocumentParseResponse;
     } catch {
-      throw new Error('Document parse response contained malformed JSON.');
+      throw new ResponseValidationError('Document parse response contained malformed JSON.');
     }
 
     if (spinner) stopSpinner(true);
     return parsedResponse;
   } catch (error) {
     if (spinner) stopSpinner(false);
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(
-        'Document parsing timed out after 10 minutes. ' +
-        'Check your connection or try a smaller document.'
-      );
-    }
-    throw error;
+    throw paidRequestError(
+      error,
+      'Document parsing timed out after 10 minutes. ' +
+      'Check your connection or try a smaller document.'
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -2349,6 +2590,8 @@ export async function cryptoRpc(
     {
       method: 'POST',
       body,
+      idempotent: true,
+      maxResponseBytes: MAX_RPC_RESPONSE_BYTES,
       spinnerText: 'Sending RPC request...',
       additionalHeaders: { 'Idempotency-Key': idempotencyKey },
       onHeaders: (headers) => {
