@@ -29,9 +29,9 @@ export const parseHex = (hex: string): Uint8Array | undefined => {
   return bytes
 }
 
-export const hexToBytes = (hex: string): Uint8Array => {
+export const hexToBytes = (hex: string, name: string): Uint8Array => {
   const bytes = parseHex(hex)
-  if (!bytes) throw new Error('Invalid hex string')
+  if (!bytes) throw new Error(`Invalid ${name}: expected an even number of hex digits with an optional 0x prefix`)
   return bytes
 }
 
@@ -107,7 +107,7 @@ export const isHexEncrypted = (s: string): boolean => {
  * Format: [ephemeral_public (65 bytes)][nonce (12 bytes)][ciphertext + auth_tag]
  */
 export const decryptChunk = (ciphertextHex: string, ephemeralPrivateKey: Uint8Array): string => {
-  const raw = hexToBytes(ciphertextHex)
+  const raw = hexToBytes(ciphertextHex, 'ciphertext')
 
   const serverEphemeralPubKey = raw.slice(0, EPHEMERAL_PUB_LENGTH)
   const nonce = raw.slice(EPHEMERAL_PUB_LENGTH, EPHEMERAL_PUB_LENGTH + NONCE_LENGTH)
@@ -164,7 +164,7 @@ export const zeroFill = (arr: Uint8Array): void => {
  */
 export const recoverSignerAddress = (message: string, signatureHex: string): string | null => {
   try {
-    const sigBytes = hexToBytes(signatureHex)
+    const sigBytes = hexToBytes(signatureHex, 'signature')
     if (sigBytes.length !== 65) return null
 
     let v = sigBytes[64]

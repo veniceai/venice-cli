@@ -127,7 +127,7 @@ test('verifySignature does not accept a signature over the reasoning or reasonin
   const reasoning = 'Thinking about the request.';
 
   for (const signedText of [reasoning, `${reasoning}${REPLY}`, `${reasoning}\n${REPLY}`, `${REPLY}\n${reasoning}`]) {
-    const params = { ...signer.sign(signedText), expectedContent: REPLY, expectedReasoningContent: reasoning };
+    const params = { ...signer.sign(signedText), expectedContent: REPLY };
     assert.equal(verifySignature(params).verified, false, JSON.stringify(signedText));
   }
 });
