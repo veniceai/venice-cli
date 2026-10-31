@@ -21,6 +21,7 @@ import {
 } from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeResponseToFile } from '../lib/media.js';
 import { detectOutputFormat, formatError, formatSuccess, getChalk } from '../lib/output.js';
+import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
 
 const DEFAULT_MUSIC_MODEL = 'elevenlabs-music';
@@ -107,7 +108,7 @@ export function registerMusicCommands(program: Command): void {
         console.log(`\n${c.dim('Queue ID:')} ${c.cyan(result.queue_id)}`);
         console.log(`${c.dim('Model:')} ${result.model}`);
         console.log(
-          `\n${c.dim('Check status with:')} venice music status ${result.queue_id} -m ${result.model}`
+          `\n${c.dim('Check status with:')} ${shellCommand`venice music status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`
         );
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -181,7 +182,7 @@ export function registerMusicCommands(program: Command): void {
         printProcessingStatus(status);
         if (classifyJobStatus(status.status) === 'completed') {
           console.log(
-            `${getChalk().dim('Download with:')} venice music retrieve ${queueId} -m ${options.model}`
+            `${getChalk().dim('Download with:')} ${shellCommand`venice music retrieve ${queueId} -m ${options.model}`}`
           );
         }
       };
@@ -290,7 +291,7 @@ export function registerMusicCommands(program: Command): void {
             `Remote cleanup did not complete${cleanupError ? `: ${cleanupError}` : '.'}`
           ));
           console.log(c.dim(
-            `Retry with: venice music complete ${queueId} -m ${options.model}`
+            `Retry with: ${shellCommand`venice music complete ${queueId} -m ${options.model}`}`
           ));
         }
       } catch (error) {
