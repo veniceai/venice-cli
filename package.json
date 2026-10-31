@@ -11,13 +11,17 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "test": "npm run build && node scripts/run-tests.mjs",
     "lint": "eslint \"src/**/*.ts\"",
+    "check:package": "node scripts/check-package.mjs",
     "clean": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "node -e \"console.error('Releases are published by CI when a version tag is pushed. See CONTRIBUTING.md.'); process.exit(1)\""
   },
   "files": [
     "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/*.map",
+    "!dist/**/test-*",
     "examples",
     "README.md",
     "LICENSE"
@@ -30,8 +34,7 @@
     "ajv-formats": "^3.0.1",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
-    "ora": "^8.0.1",
-    "update-notifier": "^7.3.1"
+    "ora": "^8.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -42,7 +45,7 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20"
   },
   "keywords": [
     "venice",

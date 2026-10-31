@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
 
 ### Prerequisites
 
-- Node.js 18.0.0 or higher
+- Node.js 20 or later
 - npm or yarn
 - A Venice AI API key for testing
 
@@ -99,6 +99,14 @@ venice-cli/
 
 ### Testing
 
+- Run `npm test`, which builds the project and runs the compiled tests with a
+  temporary `HOME`, so your own `~/.venice` is never read or changed. Options
+  after `--` are passed to `node --test`, for example
+  `npm test -- --test-concurrency=2`
+- Name test files `*.test.ts`. They compile into `dist/` for the test runner
+  but are left out of the npm package; `npm run check:package` (run in CI)
+  fails if the package would contain anything other than the compiled CLI,
+  `examples/`, `README.md` and `LICENSE`
 - Test new features manually before submitting
 - Test with and without API key configured
 - Test with `--no-color` flag
@@ -141,6 +149,9 @@ docs(readme): add shell completion instructions
 3. Update documentation if needed
 4. Test your changes thoroughly
 5. Submit a PR with a clear description
+
+CI runs `npm run build`, `npm run lint`, `npm test` and `npm run check:package`
+on Node.js 20, 22 and 24 for every pull request; make sure it passes.
 
 #### PR Description Template
 
@@ -206,7 +217,39 @@ export function registerExampleCommand(program: Command): void {
 3. Update the shell completions
 4. Document in README.md
 
+## Releasing
+
+Releases are published to npm only by the
+[Publish to npm](.github/workflows/publish.yml) workflow, from a version tag.
+Never publish from a workstation; `npm publish` in a checkout fails on purpose.
+
+To cut a release:
+
+1. In a pull request, set the new version with
+   `npm version <version> --no-git-tag-version`, which updates `package.json`
+   and `package-lock.json`, and add release notes to `CHANGELOG.md`. Merge the
+   pull request into `main` once CI passes.
+2. Tag the merged commit on `main` and push the tag:
+   ```bash
+   git switch main
+   git pull --ff-only
+   git tag -a v2.2.0 -m "v2.2.0"
+   git push origin v2.2.0
+   ```
+3. The workflow checks that the tag is `v` followed by the `package.json`
+   version and that it points to a commit on `main`, then builds, lints,
+   tests, checks the package contents and packs the tarball. A tag that fails
+   these checks publishes nothing.
+4. A maintainer approves the run in the `npm-publish` environment, and the
+   workflow publishes the tarball using npm trusted publishing, with a
+   provenance attestation. Versions with a prerelease suffix, such as
+   `2.2.0-beta.1`, are published under the `next` dist-tag instead of
+   `latest`.
+
 ## Security Considerations
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in public issues or pull requests.
 
 - Never log API keys or tokens
 - Use restrictive file permissions for sensitive files
