@@ -58,3 +58,34 @@ test('usage prints stored command and model names through the terminal sanitiser
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('usage counts commands and models named after Object.prototype properties', () => {
+  const home = mkdtempSync(join(tmpdir(), 'venice-usage-'));
+  const timestamp = new Date().toISOString();
+  try {
+    mkdirSync(join(home, '.venice'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.venice', 'usage.json'), JSON.stringify([
+      { timestamp, command: '__proto__', model: 'constructor', total_tokens: 3 },
+      { timestamp, command: 'toString', model: '__proto__', total_tokens: 4 },
+    ]));
+
+    const json = runUsage(home, ['-f', 'json'], false);
+    assert.equal(json.status, 0, json.stderr);
+    const summary = JSON.parse(json.stdout);
+    assert.deepEqual(Object.entries(summary.by_command), [
+      ['__proto__', { calls: 1, tokens: 3 }],
+      ['toString', { calls: 1, tokens: 4 }],
+    ]);
+    assert.deepEqual(Object.entries(summary.by_model), [
+      ['constructor', { calls: 1, tokens: 3 }],
+      ['__proto__', { calls: 1, tokens: 4 }],
+    ]);
+
+    const pretty = runUsage(home, [], false);
+    assert.equal(pretty.status, 0, pretty.stderr);
+    assert.match(pretty.stdout, /__proto__\s+1 calls, 3 tokens/);
+    assert.match(pretty.stdout, /constructor\s+1 calls, 3 tokens/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

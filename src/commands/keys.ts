@@ -33,6 +33,7 @@ import {
   formatWarning,
   getChalk,
 } from '../lib/output.js';
+import { assertApiKeyList, assertApiKeyRateLimits } from '../lib/response-checks.js';
 
 const KEY_TYPES = ['INFERENCE', 'ADMIN'] as const;
 const LIMIT_PERIODS = ['EPOCH', 'MONTH', 'LIFETIME'] as const;
@@ -40,7 +41,11 @@ const LIMIT_PERIODS = ['EPOCH', 'MONTH', 'LIFETIME'] as const;
 export function registerKeysCommand(program: Command): void {
   const keys = program
     .command('keys')
-    .description('Manage Venice API keys (requires an admin API key)');
+    .description('Manage Venice API keys (requires an admin API key)')
+    // Subcommands read --format after their request, which for create and delete changes the account.
+    .hook('preAction', (_keys, subcommand) => {
+      detectOutputFormat(subcommand.opts().format);
+    });
 
   keys
     .command('list')
@@ -48,6 +53,7 @@ export function registerKeysCommand(program: Command): void {
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
       const apiKeys = await listApiKeys();
+      assertApiKeyList(apiKeys);
       if (detectOutputFormat(options.format) === 'json') {
         console.log(JSON.stringify(apiKeys.map(toSafeApiKeyMetadata), null, 2));
         return;
@@ -204,6 +210,7 @@ export function registerKeysCommand(program: Command): void {
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
       const limits = await getApiKeyRateLimits();
+      assertApiKeyRateLimits(limits);
       if (detectOutputFormat(options.format) === 'json') {
         console.log(JSON.stringify(limits, null, 2));
         return;

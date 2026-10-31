@@ -421,6 +421,10 @@ export function isPiped(): boolean {
 
 // Detect best output format based on context
 export function detectOutputFormat(explicit?: OutputFormat): OutputFormat {
+  const formats: OutputFormat[] = ['pretty', 'json', 'markdown', 'raw'];
+  if (explicit !== undefined && !formats.includes(explicit)) {
+    throw new Error(`Invalid --format "${explicit}". Use one of: ${formats.join(', ')}`);
+  }
   if (explicit) return explicit;
   if (isPiped()) return 'raw';
   return 'pretty';

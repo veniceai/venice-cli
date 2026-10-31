@@ -42,7 +42,7 @@ This PR introduces Venice CLI 2.0.0 - a comprehensive, production-ready command-
 
 ### Stack
 - **Language**: TypeScript with strict mode
-- **Runtime**: Node.js 18+
+- **Runtime**: Node.js 20+
 - **Framework**: Commander.js
 - **Styling**: Chalk, Ora
 - **Module System**: ESM

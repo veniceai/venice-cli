@@ -72,16 +72,15 @@ export function registerHistoryCommand(program: Command): void {
       const limit = parseInt(options.limit, 10);
 
       const conversations = loadHistory();
-
-      if (conversations.length === 0) {
-        console.log(c.dim('No conversation history found.'));
-        return;
-      }
-
       const recent = conversations.slice(-limit).reverse();
 
       if (format === 'json') {
         console.log(formatJson(recent));
+        return;
+      }
+
+      if (conversations.length === 0) {
+        console.log(c.dim('No conversation history found.'));
         return;
       }
 
@@ -118,11 +117,6 @@ export function registerHistoryCommand(program: Command): void {
 
       const conversations = loadHistory();
 
-      if (conversations.length === 0) {
-        console.log(c.dim('No conversation history found.'));
-        return;
-      }
-
       let conv: ConversationEntry | undefined;
 
       if (id) {
@@ -136,7 +130,12 @@ export function registerHistoryCommand(program: Command): void {
       }
 
       if (format === 'json') {
-        console.log(formatJson(conv));
+        console.log(formatJson(conv ?? null));
+        return;
+      }
+
+      if (!conv) {
+        console.log(c.dim('No conversation history found.'));
         return;
       }
 
