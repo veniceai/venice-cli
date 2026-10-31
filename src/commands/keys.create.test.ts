@@ -106,7 +106,7 @@ test('keys create says the key may exist after a truncated response without echo
   });
 
   assertKeyMayExist(result);
-  assert.match(result.stderr, /No valid response was received/);
+  assert.match(result.stderr, /may already have been processed, so it was not retried/);
   assert.doesNotMatch(result.stderr, /venice-secret/);
   assert.deepEqual(result.methods, ['POST']);
   assert.equal(result.secretSaved, false);
@@ -124,7 +124,7 @@ test('keys create says the key may exist after a server error', async () => {
 });
 
 test('keys create does not suggest the key exists when Venice refuses the request', async () => {
-  for (const [status, message] of [[400, 'description is invalid'], [401, 'bad key']] as const) {
+  for (const [status, message] of [[400, 'description is invalid'], [401, 'bad key'], [403, 'not an admin key']] as const) {
     const result = await createKey((_request, response) => {
       sendJson(response, status, { error: { message } });
     });
