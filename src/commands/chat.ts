@@ -120,9 +120,9 @@ async function setupE2EE(
       status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
       if (showDetails && format === 'pretty') {
-        console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
-        console.log(c.dim(`Model: ${response.model}`));
-        console.log(c.dim(`Signing Address: ${response.signing_address || 'N/A'}`));
+        console.log(c.dim(`\nTEE Provider: ${terminalSafe(response.tee_provider || 'Unknown')}`));
+        console.log(c.dim(`Model: ${terminalSafe(response.model)}`));
+        console.log(c.dim(`Signing Address: ${terminalSafe(response.signing_address || 'N/A')}`));
         if (parsedTdxQuote) {
           console.log(c.dim(`TDX Version: ${parsedTdxQuote.version}`));
           console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
@@ -175,9 +175,9 @@ async function verifyTEEAttestation(
     status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
     if (showDetails && format === 'pretty') {
-      console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
-      console.log(c.dim(`Model: ${response.model}`));
-      console.log(c.dim(`Signing Address: ${response.signing_address || 'N/A'}`));
+      console.log(c.dim(`\nTEE Provider: ${terminalSafe(response.tee_provider || 'Unknown')}`));
+      console.log(c.dim(`Model: ${terminalSafe(response.model)}`));
+      console.log(c.dim(`Signing Address: ${terminalSafe(response.signing_address || 'N/A')}`));
       if (parsedTdxQuote) {
         console.log(c.dim(`TDX Version: ${parsedTdxQuote.version}`));
         console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
@@ -458,7 +458,8 @@ export function registerChatCommand(program: Command): void {
       }
       if (useE2EE && historyCharacter && !options.character && format === 'pretty' && !options.quiet) {
         console.log(formatWarning(
-          `Saved character "${historyCharacter}" will not be applied; E2EE cannot use server-side personas.`
+          `Saved character "${historyCharacter}" will not be applied; E2EE cannot use server-side personas.`,
+          process.stdout
         ));
       }
 
