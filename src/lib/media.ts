@@ -3,6 +3,7 @@ import * as path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import type { ReadableStreamReadResult } from 'stream/web';
+import { fetchDownload } from './download-guard.js';
 
 const MB = 1024 * 1024;
 
@@ -213,6 +214,58 @@ function parseContentLength(value: string | null): number | null {
   return parsed;
 }
 
+type LeadingBytesCheck = {
+  check: (bytes: Buffer) => 'valid' | 'invalid' | 'incomplete';
+  invalidMessage: string;
+};
+
+function withLeadingBytesCheck(response: Response, leadingBytes: LeadingBytesCheck): Response {
+  if (!response.body) return response;
+
+  const reader = response.body.getReader();
+  let head: Buffer | undefined = Buffer.alloc(0);
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (head === undefined) {
+            if (done) controller.close();
+            else controller.enqueue(value);
+            return;
+          }
+          if (done) {
+            if (head.length > 0) throw new Error(leadingBytes.invalidMessage);
+            controller.close();
+            return;
+          }
+
+          head = Buffer.concat([head, value]);
+          const verdict = leadingBytes.check(head);
+          if (verdict === 'invalid') throw new Error(leadingBytes.invalidMessage);
+          if (verdict === 'valid') {
+            controller.enqueue(head);
+            head = undefined;
+            return;
+          }
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function downloadToFile(
   url: string,
   outputPath: string,
@@ -220,6 +273,7 @@ export async function downloadToFile(
     maxBytes: number;
     expectedContentTypePrefixes: string[];
     timeoutMs?: number;
+    leadingBytes?: LeadingBytesCheck;
   }
 ): Promise<{ bytesWritten: number; contentType: string }> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
@@ -227,14 +281,15 @@ export async function downloadToFile(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-    }
+    const response = await fetchDownload(url, controller.signal);
 
-    return await writeResponseToFile(response, outputPath, options);
+    return await writeResponseToFile(
+      options.leadingBytes ? withLeadingBytesCheck(response, options.leadingBytes) : response,
+      outputPath,
+      options
+    );
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (controller.signal.aborted) {
       throw new Error(`Download timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
     }
 
