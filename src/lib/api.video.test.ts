@@ -11,6 +11,14 @@ import {
 } from './api.js';
 import { readWithInactivityTimeout, streamResponseToFile } from './media.js';
 
+function mp4Bytes(tail = ''): Buffer {
+  const header = Buffer.alloc(24);
+  header.writeUInt32BE(header.length, 0);
+  header.write('ftypisom', 4, 'latin1');
+  header.write('isommp41', 16, 'latin1');
+  return Buffer.concat([header, Buffer.from(tail)]);
+}
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     headers: { 'Content-Type': 'application/json' },
@@ -148,7 +156,7 @@ test('queueVideoGeneration omits aspect_ratio unless the user set it', async () 
 test('video status cancels a completed MP4 body without buffering it', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
-  const mp4 = Buffer.from('xxxxftypisom');
+  const mp4 = mp4Bytes();
   let fetchCount = 0;
   let statusBodyCancelled = false;
 
@@ -286,7 +294,7 @@ test('video retrieve retries transient HTTP failures before streaming to disk', 
   const originalApiKey = process.env.VENICE_API_KEY;
   const outputDir = mkdtempSync(join(tmpdir(), 'venice-api-video-'));
   const outputPath = join(outputDir, 'video.mp4');
-  const mp4 = Buffer.from('xxxxftypisom-streamed');
+  const mp4 = mp4Bytes('-streamed');
   let attempts = 0;
   process.env.VENICE_API_KEY = 'test-key';
   globalThis.fetch = (async () => {
@@ -315,7 +323,7 @@ test('video retrieve retries a successful response body read failure before writ
   const originalApiKey = process.env.VENICE_API_KEY;
   const outputDir = mkdtempSync(join(tmpdir(), 'venice-api-video-'));
   const outputPath = join(outputDir, 'video.mp4');
-  const mp4 = Buffer.from('xxxxftypisom-after-retry');
+  const mp4 = mp4Bytes('-after-retry');
   let attempts = 0;
   process.env.VENICE_API_KEY = 'test-key';
   globalThis.fetch = (async () => {
@@ -355,7 +363,7 @@ test('video retrieve enforces streaming size limits and cleans temporary files',
   process.env.VENICE_API_KEY = 'test-key';
   globalThis.fetch = (async () => new Response(new ReadableStream({
     start(controller) {
-      controller.enqueue(Buffer.from('xxxxftyp'));
+      controller.enqueue(mp4Bytes());
       controller.enqueue(Buffer.alloc(32, 1));
       controller.close();
     },

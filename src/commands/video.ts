@@ -26,6 +26,14 @@ import {
   MAX_VIDEO_REFERENCE_IMAGE_BYTES,
   MAX_VIDEO_UPSCALE_BYTES,
 } from '../lib/media.js';
+import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
+import {
+  DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+  classifyJobStatus,
+  jobPollIntervalMs,
+  waitForJobStatus,
+  type JobStatusPhase,
+} from '../lib/job-status.js';
 import {
   formatSuccess,
   formatError,
@@ -43,10 +51,7 @@ export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: stri
   { id: 'topaz-video-upscale', name: 'Topaz Video Upscale', type: 'upscale' },
 ];
 
-const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = 600;
-const VIDEO_STATUS_POLL_INTERVAL_MS = 5000;
-
-type VideoStatusPhase = 'processing' | 'completed' | 'failed' | 'other';
+const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = DEFAULT_JOB_WAIT_TIMEOUT_SECONDS;
 
 export function isPublicHttpUrl(value: string): boolean {
   try {
@@ -80,65 +85,41 @@ export function videoModelKind(id: string): string {
   return 'video';
 }
 
-export function classifyVideoStatus(status: string): VideoStatusPhase {
-  const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, '_');
+export const classifyVideoStatus = classifyJobStatus;
 
-  if (['processing', 'pending', 'queued', 'in_progress'].includes(normalized)) {
-    return 'processing';
-  }
-  if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(normalized)) {
-    return 'completed';
-  }
-  if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(normalized)) {
-    return 'failed';
-  }
-  return 'other';
-}
-
-export async function waitForVideoStatus(
+export function waitForVideoStatus(
   fetchStatus: () => Promise<VideoStatusResult>,
   timeoutMs: number,
-  pollIntervalMs = VIDEO_STATUS_POLL_INTERVAL_MS,
+  pollIntervalMs = jobPollIntervalMs(),
   onPoll?: (status: VideoStatusResult) => void
 ): Promise<VideoStatusResult> {
-  const deadline = Date.now() + timeoutMs;
-  const timeoutError = () =>
-    new Error(`Timed out waiting for video generation after ${Math.ceil(timeoutMs / 1000)} seconds.`);
+  return waitForJobStatus(fetchStatus, {
+    label: 'video generation',
+    timeoutMs,
+    pollIntervalMs,
+    onPoll,
+  });
+}
 
-  const fetchBeforeDeadline = async (): Promise<VideoStatusResult> => {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw timeoutError();
-    }
+function downloadVideoFromUrl(url: string, outputPath: string) {
+  return downloadToFile(url, outputPath, {
+    maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+    expectedContentTypePrefixes: ['video/'],
+    leadingBytes: {
+      check: checkMp4Header,
+      invalidMessage: 'Downloaded video is not a valid MP4 file.',
+    },
+  });
+}
 
-    let timeoutId: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        fetchStatus(),
-        new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => reject(timeoutError()), remainingMs);
-        }),
-      ]);
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  };
-
-  let status = await fetchBeforeDeadline();
-  while (classifyVideoStatus(status.status) === 'processing') {
-    onPoll?.(status);
-
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw timeoutError();
-    }
-    await new Promise(resolve => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
-    status = await fetchBeforeDeadline();
+async function completeSavedVideo(queueId: string, model: string, outputPath: string): Promise<void> {
+  if (!fileHasMp4Header(outputPath)) {
+    throw new Error(`${outputPath} is not a valid MP4 file, so the remote media was kept.`);
   }
-
-  return status;
+  const completion = await completeVideo(queueId, model);
+  if (!completion.success) {
+    throw new Error('Video cleanup did not succeed.');
+  }
 }
 
 export function registerVideoCommands(program: Command): void {
@@ -271,7 +252,7 @@ export function registerVideoCommands(program: Command): void {
           return;
         }
 
-        const statusColors: Record<VideoStatusPhase, (s: string) => string> = {
+        const statusColors: Record<JobStatusPhase, (s: string) => string> = {
           processing: c.blue,
           completed: c.green,
           failed: c.red,
@@ -309,7 +290,7 @@ export function registerVideoCommands(program: Command): void {
           const status = await waitForVideoStatus(
             () => getVideoStatus(queueId, options.model),
             timeoutSeconds * 1000,
-            VIDEO_STATUS_POLL_INTERVAL_MS,
+            jobPollIntervalMs(),
             format === 'json' ? undefined : currentStatus => {
               const elapsed = currentStatus.execution_duration
                 ? `${Math.ceil(currentStatus.execution_duration / 1000)}s`
@@ -319,7 +300,13 @@ export function registerVideoCommands(program: Command): void {
               );
             }
           );
+          const exitCode = classifyVideoStatus(status.status) === 'completed' ? 0 : 1;
+
           printStatus(status);
+          if (exitCode !== 0 && format !== 'json' && !status.error) {
+            console.error(formatError(`Video generation ended with status "${status.status}".`));
+          }
+          process.exitCode = exitCode;
         } else {
           printStatus(await getVideoStatus(queueId, options.model));
         }
@@ -355,32 +342,32 @@ export function registerVideoCommands(program: Command): void {
           const downloadUrl = videoUrlFromStatus(status);
 
           if (!downloadUrl) {
+            const notReady = classifyVideoStatus(status.status) === 'processing';
+            const exitCode = notReady ? 2 : 1;
+
             if (format === 'json') {
               console.log(JSON.stringify(status, null, 2));
-            } else if (status.status) {
+            } else if (notReady) {
               console.log(`${c.dim('Status:')} ${c.yellow(status.status)} — video not ready yet.`);
               console.log(`${c.dim('Try again with:')} venice video retrieve ${queueId} -m ${options.model}`);
             } else {
-              console.error(formatError('No video returned. The video may still be processing.'));
+              console.error(formatError(
+                `No video was returned (status: ${status.status})${status.error ? `: ${status.error}` : '.'}`
+              ));
             }
+            process.exitCode = exitCode;
             return;
           }
 
           if (format !== 'json') {
             console.log(`${c.dim('Downloading video...')}`);
           }
-          await downloadToFile(downloadUrl, options.output, {
-            maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
-            expectedContentTypePrefixes: ['video/'],
-          });
+          await downloadVideoFromUrl(downloadUrl, options.output);
         }
 
         let deleted = false;
         if (shouldComplete) {
-          const completion = await completeVideo(queueId, options.model);
-          if (!completion.success) {
-            throw new Error('Video cleanup did not succeed.');
-          }
+          await completeSavedVideo(queueId, options.model, options.output);
           deleted = true;
         }
 
@@ -417,13 +404,16 @@ export function registerVideoCommands(program: Command): void {
       const format = detectOutputFormat(options.format);
       try {
         const result = await completeVideo(queueId, options.model);
+        const exitCode = result.success ? 0 : 1;
+
         if (format === 'json') {
           console.log(JSON.stringify(result, null, 2));
         } else if (result.success) {
           console.log(formatSuccess('Video cleaned up from storage.'));
         } else {
-          throw new Error('Video cleanup did not succeed.');
+          console.error(formatError('Video cleanup did not succeed.'));
         }
+        process.exitCode = exitCode;
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -503,7 +493,7 @@ export function registerVideoCommands(program: Command): void {
         const status = await waitForVideoStatus(
           () => getVideoStatus(queued.queue_id, queued.model),
           DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS * 1000,
-          VIDEO_STATUS_POLL_INTERVAL_MS,
+          jobPollIntervalMs(),
           format === 'json' ? undefined : current => {
             console.log(`Status: ${current.status} - waiting...`);
           }
@@ -523,18 +513,12 @@ export function registerVideoCommands(program: Command): void {
               result.status.error || 'Video upscale completed but no video URL was returned.'
             );
           }
-          await downloadToFile(downloadUrl, options.output, {
-            maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
-            expectedContentTypePrefixes: ['video/'],
-          });
+          await downloadVideoFromUrl(downloadUrl, options.output);
         }
 
         let deleted = false;
         if (options.complete) {
-          const completion = await completeVideo(queued.queue_id, queued.model);
-          if (!completion.success) {
-            throw new Error('Video cleanup did not succeed.');
-          }
+          await completeSavedVideo(queued.queue_id, queued.model, options.output);
           deleted = true;
         }
 
