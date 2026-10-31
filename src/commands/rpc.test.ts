@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../lib/test-env.js';
 import {
   MAX_RPC_BATCH,
   MAX_RPC_BATCH_BYTES,
@@ -32,14 +33,13 @@ function runCli(
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: {
-        ...process.env,
+      env: childEnv({
         HOME: homeDir,
         NODE_ENV: 'test',
         NO_COLOR: '1',
         VENICE_API_KEY: 'test-key',
         VENICE_API_BASE_URL: apiBaseUrl,
-      },
+      }),
     });
     let stdout = '';
     let stderr = '';

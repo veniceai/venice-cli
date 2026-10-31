@@ -2,17 +2,17 @@ import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 
 function runCli(args: string[]) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: childEnv({
       NO_COLOR: '1',
       VENICE_API_KEY: 'test-key',
-    },
+    }),
   });
 }
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = join(process.cwd(), 'dist', 'index.js');
 const configModuleUrl = new URL('../lib/config.js', import.meta.url).href;
@@ -12,7 +13,7 @@ const historyModuleUrl = new URL('./history.js', import.meta.url).href;
 function spawnNode(home: string, args: string[]) {
   return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: home, NO_COLOR: '1' },
+    env: childEnv({ HOME: home, NO_COLOR: '1' }),
     encoding: 'utf8',
   });
 }

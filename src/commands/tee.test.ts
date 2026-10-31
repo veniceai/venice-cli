@@ -7,9 +7,10 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3';
-import elliptic from 'elliptic';
 import { deriveSigningAddressFromKey } from '../lib/e2ee.js';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const MODEL = 'test-model';
@@ -58,14 +59,13 @@ async function runTee(args: string[], handle: StubHandler): Promise<CliResult> {
   try {
     return await new Promise<CliResult>((resolve, reject) => {
       const child = spawn(process.execPath, [cliPath, 'tee', ...args], {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NODE_ENV: 'test',
           NO_COLOR: '1',
           VENICE_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
           VENICE_API_KEY: 'test-key',
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -82,14 +82,16 @@ async function runTee(args: string[], handle: StubHandler): Promise<CliResult> {
 }
 
 function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(632);
+  const quote = Buffer.alloc(48 + 584 + 4);
+  quote.writeUInt16LE(4, 0);
+  quote.writeUInt16LE(2, 2);
   quote.writeUInt32LE(0x81, 4);
   Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
   return quote.toString('hex');
 }
 
 function passingAttestation(): AttestationBuilder {
-  const signingKey = new elliptic.ec('secp256k1').genKeyPair().getPublic(false, 'hex');
+  const signingKey = Buffer.from(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), false)).toString('hex');
   const signingAddress = deriveSigningAddressFromKey(signingKey);
   assert.ok(signingAddress);
 
@@ -161,14 +163,14 @@ const SIGNED_TEXT = 'request-hash:response-hash';
 const WRONG_SIGNER = '0000000000000000000000000000000000000000';
 
 function signedPayload(): { payload: Record<string, unknown>; signer: string } {
-  const key = new elliptic.ec('secp256k1').genKeyPair();
+  const privateKey = secp256k1.utils.randomSecretKey();
   const messageBytes = new TextEncoder().encode(SIGNED_TEXT);
   const prefix = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${messageBytes.length}`);
   const digest = keccak_256(Buffer.concat([prefix, messageBytes]));
-  const sig = key.sign(Buffer.from(digest), { canonical: true });
-  const v = 27 + (sig.recoveryParam ?? 0);
-  const signature = `0x${sig.r.toString(16, 64)}${sig.s.toString(16, 64)}${v.toString(16)}`;
-  const signer = deriveSigningAddressFromKey(key.getPublic(false, 'hex'));
+  const sig = secp256k1.sign(digest, privateKey);
+  const v = 27 + sig.recovery;
+  const signature = `0x${Buffer.from(sig.toBytes('compact')).toString('hex')}${v.toString(16)}`;
+  const signer = deriveSigningAddressFromKey(Buffer.from(secp256k1.getPublicKey(privateKey, false)).toString('hex'));
   assert.ok(signer);
 
   return {

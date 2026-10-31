@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import elliptic from 'elliptic';
 
 import {
   buildChatUserMessage,
@@ -19,6 +18,7 @@ import {
 import { getToolDefinitions } from '../lib/tools.js';
 import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
 import { buildUserMessageContent } from '../lib/chat-attachments.js';
+import { childEnv } from '../lib/test-env.js';
 import type { Message } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -36,11 +36,10 @@ interface ChatRequest {
 function runCli(args: string[], homeDir: string) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: childEnv({
       HOME: homeDir,
       NO_COLOR: '1',
-    },
+    }),
   });
 }
 
@@ -188,14 +187,13 @@ test('chat preserves options and enforces the allowlist across tool rounds', asy
           'Use two tools',
         ],
         {
-          env: {
-            ...process.env,
+          env: childEnv({
             HOME: homeDir,
             NODE_ENV: 'test',
             NO_COLOR: '1',
             VENICE_API_KEY: 'test-key',
             VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
-          },
+          }),
           stdio: ['ignore', 'pipe', 'pipe'],
         }
       );
@@ -267,14 +265,13 @@ test('chat --continue resends the previous reply without its reasoning', async (
     // spawnSync would block the event loop the mock server runs on.
     const runAsync = (args: string[]) => new Promise<{ status: number | null; stderr: string }>((resolve) => {
       const child = spawn(process.execPath, [cliPath, 'chat', '--model', 'test-model', ...args], {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NODE_ENV: 'test',
           NO_COLOR: '1',
           VENICE_API_KEY: 'test-key',
           VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stderr = '';
@@ -503,14 +500,13 @@ test('chat rejects prompt caching and reasoning with E2EE before completion', as
         'secret-cache',
         'hello',
       ], {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NODE_ENV: 'test',
           NO_COLOR: '1',
           VENICE_API_KEY: 'test-key',
           VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -536,7 +532,9 @@ test('chat rejects prompt caching and reasoning with E2EE before completion', as
 });
 
 function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(632);
+  const quote = Buffer.alloc(48 + 584 + 4);
+  quote.writeUInt16LE(4, 0);
+  quote.writeUInt16LE(2, 2);
   quote.writeUInt32LE(0x81, 4);
   Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
   return quote.toString('hex');
@@ -544,7 +542,7 @@ function buildTdxQuote(signingAddress: string): string {
 
 async function runE2EEChat(args: string[], replyChunks: string[]) {
   const model = 'e2ee-test-model';
-  const signingKey = new elliptic.ec('secp256k1').genKeyPair().getPublic(false, 'hex');
+  const signingKey = generateEphemeralKeyPair().publicKeyHex;
   const signingAddress = deriveSigningAddressFromKey(signingKey);
   assert.ok(signingAddress);
   const requests: string[] = [];
@@ -604,14 +602,13 @@ async function runE2EEChat(args: string[], replyChunks: string[]) {
     assert.ok(address && typeof address !== 'string');
     const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(process.execPath, [cliPath, 'chat', '--model', model, ...args], {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NODE_ENV: 'test',
           NO_COLOR: '1',
           VENICE_API_KEY: 'test-key',
           VENICE_API_BASE_URL: `http://127.0.0.1:${address.port}/api/v1`,
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
