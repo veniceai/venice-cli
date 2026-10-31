@@ -18,7 +18,7 @@ import {
   getChalk,
   detectOutputFormat,
 } from '../lib/output.js';
-import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile } from '../lib/media.js';
+import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
 
 export function registerAudioCommands(program: Command): void {
   // Text to speech
@@ -65,15 +65,15 @@ export function registerAudioCommands(program: Command): void {
 
         // Determine output path
         const audioFormat = requestedFormat || formatFromContentType(result.contentType) || 'mp3';
-        const outputPath = ensureAudioExtension(
-          options.output || `output.${audioFormat}`,
-          audioFormat
-        );
-
-        writeBufferToFile(Buffer.from(result.audio), outputPath, {
-          maxBytes: MAX_AUDIO_DOWNLOAD_BYTES,
-          label: 'Text-to-speech audio',
-        });
+        const audio = Buffer.from(result.audio);
+        const limits = { maxBytes: MAX_AUDIO_DOWNLOAD_BYTES, label: 'Text-to-speech audio' };
+        let outputPath: string;
+        if (options.output) {
+          outputPath = ensureAudioExtension(options.output, audioFormat);
+          writeBufferToFile(audio, outputPath, limits);
+        } else {
+          outputPath = writeBufferToNewFile(audio, defaultSpeechFileName(audioFormat), limits).outputPath;
+        }
         console.log(formatSuccess(`Saved audio to ${outputPath}`));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -270,4 +270,11 @@ function ensureAudioExtension(outputPath: string, format: string): string {
   if (extension.toLowerCase() === `.${format}`) return outputPath;
   if (!extension) return `${outputPath}.${format}`;
   return `${outputPath.slice(0, -extension.length)}.${format}`;
+}
+
+function defaultSpeechFileName(format: string, now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `speech-${date}-${time}.${format}`;
 }

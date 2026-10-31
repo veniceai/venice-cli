@@ -30,6 +30,7 @@ import { registerKeysCommand } from './commands/keys.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
 import { formatError, getChalk } from './lib/output.js';
+import { runInterruptCleanups } from './lib/interrupt.js';
 import { getVersion } from './lib/version.js';
 
 async function main() {
@@ -109,10 +110,13 @@ process.on('unhandledRejection', (reason: any) => {
   process.exit(1);
 });
 
-// Handle SIGINT gracefully
-process.on('SIGINT', () => {
-  console.log('\n');
-  process.exit(0);
-});
+// Remove partial files, then exit with the shell's 128 + signal number
+for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+  process.on(signal, () => {
+    if (process.stderr.isTTY) process.stderr.write('\n');
+    runInterruptCleanups();
+    process.exit(exitCode);
+  });
+}
 
 main();
