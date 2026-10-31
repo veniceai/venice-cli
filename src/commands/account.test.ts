@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 
@@ -33,15 +34,14 @@ function runCli(
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: {
-        ...process.env,
+      env: childEnv({
         HOME: homeDir,
         NODE_ENV: 'test',
         NO_COLOR: '1',
         VENICE_API_BASE_URL: apiBaseUrl,
         VENICE_API_KEY: 'test-admin-key',
         ...extraEnv,
-      },
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

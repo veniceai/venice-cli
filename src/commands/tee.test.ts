@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { deriveSigningAddressFromKey } from '../lib/e2ee.js';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const MODEL = 'test-model';
@@ -58,14 +59,13 @@ async function runTee(args: string[], handle: StubHandler): Promise<CliResult> {
   try {
     return await new Promise<CliResult>((resolve, reject) => {
       const child = spawn(process.execPath, [cliPath, 'tee', ...args], {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NODE_ENV: 'test',
           NO_COLOR: '1',
           VENICE_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
           VENICE_API_KEY: 'test-key',
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';

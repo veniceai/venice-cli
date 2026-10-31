@@ -17,6 +17,7 @@ import {
   verifyKeyBinding,
   zeroFill,
 } from './e2ee.js';
+import { childEnv } from './test-env.js';
 
 const OFF_CURVE_KEY = `04${'00'.repeat(31)}01${'00'.repeat(31)}01`;
 
@@ -40,12 +41,12 @@ function aesKeyFromSharedX(sharedX: Buffer): Buffer {
 }
 
 test('hexToBytes decodes even-length hex with an optional 0x prefix and rejects anything else', () => {
-  assert.deepEqual(hexToBytes('00ff10Ab'), Uint8Array.from([0x00, 0xff, 0x10, 0xab]));
-  assert.deepEqual(hexToBytes('0x0aB1'), Uint8Array.from([0x0a, 0xb1]));
-  assert.deepEqual(hexToBytes(''), new Uint8Array());
+  assert.deepEqual(hexToBytes('00ff10Ab', 'test input'), Uint8Array.from([0x00, 0xff, 0x10, 0xab]));
+  assert.deepEqual(hexToBytes('0x0aB1', 'test input'), Uint8Array.from([0x0a, 0xb1]));
+  assert.deepEqual(hexToBytes('', 'test input'), new Uint8Array());
 
   for (const invalid of ['zz00gg11', 'abc', '0x0', ' 00', '00 ', '+0', '-1', '1g', '0x0x00', '0X00']) {
-    assert.throws(() => hexToBytes(invalid), /Invalid hex string/, invalid);
+    assert.throws(() => hexToBytes(invalid, 'test input'), /^Error: Invalid test input: /, invalid);
     assert.equal(parseHex(invalid), undefined, invalid);
   }
 });
@@ -106,7 +107,7 @@ test('decryptChunk decrypts what node:crypto produces', () => {
 
 test('decryptChunk decrypts known-answer ciphertexts in the E2EE wire format', () => {
   for (const { recipientPrivateKey, plaintext, ciphertext } of KNOWN_ANSWERS) {
-    assert.equal(decryptChunk(ciphertext, hexToBytes(recipientPrivateKey)), plaintext);
+    assert.equal(decryptChunk(ciphertext, hexToBytes(recipientPrivateKey, 'private key')), plaintext);
   }
 });
 
@@ -173,7 +174,7 @@ test('E2EE key generation, encryption and decryption work without the WebCrypto 
   );
 
   try {
-    const result = spawnSync(process.execPath, ['--require', preload, script], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, ['--require', preload, script], { encoding: 'utf8', env: childEnv() });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, 'undefined:round trip');
   } finally {

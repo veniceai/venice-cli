@@ -17,17 +17,16 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const secretKey = 'sk-secret-should-not-be-lost';
 
 function runCli(args: string[], homeDir: string, input?: string) {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: homeDir, NO_COLOR: '1' };
-  delete env.VENICE_API_KEY;
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
     input,
-    env,
+    env: childEnv({ HOME: homeDir, NO_COLOR: '1' }),
   });
 }
 
@@ -143,14 +142,13 @@ test('VENICE_API_KEY still works when a corrupt config file is not needed', asyn
       process.execPath,
       [cliPath, 'embeddings', 'hello', '--format', 'json'],
       {
-        env: {
-          ...process.env,
+        env: childEnv({
           HOME: homeDir,
           NO_COLOR: '1',
           NODE_ENV: 'test',
           VENICE_API_BASE_URL: `http://127.0.0.1:${port}`,
           VENICE_API_KEY: 'sk-env-1234567890',
-        },
+        }),
       }
     );
     let stderr = '';

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from './test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 
@@ -37,14 +38,13 @@ test('attestation requests send a fresh 32-byte nonce when the WebCrypto global 
           process.execPath,
           ['--require', preload, cliPath, 'tee', 'attestation', 'test-model', '-f', 'json'],
           {
-            env: {
-              ...process.env,
+            env: childEnv({
               HOME: homeDir,
               NODE_ENV: 'test',
               NO_COLOR: '1',
               VENICE_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
               VENICE_API_KEY: 'test-key',
-            },
+            }),
             stdio: ['ignore', 'ignore', 'pipe'],
           }
         );

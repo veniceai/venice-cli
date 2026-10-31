@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { VideoStatusResult } from '../lib/api.js';
+import { childEnv } from '../lib/test-env.js';
 import {
   FALLBACK_VIDEO_MODELS,
   classifyVideoStatus,
@@ -46,14 +47,13 @@ function runCli(
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: {
-        ...process.env,
+      env: childEnv({
         HOME: homeDir,
         NODE_ENV: 'test',
         NO_COLOR: '1',
         VENICE_API_KEY: 'test-key',
         VENICE_API_BASE_URL: apiBaseUrl,
-      },
+      }),
     });
     let stdout = '';
     let stderr = '';

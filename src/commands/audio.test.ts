@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../lib/test-env.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 
@@ -41,14 +42,13 @@ async function runCli(
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, [cliPath, ...args], {
     cwd: homeDir,
-    env: {
-      ...process.env,
+    env: childEnv({
       HOME: homeDir,
       NODE_ENV: 'test',
       NO_COLOR: '1',
       VENICE_API_KEY: 'test-key',
       VENICE_API_BASE_URL: apiBaseUrl,
-    },
+    }),
   });
 
   let stdout = '';
