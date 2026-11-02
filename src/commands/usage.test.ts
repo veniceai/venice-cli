@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -12,17 +12,25 @@ const OSC52 = `\x1b]52;c;${Buffer.from('echo copied').toString('base64')}\x07`;
 const PAYLOAD = `${OSC52}\x1b[2K\u009d0;title\u009c\u009b2Jsafe\u202Etxt.exe\u202C`;
 const UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 
-function runUsage(home: string, args: string[], terminal: boolean) {
-  return spawnSync(process.execPath, [cliPath, 'usage', ...args], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: home,
-      NODE_ENV: 'test',
-      NO_COLOR: '1',
-      VENICE_TEST_TERMINAL_OUTPUT: terminal ? '1' : '',
-    },
-  });
+// `toFile` redirects stdout to a regular file, as `> out` does.
+function runUsage(home: string, args: string[], toFile = false) {
+  const outFile = join(home, 'usage-out.txt');
+  const fd = toFile ? openSync(outFile, 'w') : undefined;
+  try {
+    const result = spawnSync(process.execPath, [cliPath, 'usage', ...args], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        NODE_ENV: 'test',
+        NO_COLOR: '1',
+      },
+      stdio: ['ignore', fd ?? 'pipe', 'pipe'],
+    });
+    return fd === undefined ? result : { ...result, stdout: readFileSync(outFile, 'utf8') };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 test('usage prints stored command and model names through the terminal sanitiser', () => {
@@ -35,25 +43,25 @@ test('usage prints stored command and model names through the terminal sanitiser
       { timestamp, command: 'image', model: 'flux', prompt_tokens: `4${PAYLOAD}`, total_tokens: `9${PAYLOAD}` },
     ]));
 
-    const terminal = runUsage(home, [], true);
-    assert.equal(terminal.status, 0, terminal.stderr);
-    assert.doesNotMatch(terminal.stdout, UNSAFE, JSON.stringify(terminal.stdout));
-    assert.match(terminal.stdout, /Total Tokens: 3\n/);
-    assert.match(terminal.stdout, /Prompt: 1\n/);
-    assert.match(terminal.stdout, /chatsafetxt\.exe\s+1 calls, 3 tokens/);
-    assert.match(terminal.stdout, /modelsafetxt\.exe\s+1 calls, 3 tokens/);
-    assert.match(terminal.stdout, /image\s+1 calls, 0 tokens/);
+    const pretty = runUsage(home, []);
+    assert.equal(pretty.status, 0, pretty.stderr);
+    assert.doesNotMatch(pretty.stdout, UNSAFE, JSON.stringify(pretty.stdout));
+    assert.match(pretty.stdout, /Total Tokens: 3\n/);
+    assert.match(pretty.stdout, /Prompt: 1\n/);
+    assert.match(pretty.stdout, /chatsafetxt\.exe\s+1 calls, 3 tokens/);
+    assert.match(pretty.stdout, /modelsafetxt\.exe\s+1 calls, 3 tokens/);
+    assert.match(pretty.stdout, /image\s+1 calls, 0 tokens/);
 
-    const json = runUsage(home, ['-f', 'json'], true);
+    const json = runUsage(home, ['-f', 'json']);
     assert.equal(json.status, 0, json.stderr);
     assert.doesNotMatch(json.stdout, UNSAFE);
     const summary = JSON.parse(json.stdout);
     assert.equal(summary.total_tokens, 3);
     assert.deepEqual(summary.by_command[`chat${PAYLOAD}`], { calls: 1, tokens: 3 });
 
-    const piped = runUsage(home, [], false);
-    assert.equal(piped.status, 0, piped.stderr);
-    assert.ok(piped.stdout.includes(`chat${PAYLOAD}`), 'piped output is unchanged');
+    const redirected = runUsage(home, [], true);
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.ok(redirected.stdout.includes(`chat${PAYLOAD}`), 'output redirected to a file is unchanged');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -69,7 +77,7 @@ test('usage counts commands and models named after Object.prototype properties',
       { timestamp, command: 'toString', model: '__proto__', total_tokens: 4 },
     ]));
 
-    const json = runUsage(home, ['-f', 'json'], false);
+    const json = runUsage(home, ['-f', 'json']);
     assert.equal(json.status, 0, json.stderr);
     const summary = JSON.parse(json.stdout);
     assert.deepEqual(Object.entries(summary.by_command), [
@@ -81,7 +89,7 @@ test('usage counts commands and models named after Object.prototype properties',
       ['__proto__', { calls: 1, tokens: 4 }],
     ]);
 
-    const pretty = runUsage(home, [], false);
+    const pretty = runUsage(home, []);
     assert.equal(pretty.status, 0, pretty.stderr);
     assert.match(pretty.stdout, /__proto__\s+1 calls, 3 tokens/);
     assert.match(pretty.stdout, /constructor\s+1 calls, 3 tokens/);

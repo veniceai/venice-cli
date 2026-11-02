@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { closeSync, constants, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { devNull, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   TerminalTextSanitizer,
@@ -9,6 +13,7 @@ import {
   terminalFilter,
   terminalSafe,
   terminalSafeJson,
+  writeOutputText,
 } from './output.js';
 
 const OSC52 = `\x1b]52;c;${Buffer.from('echo copied').toString('base64')}\x07`;
@@ -24,6 +29,49 @@ const MIXED =
   '\x1bPq#0;2;0;0;0\x1b\\i\x1bX sos \x1b\\j\x1b^ pm \x1b\\k\x1b_ apc \x1b\\l' +
   '\x1b(0m\x1b#8n\x1b7o\x1bcp\u0090dcs\u009cq\u0085r\x07\x08\x00s\x7f\r\nt\tu\u2028v\u2029w';
 const MIXED_CLEAN = 'abshown textcdefgsafetxt.exehijklmnopqrs\nt\tuvw';
+
+function withTempDir<T>(run: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-output-'));
+  try {
+    return run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Streams backed by a regular file and by the null device, which is not one.
+function withStreams<T>(run: (streams: { file: { fd: number }; device: { fd: number } }) => T): T {
+  return withTempDir((dir) => {
+    const file = openSync(join(dir, 'out.txt'), 'w');
+    const device = openSync(devNull, 'w');
+    try {
+      return run({ file: { fd: file }, device: { fd: device } });
+    } finally {
+      closeSync(file);
+      closeSync(device);
+    }
+  });
+}
+
+function withStderrFd<T>(fd: number, run: () => T): T {
+  const descriptors = {
+    isTTY: Object.getOwnPropertyDescriptor(process.stderr, 'isTTY'),
+    fd: Object.getOwnPropertyDescriptor(process.stderr, 'fd'),
+  };
+  Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true });
+  Object.defineProperty(process.stderr, 'fd', { value: fd, configurable: true });
+  try {
+    return run();
+  } finally {
+    for (const [name, descriptor] of Object.entries(descriptors)) {
+      if (descriptor) {
+        Object.defineProperty(process.stderr, name, descriptor);
+      } else {
+        delete (process.stderr as unknown as Record<string, unknown>)[name];
+      }
+    }
+  }
+}
 
 test('sanitizeTerminalText removes OSC, CSI, DCS, SOS, PM, APC and two-byte escapes whole', () => {
   assert.equal(sanitizeTerminalText(`before ${OSC52} after`), 'before  after');
@@ -85,23 +133,51 @@ test('TerminalTextSanitizer removes sequences split across chunks', () => {
   assert.equal(output, MIXED_CLEAN);
 });
 
-test('terminalSafe sanitises only for terminal streams', () => {
+test('terminalSafe leaves text unchanged only for a regular file', () => withStreams(({ file, device }) => {
   assert.equal(terminalSafe(`x${OSC52}${C1_CSI}${BIDI}`, { isTTY: true }), 'xsafetxt.exe');
-  assert.equal(terminalSafe(`x${OSC52}`, { isTTY: false }), `x${OSC52}`);
-  assert.equal(terminalSafe(`x${OSC52}`, {}), `x${OSC52}`);
+  assert.equal(terminalSafe(`x${OSC52}${C1_CSI}${BIDI}`, device), 'xsafetxt.exe');
+  assert.equal(terminalSafe(`x${OSC52}`, { isTTY: false }), 'x');
+  assert.equal(terminalSafe(`x${OSC52}`, {}), 'x');
+  assert.equal(terminalSafe(`x${OSC52}`, { fd: -1 }), 'x');
+  assert.equal(terminalSafe(`x${OSC52}`, file), `x${OSC52}`);
   assert.equal(terminalSafe(42, { isTTY: true }), '42');
-});
+}));
 
-test('terminalFilter keeps state per stream of text and passes piped text through', () => {
-  const tty = terminalFilter({ isTTY: true });
-  assert.equal(tty('one \x1b]52;c;'), 'one ');
-  assert.equal(tty('Zm9v\x07two \u009b'), 'two ');
-  assert.equal(tty('2Jthree'), 'three');
+test('terminalFilter keeps state per stream of text and passes text for a regular file through', () =>
+  withStreams(({ file, device }) => {
+    for (const stream of [{ isTTY: true }, device]) {
+      const filter = terminalFilter(stream);
+      assert.equal(filter('one \x1b]52;c;'), 'one ');
+      assert.equal(filter('Zm9v\x07two \u009b'), 'two ');
+      assert.equal(filter('2Jthree'), 'three');
+    }
 
-  const piped = terminalFilter({ isTTY: false });
-  assert.equal(piped('one \x1b]52;c;'), 'one \x1b]52;c;');
-  assert.equal(piped('Zm9v\x07two'), 'Zm9v\x07two');
-});
+    const unchanged = terminalFilter(file);
+    assert.equal(unchanged('one \x1b]52;c;'), 'one \x1b]52;c;');
+    assert.equal(unchanged('Zm9v\x07two'), 'Zm9v\x07two');
+  }));
+
+test('writeOutputText keeps text exactly in a regular file', () => withTempDir((dir) => {
+  const path = join(dir, 'out.txt');
+  writeOutputText(path, MIXED);
+  assert.equal(readFileSync(path, 'utf8'), MIXED);
+}));
+
+test(
+  'writeOutputText sanitises text written to a pipe',
+  { skip: process.platform === 'win32' },
+  () => withTempDir((dir) => {
+    const fifo = join(dir, 'out.fifo');
+    execFileSync('mkfifo', [fifo]);
+    const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      writeOutputText(fifo, MIXED);
+      assert.equal(readFileSync(reader, 'utf8'), MIXED_CLEAN);
+    } finally {
+      closeSync(reader);
+    }
+  })
+);
 
 test('formatJson escapes C1, bidi and separator characters without changing parsed values', () => {
   const value = {
@@ -122,43 +198,40 @@ test('formatJson escapes C1, bidi and separator characters without changing pars
   assert.equal(formatJson({ a: '\u009b' }, 0), '{"a":"\\u009b"}');
 });
 
-test('terminalSafeJson escapes the same characters in JSON text, only for terminal streams', () => {
-  const json = `{"result":"x${C1_OSC}${BIDI}\u2028\x7f","big":123456789012345678901234567890}`;
-  const escaped = terminalSafeJson(json, { isTTY: true });
-
-  assert.doesNotMatch(escaped, /[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/);
-  assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
-  assert.match(escaped, /"big":123456789012345678901234567890}$/);
-  assert.equal(terminalSafeJson(json, { isTTY: false }), json);
-});
-
-test('terminalSafeJson drops raw carriage returns, which valid JSON allows only between tokens', () => {
-  const json = '{"result":"0xREAL","x":\r{"result":"0xFAKE"}  }';
-  const escaped = terminalSafeJson(json, { isTTY: true });
-
-  assert.equal(escaped, '{"result":"0xREAL","x":{"result":"0xFAKE"}  }');
-  assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
-  assert.equal(terminalSafeJson(json, { isTTY: false }), json);
-});
-
-test('formatWarning sanitises the message for the stream it is printed on', () => {
-  assert.equal(formatWarning(`saved ${OSC52}${BIDI}`, { isTTY: true }), '⚠ saved safetxt.exe');
-  assert.equal(formatWarning(`saved ${OSC52}`, { isTTY: false }), `⚠ saved ${OSC52}`);
-});
-
-test('formatError sanitises the message when stderr is a terminal', () => {
-  const descriptor = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
-  try {
-    Object.defineProperty(process.stderr, 'isTTY', { value: true, configurable: true });
-    assert.equal(formatError(`bad request ${OSC52}${C1_OSC}\nnext`), 'Error: bad request \nnext');
-
-    Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true });
-    assert.equal(formatError(new Error(`bad ${OSC52}`)), `Error: bad ${OSC52}`);
-  } finally {
-    if (descriptor) {
-      Object.defineProperty(process.stderr, 'isTTY', descriptor);
-    } else {
-      delete (process.stderr as { isTTY?: boolean }).isTTY;
+test('terminalSafeJson escapes the same characters in JSON text, except for a regular file', () =>
+  withStreams(({ file, device }) => {
+    const json = `{"result":"x${C1_OSC}${BIDI}\u2028\x7f","big":123456789012345678901234567890}`;
+    for (const stream of [{ isTTY: true }, device]) {
+      const escaped = terminalSafeJson(json, stream);
+      assert.doesNotMatch(escaped, /[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/);
+      assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
+      assert.match(escaped, /"big":123456789012345678901234567890}$/);
     }
-  }
-});
+    assert.equal(terminalSafeJson(json, file), json);
+  }));
+
+test('terminalSafeJson drops raw carriage returns, which valid JSON allows only between tokens', () =>
+  withStreams(({ file, device }) => {
+    const json = '{"result":"0xREAL","x":\r{"result":"0xFAKE"}  }';
+    for (const stream of [{ isTTY: true }, device]) {
+      const escaped = terminalSafeJson(json, stream);
+      assert.equal(escaped, '{"result":"0xREAL","x":{"result":"0xFAKE"}  }');
+      assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
+    }
+    assert.equal(terminalSafeJson(json, file), json);
+  }));
+
+test('formatWarning sanitises the message for the stream it is printed on', () => withStreams(({ file, device }) => {
+  assert.equal(formatWarning(`saved ${OSC52}${BIDI}`, { isTTY: true }), '⚠ saved safetxt.exe');
+  assert.equal(formatWarning(`saved ${OSC52}${BIDI}`, device), '⚠ saved safetxt.exe');
+  assert.equal(formatWarning(`saved ${OSC52}`, file), `⚠ saved ${OSC52}`);
+}));
+
+test('formatError sanitises the message unless stderr is a regular file', () => withStreams(({ file, device }) => {
+  withStderrFd(device.fd, () => {
+    assert.equal(formatError(`bad request ${OSC52}${C1_OSC}\nnext`), 'Error: bad request \nnext');
+  });
+  withStderrFd(file.fd, () => {
+    assert.equal(formatError(new Error(`bad ${OSC52}`)), `Error: bad ${OSC52}`);
+  });
+}));

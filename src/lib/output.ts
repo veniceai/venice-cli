@@ -2,9 +2,11 @@
  * Output formatting and display utilities
  */
 
+import { fstatSync } from 'fs';
 import chalk from 'chalk';
 import ora, { Ora } from 'ora';
 import { isColorEnabled, shouldShowUsage } from './config.js';
+import { openOutputFile, writeAndCommit } from './safe-write.js';
 import type { OutputFormat } from '../types/index.js';
 
 // Conditional chalk - returns identity functions when color is disabled
@@ -35,6 +37,7 @@ export function getChalk() {
 interface TerminalStream {
   isTTY?: boolean;
   columns?: number;
+  fd?: number;
 }
 
 // Spinner wrapper
@@ -256,32 +259,42 @@ export function sanitizeTerminalText(value: string): string {
   return new TerminalTextSanitizer().write(value);
 }
 
-function isTerminal(stream: TerminalStream): boolean {
-  if (stream.isTTY) return true;
-  // CLI tests always pipe stdout and stderr; this lets them reach the terminal path.
-  return (
-    process.env.NODE_ENV === 'test' &&
-    process.env.VENICE_TEST_TERMINAL_OUTPUT === '1' &&
-    (stream === process.stdout || stream === process.stderr)
-  );
+// A pipe can still end on a terminal (`| tee`, `| less`), and so can a device;
+// only a regular file is certain not to.
+function isRegularFile(stream: TerminalStream): boolean {
+  if (stream.isTTY || stream.fd === undefined) return false;
+  try {
+    return fstatSync(stream.fd).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Server, model, third-party or history text to print on `stream`: sanitised
- * when the stream is a terminal, unchanged when it is piped or redirected.
+ * Server, model, third-party or history text to print on `stream`: unchanged
+ * when the stream is a regular file, sanitised otherwise.
  */
 export function terminalSafe(value: unknown, stream: TerminalStream = process.stdout): string {
   const text = String(value);
-  return isTerminal(stream) ? sanitizeTerminalText(text) : text;
+  return isRegularFile(stream) ? text : sanitizeTerminalText(text);
 }
 
 /**
  * terminalSafe for text printed in chunks; one filter per stream of text.
  */
 export function terminalFilter(stream: TerminalStream = process.stdout): (chunk: string) => string {
-  if (!isTerminal(stream)) return (chunk) => chunk;
+  if (isRegularFile(stream)) return (chunk) => chunk;
   const sanitizer = new TerminalTextSanitizer();
   return (chunk) => sanitizer.write(chunk);
+}
+
+/**
+ * Writes server, model or third-party text to a command's output path:
+ * unchanged in a regular file, sanitised for a pipe, terminal or device.
+ */
+export function writeOutputText(filePath: string, text: string): void {
+  const file = openOutputFile(filePath);
+  writeAndCommit(file, file.regularFile ? text : sanitizeTerminalText(text));
 }
 
 // JSON.stringify escapes C0 controls but leaves these as raw characters.
@@ -299,16 +312,16 @@ export function formatJson(value: unknown, indent = 2): string {
 }
 
 /**
- * JSON text printed as received: on a terminal, the characters formatJson
- * escapes are written as \uXXXX and raw carriage returns are dropped; piped
- * output is unchanged. `json` must be valid JSON, so the escaped characters
+ * JSON text printed as received: unchanged in a regular file; otherwise the
+ * characters formatJson escapes are written as \uXXXX and raw carriage
+ * returns are dropped. `json` must be valid JSON, so the escaped characters
  * can only occur inside strings and a raw carriage return only between
  * tokens, where dropping it leaves the parsed value unchanged.
  */
 export function terminalSafeJson(json: string, stream: TerminalStream = process.stdout): string {
-  return isTerminal(stream)
-    ? json.replace(JSON_RAW_CONTROLS, unicodeEscape).replace(/\r/g, '')
-    : json;
+  return isRegularFile(stream)
+    ? json
+    : json.replace(JSON_RAW_CONTROLS, unicodeEscape).replace(/\r/g, '');
 }
 
 // Controls, format and private-use characters, unassigned code points,

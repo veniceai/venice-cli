@@ -32,6 +32,8 @@ export interface WriteOptions {
 }
 
 export interface OutputFile {
+  /** False when the data goes to a pipe, terminal or device rather than a file. */
+  regularFile: boolean;
   write: (data: string | Uint8Array) => void;
   createWriteStream: () => Writable;
   /** Finishes the write, leaving the data at the destination. */
@@ -101,6 +103,7 @@ export function createTemporaryFile(
 
   return {
     path: temporaryPath,
+    regularFile: true,
     write(data) {
       fs.writeFileSync(requireDescriptor(), data);
     },
@@ -142,6 +145,7 @@ export function openOutputFile(destination: string, options: WriteOptions = {}):
 
   const temporaryFile = createTemporaryFile(destination, options);
   return {
+    regularFile: true,
     write: temporaryFile.write,
     createWriteStream: temporaryFile.createWriteStream,
     discard: temporaryFile.discard,
@@ -160,6 +164,8 @@ export function openOutputFile(destination: string, options: WriteOptions = {}):
 
 function openInPlace(destination: string, flags: string | number, mode = 0o666): OutputFile {
   let descriptor: number | undefined = fs.openSync(destination, flags, mode);
+  // /dev/stdout is a regular file when stdout is redirected to one.
+  const regularFile = fs.fstatSync(descriptor).isFile();
 
   function requireDescriptor(): number {
     if (descriptor === undefined) {
@@ -169,6 +175,7 @@ function openInPlace(destination: string, flags: string | number, mode = 0o666):
   }
 
   return {
+    regularFile,
     write(data) {
       fs.writeFileSync(requireDescriptor(), data);
     },
@@ -257,7 +264,8 @@ export function writeOutputFile(
   writeAndCommit(openOutputFile(filePath, options), data);
 }
 
-function writeAndCommit(file: OutputFile, data: string | Uint8Array): void {
+/** Writes `data` to `file` and commits it, discarding the file if either fails. */
+export function writeAndCommit(file: OutputFile, data: string | Uint8Array): void {
   try {
     file.write(data);
     file.commit();

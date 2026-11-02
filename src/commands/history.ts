@@ -199,7 +199,7 @@ export function registerHistoryCommand(program: Command): void {
       try {
         const conversations = loadHistory();
 
-        writeOutputFile(file, JSON.stringify(conversations, null, 2), { mode: 0o600 });
+        writeOutputFile(file, formatJson(conversations), { mode: 0o600 });
         console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));

@@ -5,7 +5,6 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import { parseDocument, scrapeWebPage } from '../lib/api.js';
-import { writeOutputFile } from '../lib/safe-write.js';
 import {
   detectOutputFormat,
   formatError,
@@ -13,6 +12,7 @@ import {
   formatSuccess,
   getChalk,
   terminalSafe,
+  writeOutputText,
 } from '../lib/output.js';
 
 export function registerAugmentCommands(program: Command): void {
@@ -32,7 +32,7 @@ export function registerAugmentCommands(program: Command): void {
           : result.text;
 
         if (options.output) {
-          writeOutputFile(options.output, output);
+          writeOutputText(options.output, output);
           console.log(formatSuccess(`Saved parsed document to ${options.output}`));
           return;
         }
@@ -63,7 +63,7 @@ export function registerAugmentCommands(program: Command): void {
           : result.content;
 
         if (options.output) {
-          writeOutputFile(options.output, output);
+          writeOutputText(options.output, output);
           console.log(formatSuccess(`Saved scraped page to ${options.output}`));
           return;
         }

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { closeSync, mkdtempSync, openSync, rmSync } from 'node:fs';
+import { devNull, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { streamChat } from './chat.js';
 import { getToolDefinitions } from '../lib/tools.js';
@@ -10,12 +13,22 @@ type CompletionStream = NonNullable<NonNullable<Parameters<typeof streamChat>[5]
 
 const UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 
-async function captureStdout(isTTY: boolean, run: () => Promise<void>): Promise<string> {
+// `fd` stands in for the descriptor behind stdout, such as a regular file.
+async function captureStdout(
+  stdout: { isTTY: boolean; fd?: number },
+  run: () => Promise<void>
+): Promise<string> {
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
   const originalLog = console.log;
-  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-  Object.defineProperty(process.stdout, 'isTTY', { value: isTTY, configurable: true });
+  const descriptors = {
+    isTTY: Object.getOwnPropertyDescriptor(process.stdout, 'isTTY'),
+    fd: Object.getOwnPropertyDescriptor(process.stdout, 'fd'),
+  };
+  Object.defineProperty(process.stdout, 'isTTY', { value: stdout.isTTY, configurable: true });
+  if (stdout.fd !== undefined) {
+    Object.defineProperty(process.stdout, 'fd', { value: stdout.fd, configurable: true });
+  }
   // The test runner reports through stdout with binary writes; let those through.
   process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
     if (typeof chunk !== 'string') {
@@ -32,13 +45,24 @@ async function captureStdout(isTTY: boolean, run: () => Promise<void>): Promise<
   } finally {
     process.stdout.write = originalWrite;
     console.log = originalLog;
-    if (descriptor) {
-      Object.defineProperty(process.stdout, 'isTTY', descriptor);
-    } else {
-      delete (process.stdout as { isTTY?: boolean }).isTTY;
+    for (const [name, descriptor] of Object.entries(descriptors)) {
+      if (descriptor) {
+        Object.defineProperty(process.stdout, name, descriptor);
+      } else {
+        delete (process.stdout as unknown as Record<string, unknown>)[name];
+      }
     }
   }
   return writes.join('');
+}
+
+async function withDescriptor<T>(path: string, run: (fd: number) => Promise<T>): Promise<T> {
+  const fd = openSync(path, 'w');
+  try {
+    return await run(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 const splitSequences: CompletionStream = async function* () {
@@ -53,7 +77,7 @@ const splitSequences: CompletionStream = async function* () {
 
 test('streamed chat on a terminal strips control sequences split across chunks', async () => {
   const messages: Message[] = [{ role: 'user', content: 'hi' }];
-  const output = await captureStdout(true, () =>
+  const output = await captureStdout({ isTTY: true }, () =>
     streamChat(messages, 'test-model', [], false, 'pretty', { quiet: true, completionStream: splitSequences })
   );
 
@@ -64,17 +88,35 @@ test('streamed chat on a terminal strips control sequences split across chunks',
   assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'Hello \u009b2Jworld \x1b[31mred\u202e' });
 });
 
-test('streamed chat writes model text unchanged when stdout is not a terminal', async () => {
-  const output = await captureStdout(false, () =>
+test('streamed chat strips control sequences when stdout is not a regular file', async () => {
+  const output = await withDescriptor(devNull, (fd) => captureStdout({ isTTY: false, fd }, () =>
     streamChat([{ role: 'user', content: 'hi' }], 'test-model', [], false, 'raw', {
       quiet: true,
       completionStream: splitSequences,
     })
-  );
+  ));
 
-  assert.ok(output.startsWith('thinking \x1b]52;c;Zm9v\x07 more'), JSON.stringify(output));
-  assert.ok(output.includes('plan \x1b]0;title\x07done'), JSON.stringify(output));
-  assert.ok(output.includes('Hello \u009b2Jworld \x1b[31mred\u202e'), JSON.stringify(output));
+  assert.doesNotMatch(output, UNSAFE, JSON.stringify(output));
+  assert.ok(output.startsWith('thinking  more'), JSON.stringify(output));
+  assert.ok(output.includes('Hello world red'), JSON.stringify(output));
+});
+
+test('streamed chat writes model text unchanged when stdout is a regular file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-chat-stdout-'));
+  try {
+    const output = await withDescriptor(join(dir, 'stdout.txt'), (fd) => captureStdout({ isTTY: false, fd }, () =>
+      streamChat([{ role: 'user', content: 'hi' }], 'test-model', [], false, 'raw', {
+        quiet: true,
+        completionStream: splitSequences,
+      })
+    ));
+
+    assert.ok(output.startsWith('thinking \x1b]52;c;Zm9v\x07 more'), JSON.stringify(output));
+    assert.ok(output.includes('plan \x1b]0;title\x07done'), JSON.stringify(output));
+    assert.ok(output.includes('Hello \u009b2Jworld \x1b[31mred\u202e'), JSON.stringify(output));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('streamed chat shows only enabled tools and sanitises their results on a terminal', async () => {
@@ -108,7 +150,7 @@ test('streamed chat shows only enabled tools and sanitises their results on a te
   };
   const messages: Message[] = [{ role: 'user', content: 'hi' }];
 
-  const output = await captureStdout(true, () =>
+  const output = await captureStdout({ isTTY: true }, () =>
     streamChat(messages, 'test-model', getToolDefinitions(['base64']), false, 'pretty', {
       quiet: true,
       completionStream,
