@@ -144,7 +144,7 @@ export function registerMusicCommands(program: Command): void {
     .option('-w, --wait', 'Wait for completion (poll every 5s)')
     .option(
       '-t, --timeout <seconds>',
-      'Maximum time to wait in seconds',
+      'Maximum time to wait in seconds (at most 86400)',
       String(DEFAULT_JOB_WAIT_TIMEOUT_SECONDS)
     )
     .option('-f, --format <format>', 'Output format (pretty|json)')

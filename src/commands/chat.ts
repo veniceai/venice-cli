@@ -247,7 +247,10 @@ export function registerChatCommand(program: Command): void {
     .option('--web-search', 'Enable web search for current information')
     .option('--x-search', 'Enable xAI native search (web + X/Twitter) on supported Grok models')
     .option('--json', 'Request JSON object output without a schema (disables streaming)')
-    .option('--json-schema <file>', 'Request structured JSON matching a schema file (disables streaming)')
+    .option(
+      '--json-schema <file>',
+      'Request structured JSON matching a schema file (disables streaming; max 1 MiB, 1000 objects and arrays, depth 64, 1000 values per enum)'
+    )
     .option('--reasoning-effort <level>', `Reasoning effort (${REASONING_EFFORTS.join('|')})`)
     .option('--prompt-cache-key <key>', 'Route requests for better prompt-cache affinity')
     .option('--prompt-cache-retention <mode>', `Prompt cache retention (${PROMPT_CACHE_RETENTIONS.join('|')})`)

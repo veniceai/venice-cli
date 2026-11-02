@@ -181,7 +181,8 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `-q, --quiet` | Hide E2EE/TEE status messages (show only response; a `--no-e2ee` downgrade is still announced) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
-Schema files are limited to 1 MiB and are compiled locally with strict JSON
+Schema files are limited to 1 MiB, 1000 objects and arrays, 64 levels of
+nesting, and 1000 values per enum. They are compiled locally with strict JSON
 Schema validation before a completion request is sent. Draft 7, 2019-09, and
 2020-12 schemas are supported, including local `$ref` references and standard
 formats. Invalid schemas and unsupported keywords are rejected.
