@@ -298,6 +298,19 @@ export function formatJson(value: unknown, indent = 2): string {
   return String(JSON.stringify(value, null, indent)).replace(JSON_RAW_CONTROLS, unicodeEscape);
 }
 
+/**
+ * JSON text printed as received: on a terminal, the characters formatJson
+ * escapes are written as \uXXXX and raw carriage returns are dropped; piped
+ * output is unchanged. `json` must be valid JSON, so the escaped characters
+ * can only occur inside strings and a raw carriage return only between
+ * tokens, where dropping it leaves the parsed value unchanged.
+ */
+export function terminalSafeJson(json: string, stream: TerminalStream = process.stdout): string {
+  return isTerminal(stream)
+    ? json.replace(JSON_RAW_CONTROLS, unicodeEscape).replace(/\r/g, '')
+    : json;
+}
+
 // Controls, format and private-use characters, unassigned code points,
 // separators other than the space, variation selectors, the combining
 // grapheme joiner and the blank Hangul fillers.
@@ -326,9 +339,9 @@ export function formatSuccess(message: string): string {
 }
 
 // Warning message
-export function formatWarning(message: string): string {
+export function formatWarning(message: string, stream: TerminalStream = process.stderr): string {
   const c = getChalk();
-  return `${c.yellow('⚠')} ${message}`;
+  return `${c.yellow('⚠')} ${terminalSafe(message, stream)}`;
 }
 
 // Info message

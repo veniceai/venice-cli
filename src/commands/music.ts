@@ -22,7 +22,14 @@ import {
 } from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeResponseToFile } from '../lib/media.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
-import { detectOutputFormat, formatError, formatSuccess, getChalk } from '../lib/output.js';
+import {
+  detectOutputFormat,
+  formatError,
+  formatJson,
+  formatSuccess,
+  getChalk,
+  terminalSafe,
+} from '../lib/output.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
 
@@ -43,7 +50,7 @@ function printProcessingStatus(status: AudioProcessingStatus): void {
   const c = getChalk();
   const color = colorForJobStatus(status.status, c);
 
-  console.log(`${c.dim('Status:')} ${color(status.status)}`);
+  console.log(`${c.dim('Status:')} ${color(terminalSafe(status.status))}`);
   if (typeof status.average_execution_time === 'number') {
     const remainingMs = Math.max(
       0,
@@ -52,7 +59,7 @@ function printProcessingStatus(status: AudioProcessingStatus): void {
     console.log(`${c.dim('Estimated remaining:')} ~${Math.ceil(remainingMs / 1000)}s`);
   }
   if (status.error) {
-    console.error(`${c.red('Error:')} ${status.error}`);
+    console.error(`${c.red('Error:')} ${terminalSafe(status.error, process.stderr)}`);
   }
 }
 
@@ -92,13 +99,13 @@ export function registerMusicCommands(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
           return;
         }
 
         console.log(formatSuccess('Audio generation queued!'));
-        console.log(`\n${c.dim('Queue ID:')} ${c.cyan(result.queue_id)}`);
-        console.log(`${c.dim('Model:')} ${result.model}`);
+        console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(result.queue_id))}`);
+        console.log(`${c.dim('Model:')} ${terminalSafe(result.model)}`);
         console.log(
           `\n${c.dim('Check status with:')} ${shellCommand`venice music status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`
         );
@@ -126,7 +133,7 @@ export function registerMusicCommands(program: Command): void {
         });
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else {
           console.log(`${c.dim('Estimated cost:')} ${c.green(`$${result.quote.toFixed(2)} USD`)}`);
           console.log(`${c.dim('Model:')} ${options.model}`);
@@ -167,7 +174,7 @@ export function registerMusicCommands(program: Command): void {
 
       const printStatus = (status: MusicJobStatus): void => {
         if (format === 'json') {
-          console.log(JSON.stringify(status, null, 2));
+          console.log(formatJson(status));
           return;
         }
 
@@ -231,7 +238,7 @@ export function registerMusicCommands(program: Command): void {
           const exitCode = notReady ? 2 : 1;
 
           if (format === 'json') {
-            console.log(JSON.stringify(result.status, null, 2));
+            console.log(formatJson(result.status));
           } else {
             printProcessingStatus(result.status);
             if (notReady) {
@@ -267,13 +274,13 @@ export function registerMusicCommands(program: Command): void {
         }
 
         if (format === 'json') {
-          console.log(JSON.stringify({
+          console.log(formatJson({
             output: outputPath,
             content_type: result.contentType,
             size_bytes: download.bytesWritten,
             media_cleaned_up: cleanupSuccess,
             cleanup_error: cleanupError,
-          }, null, 2));
+          }));
           return;
         }
 
@@ -281,7 +288,7 @@ export function registerMusicCommands(program: Command): void {
         console.log(`${c.dim('Model:')} ${options.model}`);
         if (cleanupSuccess === false) {
           console.log(c.yellow(
-            `Remote cleanup did not complete${cleanupError ? `: ${cleanupError}` : '.'}`
+            `Remote cleanup did not complete${cleanupError ? `: ${terminalSafe(cleanupError)}` : '.'}`
           ));
           console.log(c.dim(
             `Retry with: ${shellCommand`venice music complete ${queueId} -m ${options.model}`}`
@@ -306,7 +313,7 @@ export function registerMusicCommands(program: Command): void {
         const exitCode = result.success ? 0 : 1;
 
         if (format === 'json') {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(formatJson(result));
         } else if (result.success) {
           console.log(formatSuccess('Generated audio removed from remote storage.'));
         } else {
@@ -333,7 +340,7 @@ export function registerMusicCommands(program: Command): void {
           .sort((a: Model, b: Model) => a.id.localeCompare(b.id));
 
         if (format === 'json') {
-          console.log(JSON.stringify(models, null, 2));
+          console.log(formatJson(models));
           return;
         }
         if (models.length === 0) {
@@ -343,9 +350,9 @@ export function registerMusicCommands(program: Command): void {
 
         console.log(c.bold(`Available Music & Sound Effects Models (${models.length})\n`));
         for (const model of models) {
-          console.log(`  ${c.cyan(model.id)}`);
+          console.log(`  ${c.cyan(terminalSafe(model.id))}`);
           if (model.model_spec?.description) {
-            console.log(`    ${c.dim(model.model_spec.description)}`);
+            console.log(`    ${c.dim(terminalSafe(model.model_spec.description))}`);
           }
         }
       } catch (error) {
