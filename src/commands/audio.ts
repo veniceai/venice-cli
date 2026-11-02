@@ -21,6 +21,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 
 export function registerAudioCommands(program: Command): void {
@@ -98,6 +99,7 @@ export function registerAudioCommands(program: Command): void {
 
       try {
         const result = await cloneVoice(resolvedPath, { model: options.model });
+        assertClonedVoice(result);
         if (format === 'json') {
           console.log(formatJson(result));
           return;
@@ -138,6 +140,7 @@ export function registerAudioCommands(program: Command): void {
           language: options.language,
           timestamps: options.timestamps,
         });
+        assertTranscription(result);
 
         if (format === 'json') {
           console.log(formatJson(result));
@@ -176,6 +179,7 @@ export function registerAudioCommands(program: Command): void {
 
       try {
         let models = await listTtsModels();
+        assertTtsModels(models);
         if (options.model) {
           models = models.filter((model) => model.id === options.model);
         }

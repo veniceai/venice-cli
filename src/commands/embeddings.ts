@@ -12,6 +12,7 @@ import {
   getChalk,
   detectOutputFormat,
 } from '../lib/output.js';
+import { assertEmbeddings } from '../lib/response-checks.js';
 
 export function registerEmbeddingsCommand(program: Command): void {
   program
@@ -51,6 +52,7 @@ export function registerEmbeddingsCommand(program: Command): void {
         const result = await generateEmbeddings(input, {
           model: options.model,
         });
+        assertEmbeddings(result);
 
         if (options.output) {
           writeOutputFile(options.output, JSON.stringify(result, null, 2));

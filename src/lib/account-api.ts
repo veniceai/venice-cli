@@ -63,8 +63,8 @@ export interface ApiKeyRateLimits {
     isCharged: boolean;
   };
   balances: {
-    USD: number;
-    DIEM: number;
+    USD?: number | null;
+    DIEM?: number | null;
   };
   keyExpiration: string | null;
   nextEpochBegins: string;
