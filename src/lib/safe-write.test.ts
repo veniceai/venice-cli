@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -80,6 +84,50 @@ test('writeOutputFile creates parent directories and keeps umask permissions', (
 
     assert.equal(readFileSync(file, 'utf8'), '[]');
     assert.equal(mode(file), 0o644);
+  }));
+
+test(
+  'writeOutputFile writes into a pipe in place and leaves its permissions alone',
+  { skip: process.platform === 'win32' },
+  () =>
+    withTempDir((dir) => {
+      const fifo = join(dir, 'export.json');
+      execFileSync('mkfifo', [fifo]);
+      chmodSync(fifo, 0o640);
+      const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        writeOutputFile(fifo, '[]', { mode: 0o600 });
+        assert.equal(readFileSync(reader, 'utf8'), '[]');
+      } finally {
+        closeSync(reader);
+      }
+
+      assert.equal(lstatSync(fifo).isFIFO(), true);
+      assert.equal(mode(fifo), 0o640);
+      assert.deepEqual(readdirSync(dir), ['export.json']);
+    })
+);
+
+test(
+  'writeOutputFile writes to a character device in place',
+  // As root, a regression would replace the real /dev/null with a file.
+  { skip: process.platform === 'win32' || process.getuid?.() === 0 },
+  () => {
+    writeOutputFile('/dev/null', 'discarded');
+
+    assert.equal(lstatSync('/dev/null').isCharacterDevice(), true);
+  }
+);
+
+test('writeOutputFile refuses a directory', () =>
+  withTempDir((dir) => {
+    const destination = join(dir, 'images');
+    mkdirSync(destination);
+
+    assert.throws(() => writeOutputFile(destination, 'data'), /images: it is a directory\.$/);
+
+    assert.deepEqual(readdirSync(dir), ['images']);
+    assert.deepEqual(readdirSync(destination), []);
   }));
 
 test('writeFileAtomic keeps the destination and removes its temporary file when the rename fails', () =>

@@ -5,8 +5,8 @@ import { pipeline } from 'stream/promises';
 import type { ReadableStreamReadResult } from 'stream/web';
 import { fetchDownload } from './download-guard.js';
 import {
-  createTemporaryFile,
-  type TemporaryFile,
+  openOutputFile,
+  type OutputFile,
   writeNewFile,
   writeOutputFile,
 } from './safe-write.js';
@@ -356,8 +356,7 @@ export async function writeResponseToFile(
     throw new Error('Download response has no body.');
   }
 
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  const temporaryFile = createTemporaryFile(outputPath);
+  const outputFile = openOutputFile(outputPath);
 
   try {
     let bytesWritten = 0;
@@ -380,16 +379,16 @@ export async function writeResponseToFile(
     await pipeline(
       Readable.fromWeb(response.body as unknown as globalThis.ReadableStream<Uint8Array>),
       limiter,
-      temporaryFile.createWriteStream()
+      outputFile.createWriteStream()
     );
 
     if (bytesWritten === 0) {
       throw new Error('Download response was empty.');
     }
-    temporaryFile.commit();
+    outputFile.commit();
     return { bytesWritten, contentType };
   } catch (error) {
-    temporaryFile.discard();
+    outputFile.discard();
     throw error;
   }
 }
@@ -405,7 +404,7 @@ export async function streamResponseToFile(
     inactivityTimeoutMs?: number;
   }
 ): Promise<{ bytesWritten: number; contentType: string }> {
-  let temporaryFile: TemporaryFile | undefined;
+  let outputFile: OutputFile | undefined;
   let bytesWritten = 0;
   const inactivityTimeoutMs =
     options.inactivityTimeoutMs ?? DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS;
@@ -419,8 +418,7 @@ export async function streamResponseToFile(
       );
     }
 
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    temporaryFile = createTemporaryFile(outputPath);
+    outputFile = openOutputFile(outputPath);
 
     const source = Readable.from((async function* () {
       for (const chunk of initialChunks) {
@@ -451,17 +449,17 @@ export async function streamResponseToFile(
       },
     });
 
-    await pipeline(source, limiter, temporaryFile.createWriteStream());
+    await pipeline(source, limiter, outputFile.createWriteStream());
     if (bytesWritten === 0) {
       throw new Error(`${options.label} response was empty.`);
     }
-    temporaryFile.commit();
+    outputFile.commit();
     return {
       bytesWritten,
       contentType: response.headers.get('content-type') || 'video/mp4',
     };
   } catch (error) {
-    temporaryFile?.discard();
+    outputFile?.discard();
     await reader.cancel().catch(() => undefined);
     throw error;
   } finally {

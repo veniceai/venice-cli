@@ -72,8 +72,36 @@ function runCli(
   homeDir: string,
   workDir: string
 ): Promise<CliResult> {
+  return run(process.execPath, [cliPath, ...args], baseUrl, homeDir, workDir);
+}
+
+// Node's 'pipe' stdio is a socket, and opening /dev/stdout on a socket fails
+// with ENXIO. Bash joins `|` and `>(…)` with real pipes. `script` runs the CLI as "$@".
+function runCliInBash(
+  script: string,
+  args: string[],
+  baseUrl: string,
+  homeDir: string,
+  workDir: string
+): Promise<CliResult> {
+  return run(
+    'bash',
+    ['-o', 'pipefail', '-c', script, 'bash', process.execPath, cliPath, ...args],
+    baseUrl,
+    homeDir,
+    workDir
+  );
+}
+
+function run(
+  command: string,
+  commandArgs: string[],
+  baseUrl: string,
+  homeDir: string,
+  workDir: string
+): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
+    const child = spawn(command, commandArgs, {
       cwd: workDir,
       env: {
         ...process.env,
@@ -155,3 +183,30 @@ test('embeddings and scrape --output replace a link at the output path instead o
     assert.equal(lstatSync(join(workDir, 'page.md')).isFile(), true);
     assert.equal(readFileSync(join(workDir, 'page.md'), 'utf8'), '# Scraped');
   }));
+
+test(
+  '--output writes to /dev/stdout and process substitutions instead of replacing them',
+  { skip: process.platform === 'win32' },
+  () =>
+    withApi(async (baseUrl, homeDir, workDir) => {
+      const embeddings = await runCliInBash(
+        '"$@" --output /dev/stdout | cat',
+        ['embeddings', 'hello'],
+        baseUrl,
+        homeDir,
+        workDir
+      );
+      const scrape = await runCliInBash(
+        '"$@" --output >(cat)',
+        ['scrape', 'https://example.com/'],
+        baseUrl,
+        homeDir,
+        workDir
+      );
+
+      assert.equal(embeddings.status, 0, embeddings.stderr);
+      assert.ok(embeddings.stdout.includes('"embedding"'), embeddings.stdout);
+      assert.equal(scrape.status, 0, scrape.stderr);
+      assert.ok(scrape.stdout.includes('# Scraped'), scrape.stdout);
+    })
+);
