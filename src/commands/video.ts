@@ -40,6 +40,7 @@ import {
   getChalk,
   detectOutputFormat,
 } from '../lib/output.js';
+import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model } from '../types/index.js';
 
 export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: string }> = [
@@ -177,7 +178,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(formatSuccess('Video generation queued!'));
           console.log(`\n${c.dim('Queue ID:')} ${c.cyan(result.queue_id)}`);
           console.log(`${c.dim('Model:')} ${result.model}`);
-          console.log(`\n${c.dim('Check status with:')} venice video status ${result.queue_id} -m ${result.model}`);
+          console.log(`\n${c.dim('Check status with:')} ${shellCommand`venice video status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`);
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -272,7 +273,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(`\n${c.dim('Video URL:')} ${c.cyan(videoUrl)}`);
         }
         if (classifyVideoStatus(result.status) === 'completed') {
-          console.log(`\n${c.dim('Download with:')} venice video retrieve ${queueId} -m ${options.model}`);
+          console.log(`\n${c.dim('Download with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
         }
 
         if (result.error) {
@@ -349,7 +350,7 @@ export function registerVideoCommands(program: Command): void {
               console.log(JSON.stringify(status, null, 2));
             } else if (notReady) {
               console.log(`${c.dim('Status:')} ${c.yellow(status.status)} — video not ready yet.`);
-              console.log(`${c.dim('Try again with:')} venice video retrieve ${queueId} -m ${options.model}`);
+              console.log(`${c.dim('Try again with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
             } else {
               console.error(formatError(
                 `No video was returned (status: ${status.status})${status.error ? `: ${status.error}` : '.'}`

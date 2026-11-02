@@ -4,7 +4,6 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
-import { Writable } from 'node:stream';
 import {
   loadConfig,
   setConfigValue,
@@ -12,6 +11,7 @@ import {
   getConfigPath,
 } from '../lib/config.js';
 import { formatSuccess, formatError, getChalk } from '../lib/output.js';
+import { askHidden, question } from '../lib/prompt.js';
 import type { VeniceConfig } from '../types/index.js';
 
 export function registerConfigCommand(program: Command): void {
@@ -124,7 +124,8 @@ export function registerConfigCommand(program: Command): void {
       loadConfig();
 
       if (key === 'api_key') {
-        if (options.stdin) {
+        // A key typed at a terminal is read without echo, even with --stdin.
+        if (options.stdin && !process.stdin.isTTY) {
           value = await readStdin();
         } else if (value === undefined) {
           if (!process.stdin.isTTY) {
@@ -132,7 +133,7 @@ export function registerConfigCommand(program: Command): void {
               'Interactive API key input requires a terminal. Pipe the key using --stdin instead.'
             );
           }
-          value = await askHiddenQuestion(
+          value = await askHidden(
             'API Key (get from https://venice.ai/settings/api): '
           );
         } else {
@@ -196,34 +197,31 @@ export function registerConfigCommand(program: Command): void {
     .description('Initialize configuration interactively')
     .action(async () => {
       const c = getChalk();
-      let rl: readline.Interface | undefined;
 
       loadConfig();
+      if (!process.stdin.isTTY) {
+        throw new Error(
+          'config init asks its questions on a terminal, but stdin is not a terminal. ' +
+          'To save an API key from a pipe or file, run: venice config set api_key --stdin'
+        );
+      }
 
       console.log(c.bold('\nVenice CLI Setup\n'));
       console.log(`Config will be saved to: ${getConfigPath()}\n`);
 
+      const apiKey = await askHidden(
+        'API Key (get from https://venice.ai/settings/api): '
+      );
+      if (apiKey.trim()) {
+        setConfigValue('api_key', apiKey.trim());
+        console.log(formatSuccess('API key saved'));
+      }
+
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
       try {
-        let apiKey: string;
-        if (process.stdin.isTTY) {
-          apiKey = await askHiddenQuestion(
-            'API Key (get from https://venice.ai/settings/api): '
-          );
-        } else {
-          rl = createQuestionInterface();
-          apiKey = await question(
-            rl,
-            'API Key (get from https://venice.ai/settings/api): '
-          );
-        }
-
-        if (apiKey.trim()) {
-          setConfigValue('api_key', apiKey.trim());
-          console.log(formatSuccess('API key saved'));
-        }
-
-        rl ??= createQuestionInterface();
-
         const model = await question(rl, 'Default chat model [kimi-k2-5]: ');
         if (model.trim()) {
           setConfigValue('default_model', model.trim());
@@ -242,49 +240,9 @@ export function registerConfigCommand(program: Command): void {
         console.log(formatSuccess('\nConfiguration complete!'));
         console.log(c.dim('Run "venice config show" to view your settings.'));
       } finally {
-        rl?.close();
+        rl.close();
       }
     });
-}
-
-function createQuestionInterface(): readline.Interface {
-  return readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-}
-
-function question(rl: readline.Interface, prompt: string): Promise<string> {
-  return new Promise((resolve) => {
-    rl.question(prompt, resolve);
-  });
-}
-
-function askHiddenQuestion(prompt: string): Promise<string> {
-  const mutedOutput = new Writable({
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: mutedOutput,
-    terminal: true,
-  });
-
-  process.stderr.write(prompt);
-
-  return new Promise((resolve, reject) => {
-    rl.once('SIGINT', () => {
-      rl.close();
-      reject(new Error('Input cancelled'));
-    });
-    rl.question('', (answer) => {
-      rl.close();
-      process.stderr.write('\n');
-      resolve(answer);
-    });
-  });
 }
 
 async function readStdin(): Promise<string> {
