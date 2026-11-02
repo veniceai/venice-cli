@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -201,6 +202,21 @@ test('config set api_key --stdin saves without printing the key', () => {
   }
 });
 
+test('config set api_key warns when the key is passed as an argument', () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
+  const apiKey = 'sk-argv-1234567890';
+
+  try {
+    const result = runCli(['config', 'set', 'api_key', apiKey], homeDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /passing an API key as an argument may expose it/);
+    assert.ok(!result.stdout.includes(apiKey));
+    assert.ok(!result.stderr.includes(apiKey));
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test('config init does not print API key input', () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
   const apiKey = 'sk-init-1234567890';
@@ -274,6 +290,29 @@ test(
       );
       assert.notEqual(updateResult.status, 0);
       assert.equal(readFileSync(targetFile, 'utf8'), '{\"unchanged\":true}');
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'config commands refuse a symbolic-link ~/.venice directory',
+  { skip: process.platform === 'win32' },
+  () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
+    const targetDir = join(homeDir, 'elsewhere');
+
+    try {
+      mkdirSync(targetDir, { mode: 0o700 });
+      symlinkSync(targetDir, join(homeDir, '.venice'));
+
+      for (const args of [['config', 'set', 'default_model', 'kimi-k2-5'], ['config', 'show']]) {
+        const result = runCli(args, homeDir);
+        assert.notEqual(result.status, 0, args.join(' '));
+        assert.match(result.stderr, /Config path is not a directory/);
+      }
+      assert.deepEqual(readdirSync(targetDir), []);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

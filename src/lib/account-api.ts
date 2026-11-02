@@ -1,4 +1,5 @@
-import { apiRequest } from './api.js';
+import { apiRequest, VeniceApiError } from './api.js';
+import { requireApiKey } from './config.js';
 
 export type BillingCurrency = 'USD' | 'DIEM' | 'BUNDLED_CREDITS';
 
@@ -146,6 +147,18 @@ export async function listApiKeys(): Promise<ApiKeyMetadata[]> {
   return response.data;
 }
 
+/**
+ * The create request may have reached Venice, so the key may exist although
+ * no usable response came back. `keyId` is set when Venice returned the new
+ * key's ID but not its secret.
+ */
+export class ApiKeyCreationError extends Error {
+  constructor(message: string, readonly keyId?: string) {
+    super(message);
+    this.name = 'ApiKeyCreationError';
+  }
+}
+
 export async function createApiKey(input: {
   apiKeyType: 'INFERENCE' | 'ADMIN';
   description: string;
@@ -153,15 +166,47 @@ export async function createApiKey(input: {
   consumptionLimit?: ConsumptionLimits;
   limitPeriod?: 'EPOCH' | 'MONTH' | 'LIFETIME';
 }): Promise<ApiKeyMetadata & { apiKey: string }> {
-  const response = await apiRequest<{
-    data: ApiKeyMetadata & { apiKey: string };
-  }>('/api_keys', {
-    method: 'POST',
-    body: input,
-    spinnerText: 'Creating API key...',
-    retries: 0,
-  });
-  return response.data;
+  // Fail here, before anything is sent, so later failures can mean a key exists.
+  requireApiKey();
+
+  let response: unknown;
+  try {
+    response = await apiRequest<unknown>('/api_keys', {
+      method: 'POST',
+      body: input,
+      spinnerText: 'Creating API key...',
+      retries: 0,
+    });
+  } catch (error) {
+    if (wasRefused(error)) throw error;
+    throw new ApiKeyCreationError(describeUnconfirmedFailure(error));
+  }
+
+  const created = (response as { data?: unknown } | null)?.data;
+  const { id, apiKey } = (created ?? {}) as { id?: unknown; apiKey?: unknown };
+  if (typeof id !== 'string' || !API_KEY_ID_PATTERN.test(id)) {
+    throw new ApiKeyCreationError('Venice did not return a valid ID for the new API key');
+  }
+  if (typeof apiKey !== 'string' || apiKey.length === 0) {
+    throw new ApiKeyCreationError('Venice did not return the secret for the new API key', id);
+  }
+  return created as ApiKeyMetadata & { apiKey: string };
+}
+
+// apiRequest reports 401 and 403 as a plain Error without the status code.
+function wasRefused(error: unknown): boolean {
+  if (error instanceof VeniceApiError) {
+    return error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
+  }
+  return error instanceof Error && error.message.startsWith('Authentication failed');
+}
+
+// Transport and JSON errors can quote the response body, which may hold the secret.
+function describeUnconfirmedFailure(error: unknown): string {
+  if (error instanceof VeniceApiError && error.statusCode === undefined) {
+    return 'No valid response was received for the create request';
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function deleteApiKey(id: string): Promise<void> {

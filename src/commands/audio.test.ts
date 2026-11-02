@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   truncateSync,
   writeFileSync,
@@ -123,7 +124,6 @@ test('tts uses the model default format when no override is provided', async () 
   });
   const apiBaseUrl = await listen(server);
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-default-audio-test-'));
-  const outputPath = join(homeDir, 'output.wav');
 
   try {
     const result = await runCli([
@@ -135,7 +135,10 @@ test('tts uses the model default format when no override is provided', async () 
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(receivedBody?.response_format, undefined);
-    assert.equal(readFileSync(outputPath, 'utf8'), 'default-format-audio');
+    const outputs = readdirSync(homeDir).filter((name) => name.endsWith('.wav'));
+    assert.equal(outputs.length, 1);
+    assert.match(outputs[0], /^speech-\d{8}-\d{6}\.wav$/);
+    assert.equal(readFileSync(join(homeDir, outputs[0]), 'utf8'), 'default-format-audio');
   } finally {
     server.close();
     rmSync(homeDir, { recursive: true, force: true });

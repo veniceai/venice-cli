@@ -1,8 +1,8 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import {
-  chmodSync,
   closeSync,
+  fchmodSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { basename, dirname, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
+  ApiKeyCreationError,
   ApiKeyMetadata,
   ConsumptionLimits,
   assertApiKeyId,
@@ -24,6 +25,7 @@ import {
   getApiKeyRateLimits,
   listApiKeys,
 } from '../lib/account-api.js';
+import { onInterrupt } from '../lib/interrupt.js';
 import {
   detectOutputFormat,
   formatSuccess,
@@ -103,53 +105,44 @@ export function registerKeysCommand(program: Command): void {
       if (options.expires !== undefined) validateExpiration(options.expires);
 
       const secretFile = prepareSecretFile(String(options.output));
+      const stopInterruptNotice = onInterrupt(() => {
+        console.error(formatWarning(keyMayExistNotice(description)));
+      });
       let created: Awaited<ReturnType<typeof createApiKey>>;
-      try {
-        created = await createApiKey({
-          apiKeyType,
-          description,
-          ...(options.expires ? { expiresAt: options.expires } : {}),
-          ...(Object.keys(consumptionLimit).length > 0
-            ? { consumptionLimit, limitPeriod }
-            : {}),
-        });
-      } catch (error) {
-        secretFile.cleanup();
-        throw error;
-      }
-
       let saveWarning: string | undefined;
       try {
-        saveWarning = secretFile.commit(created.apiKey);
-      } catch (saveError) {
-        let cleanupError: unknown;
         try {
-          secretFile.cleanup();
+          created = await createApiKey({
+            apiKeyType,
+            description,
+            ...(options.expires ? { expiresAt: options.expires } : {}),
+            ...(Object.keys(consumptionLimit).length > 0
+              ? { consumptionLimit, limitPeriod }
+              : {}),
+          });
         } catch (error) {
-          cleanupError = error;
+          const failure = cleanUpAfterFailure(secretFile, error, '');
+          if (!(error instanceof ApiKeyCreationError)) {
+            throw new Error(failure);
+          }
+          if (error.keyId === undefined) {
+            throw new Error(`${failure}\n${keyMayExistNotice(description)}`);
+          }
+          throw await deleteUnsavedKey(error.keyId, failure, '');
         }
-        const saveFailure = cleanupError === undefined
-          ? summarizeError(saveError, created.apiKey)
-          : `${summarizeError(saveError, created.apiKey)}; local temporary-file cleanup failed: ` +
-            summarizeError(cleanupError, created.apiKey);
-        const keyId = created.id;
-        assertApiKeyId(keyId);
 
         try {
-          await deleteApiKey(keyId);
-        } catch (rollbackError) {
-          throw new Error(
-            `Failed to save the API key secret (${saveFailure}). ` +
-            `Automatic deletion also failed (${summarizeError(rollbackError, created.apiKey)}). ` +
-            `The secret was not saved; delete the newly created key with: ` +
-            `venice keys delete ${keyId} --force`
+          saveWarning = secretFile.commit(created.apiKey);
+        } catch (saveError) {
+          const saveFailure = cleanUpAfterFailure(secretFile, saveError, created.apiKey);
+          throw await deleteUnsavedKey(
+            created.id,
+            `Failed to save the API key secret (${saveFailure})`,
+            created.apiKey
           );
         }
-
-        throw new Error(
-          `Failed to save the API key secret (${saveFailure}). ` +
-          `New API key ${keyId} was deleted; the secret was not saved.`
-        );
+      } finally {
+        stopInterruptNotice();
       }
 
       if (saveWarning !== undefined) {
@@ -314,19 +307,26 @@ function prepareSecretFile(output: string): {
     `.${basename(destination)}-${process.pid}-${randomUUID()}.tmp`
   );
   const descriptor = openSync(temporary, 'wx', 0o600);
+  try {
+    fchmodSync(descriptor, 0o600);
+  } catch (error) {
+    closeSync(descriptor);
+    rmSync(temporary, { force: true });
+    throw error;
+  }
   let open = true;
   let committed = false;
 
-  return {
+  const secretFile = {
     path: destination,
     commit(secret: string) {
       writeFileSync(descriptor, `${secret}\n`, { encoding: 'utf8' });
       fsyncSync(descriptor);
       closeSync(descriptor);
       open = false;
-      chmodSync(temporary, 0o600);
       linkSync(temporary, destination);
       committed = true;
+      stopInterruptCleanup();
 
       try {
         unlinkSync(temporary);
@@ -354,6 +354,7 @@ function prepareSecretFile(output: string): {
     },
     cleanup() {
       if (committed) return;
+      stopInterruptCleanup();
       const failures: string[] = [];
       if (open) {
         try {
@@ -375,6 +376,43 @@ function prepareSecretFile(output: string): {
       }
     },
   };
+  const stopInterruptCleanup = onInterrupt(() => secretFile.cleanup());
+  return secretFile;
+}
+
+// Removes the unused secret file and describes `error`, plus any cleanup failure.
+function cleanUpAfterFailure(
+  secretFile: ReturnType<typeof prepareSecretFile>,
+  error: unknown,
+  secret: string
+): string {
+  const failure = summarizeError(error, secret);
+  try {
+    secretFile.cleanup();
+    return failure;
+  } catch (cleanupError) {
+    return `${failure}; local temporary-file cleanup failed: ${summarizeError(cleanupError, secret)}`;
+  }
+}
+
+async function deleteUnsavedKey(keyId: string, failure: string, secret: string): Promise<Error> {
+  try {
+    await deleteApiKey(keyId);
+  } catch (rollbackError) {
+    return new Error(
+      `${failure}. Automatic deletion also failed (${summarizeError(rollbackError, secret)}). ` +
+      `The secret was not saved; delete the newly created key with: ` +
+      `venice keys delete ${keyId} --force`
+    );
+  }
+  return new Error(`${failure}. New API key ${keyId} was deleted; the secret was not saved.`);
+}
+
+function keyMayExistNotice(description: string): string {
+  return (
+    `The API key ${JSON.stringify(description)} may have been created, but its secret was not saved. ` +
+    'Check with "venice keys list" and delete it with "venice keys delete <id>".'
+  );
 }
 
 function describeCleanupFailure(operation: string, error: unknown): string {
