@@ -81,6 +81,15 @@ test('rpc prints a string error and exits non-zero', async () => {
   assert.ok(result.stderr.length < 700, `${result.stderr.length} characters of stderr`);
 });
 
+test('rpc sanitises the code of an error object', async () => {
+  const result = await runRpc(
+    JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: '\u001b]0;x\u0007-32000', message: 'execution reverted' } }),
+    () => ['eth_blockNumber', '-f', 'pretty']
+  );
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, 'error: execution reverted (-32000)\n');
+});
+
 test('rpc exits non-zero when a response has neither a result nor an error', async () => {
   const result = await runRpc(JSON.stringify({ jsonrpc: '2.0', id: 1 }), () => ['eth_blockNumber', '-f', 'pretty']);
   assert.equal(result.status, 1);

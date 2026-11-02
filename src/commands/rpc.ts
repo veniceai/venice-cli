@@ -460,7 +460,7 @@ function describeRpcError(error: unknown): string {
   if (error && typeof error === 'object' && !Array.isArray(error)) {
     const { code, message } = error as Partial<JsonRpcErrorObject>;
     const text = typeof message === 'string' && message ? truncateForDisplay(message) : 'RPC error';
-    return code != null ? `${text} (${code})` : text;
+    return code != null ? `${text} (${truncateForDisplay(String(code))})` : text;
   }
   return truncateForDisplay(JSON.stringify(error));
 }
