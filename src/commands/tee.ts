@@ -21,7 +21,6 @@ import {
   buildGpuAttestationCurl,
   buildTeeVerificationResult,
   ATTESTATION_SCOPE_NOTE,
-  type TeeE2EEPolicyEvaluation,
 } from '../lib/tee.js';
 import { deriveSigningAddressFromKey, recoverSignerAddress } from '../lib/e2ee.js';
 
@@ -30,6 +29,7 @@ const VERIFY_SCOPE_NOTE =
 
 const SIGNED_HASH_PAIR = /^([0-9a-f]{64}):([0-9a-f]{64})$/i;
 const SIGNED_HASH = /^[0-9a-f]{64}$/i;
+const SIGNER_ADDRESS = /^(0x)?[0-9a-f]{40}$/i;
 
 const sha256Hex = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 
@@ -67,6 +67,22 @@ function readExpectedResponseSha256(options: { expectContent?: string; expectSha
     return digest;
   }
   return undefined;
+}
+
+function readExpectedSigner(verifySigner: string | undefined, checkingContent: boolean): string | undefined {
+  if (verifySigner === undefined) {
+    if (checkingContent) {
+      throw new Error(
+        '--expect-content and --expect-sha256 need --verify-signer <address>, an enclave signing address you trust. ' +
+          "The CLI does not take the signer from the server's attestation, because it does not verify the Intel TDX quote signature or enclave measurements."
+      );
+    }
+    return undefined;
+  }
+  if (!SIGNER_ADDRESS.test(verifySigner)) {
+    throw new Error('--verify-signer must be a 40-character hex address.');
+  }
+  return normaliseAddress(verifySigner);
 }
 
 export function registerTeeCommand(program: Command): void {
@@ -258,7 +274,7 @@ export function registerTeeCommand(program: Command): void {
     .command('signature <model> <completionId>')
     .description('Fetch the TEE response signature for a completed request and check it')
     .option('-f, --format <format>', 'Output format (pretty|json)')
-    .option('--verify-signer <address>', 'Expected signer address (default with --expect-*: the attested signing address)')
+    .option('--verify-signer <address>', 'Enclave signing address you trust (required with --expect-content and --expect-sha256)')
     .option('--expect-content <file>', 'File with the exact reply text the signature must cover')
     .option('--expect-sha256 <hex>', 'SHA-256 of the exact reply text the signature must cover')
     .action(async (modelId: string, completionId: string, options) => {
@@ -267,7 +283,8 @@ export function registerTeeCommand(program: Command): void {
 
       try {
         const expectedResponseSha256 = readExpectedResponseSha256(options);
-        const checking = options.verifySigner !== undefined || expectedResponseSha256 !== undefined;
+        const expectedSigner = readExpectedSigner(options.verifySigner, expectedResponseSha256 !== undefined);
+        const checking = expectedSigner !== undefined;
         const response = await fetchTeeSignature(modelId, completionId);
 
         if (response.request_id !== completionId && (checking || response.request_id !== undefined)) {
@@ -276,19 +293,6 @@ export function registerTeeCommand(program: Command): void {
               ? `The signature response has no request ID, so it cannot be matched to ${completionId}.`
               : `The signature response is for request ${response.request_id}, not ${completionId}.`
           );
-        }
-
-        let expectedSigner: string | undefined;
-        let attestationPolicy: TeeE2EEPolicyEvaluation | undefined;
-        if (options.verifySigner !== undefined) {
-          expectedSigner = normaliseAddress(options.verifySigner);
-        } else if (expectedResponseSha256 !== undefined) {
-          const { response: report, clientNonce } = await fetchTeeAttestation(modelId);
-          const attestation = buildTeeVerificationResult(report, clientNonce, modelId);
-          attestationPolicy = evaluateE2EEAttestationPolicy(attestation, modelId);
-          if (attestationPolicy.passed && attestation.signingKey) {
-            expectedSigner = deriveSigningAddressFromKey(attestation.signingKey);
-          }
         }
 
         const signatureValue = typeof response.signature === 'string' ? response.signature : response.signature?.value;
@@ -308,9 +312,6 @@ export function registerTeeCommand(program: Command): void {
             return;
           }
           const verification: Record<string, unknown> = { expectedSigner: expectedSigner ?? null, recoveredSigner };
-          if (attestationPolicy) {
-            verification.attestation = { passed: attestationPolicy.passed, failures: attestationPolicy.failures };
-          }
           if (expectedResponseSha256 !== undefined) {
             verification.expectedResponseSha256 = expectedResponseSha256;
             verification.signedResponseSha256 = signedResponseSha256;
@@ -341,24 +342,18 @@ export function registerTeeCommand(program: Command): void {
         }
 
         if (!checking) {
-          console.log(c.dim('Not verified: pass --expect-content or --expect-sha256 to check this signature against your reply.'));
+          console.log(
+            c.dim('Not verified: pass --verify-signer <address> with --expect-content or --expect-sha256 to check this signature against your reply.')
+          );
         } else {
           console.log('');
-          if (expectedSigner !== undefined) {
-            const source = options.verifySigner !== undefined ? '--verify-signer' : 'a fresh attestation';
-            console.log(`${c.dim('Expected Signer:')} ${expectedSigner} (from ${source})`);
-          } else {
-            console.log(`${c.dim('Expected Signer:')} ${c.red('unavailable: the attestation did not pass the E2EE policy')}`);
-            for (const failure of attestationPolicy?.failures ?? []) {
-              console.log(`  ${c.red('•')} ${failure}`);
-            }
-          }
+          console.log(`${c.dim('Expected Signer:')} ${expectedSigner} (from --verify-signer)`);
 
           const signerStatus = signerMatch
             ? c.green('Yes')
             : recoveredSigner === null
               ? c.red('No (could not recover signer)')
-              : c.red(`No (expected ${expectedSigner ?? 'an attested signer'})`);
+              : c.red(`No (expected ${expectedSigner})`);
           console.log(`${c.dim('Signer Match:')} ${signerStatus}`);
 
           const responseStatus = expectedResponseSha256 === undefined

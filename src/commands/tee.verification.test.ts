@@ -216,30 +216,31 @@ test('tee signature without a request ID can be shown but not checked', async ()
 
   const shown = await runTee(signatureArgs(), routes);
   assert.equal(shown.status, 0, shown.stdout + shown.stderr);
-  assert.match(shown.stdout, /Not verified: pass --expect-content or --expect-sha256/);
+  assert.match(shown.stdout, /Not verified: pass --verify-signer <address> with --expect-content or --expect-sha256/);
 
-  const checked = await runTee(signatureArgs('--expect-sha256', sha256(REPLY)), routes);
+  const checked = await runTee(signatureArgs('--expect-sha256', sha256(REPLY), '--verify-signer', enclaveAddress), routes);
   assert.equal(checked.status, 1);
   assert.match(checked.stderr, /has no request ID, so it cannot be matched to cmpl-1/);
 });
 
-test('tee signature --expect-content passes only for the signed reply, with the signer from a fresh attestation', async () => {
+test('tee signature --expect-content passes only for the reply signed by the --verify-signer key', async () => {
   const routes = { '/tee/signature': signatureRoute(PAIR_TEXT), '/tee/attestation': attestationRoute() };
+  const checkReply = (...extra: string[]) => withReplyFile('--verify-signer', `0x${enclaveAddress}`, ...extra);
 
-  const pretty = await runTee(withReplyFile(), routes, { 'reply.txt': REPLY });
+  const pretty = await runTee(checkReply(), routes, { 'reply.txt': REPLY });
   assert.equal(pretty.status, 0, pretty.stdout + pretty.stderr);
-  assert.ok(pretty.requests.includes('/tee/attestation'));
-  assert.match(pretty.stdout, new RegExp(`Expected Signer: ${enclaveAddress} \\(from a fresh attestation\\)`));
+  assert.deepEqual(pretty.requests, ['/tee/signature']);
+  assert.match(pretty.stdout, new RegExp(`Expected Signer: ${enclaveAddress} \\(from --verify-signer\\)`));
   assert.match(pretty.stdout, /Signer Match: Yes/);
   assert.match(pretty.stdout, /Response Match: Yes/);
   assert.match(pretty.stdout, /Verified: ✓ Yes\n/);
 
-  const json = await runTee(withReplyFile('-f', 'json'), routes, { 'reply.txt': REPLY });
+  const json = await runTee(checkReply('-f', 'json'), routes, { 'reply.txt': REPLY });
   assert.equal(json.status, 0, json.stdout + json.stderr);
+  assert.deepEqual(json.requests, ['/tee/signature']);
   assert.deepEqual(JSON.parse(json.stdout).verification, {
     expectedSigner: enclaveAddress,
     recoveredSigner: enclaveAddress,
-    attestation: { passed: true, failures: [] },
     expectedResponseSha256: sha256(REPLY),
     signedResponseSha256: sha256(REPLY),
     responseMatch: true,
@@ -247,7 +248,7 @@ test('tee signature --expect-content passes only for the signed reply, with the 
   });
 
   for (const shown of [REPLY.trimEnd(), 'A reply the enclave never signed.\n']) {
-    const mismatch = await runTee(withReplyFile(), routes, { 'reply.txt': shown });
+    const mismatch = await runTee(checkReply(), routes, { 'reply.txt': shown });
     assert.equal(mismatch.status, 1, JSON.stringify(shown));
     assert.match(mismatch.stdout, /Response Match: No/);
     assert.match(mismatch.stdout, /Verified: ✗ No/);
@@ -272,11 +273,11 @@ test('tee signature --expect-sha256 accepts each signed-text format the API uses
   }
 });
 
-test('tee signature rejects a signer other than the attested enclave key', async () => {
+test('tee signature rejects a reply signed by a key other than --verify-signer', async () => {
   const stranger = generateEphemeralKeyPair();
-  const routes = { '/tee/signature': signatureRoute(PAIR_TEXT, stranger), '/tee/attestation': attestationRoute() };
+  const routes = { '/tee/signature': signatureRoute(PAIR_TEXT, stranger) };
 
-  const result = await runTee(withReplyFile('-f', 'json'), routes, { 'reply.txt': REPLY });
+  const result = await runTee(withReplyFile('--verify-signer', enclaveAddress, '-f', 'json'), routes, { 'reply.txt': REPLY });
   assert.equal(result.status, 1, result.stdout + result.stderr);
   const { verification } = JSON.parse(result.stdout);
   assert.equal(verification.expectedSigner, enclaveAddress);
@@ -285,34 +286,18 @@ test('tee signature rejects a signer other than the attested enclave key', async
   assert.equal(verification.verified, false);
 });
 
-test('tee signature has no expected signer when the fresh attestation fails the policy', async () => {
-  const routes = {
-    '/tee/signature': signatureRoute(PAIR_TEXT),
-    '/tee/attestation': attestationRoute({ verified: false }),
-  };
+test('tee signature will not check a reply without --verify-signer or take the signer from an attestation', async () => {
+  const routes = { '/tee/signature': signatureRoute(PAIR_TEXT), '/tee/attestation': attestationRoute() };
+  const cases = [withReplyFile(), withReplyFile('-f', 'json'), signatureArgs('--expect-sha256', sha256(REPLY))];
 
-  const pretty = await runTee(withReplyFile(), routes, { 'reply.txt': REPLY });
-  assert.equal(pretty.status, 1, pretty.stdout + pretty.stderr);
-  assert.match(pretty.stdout, /Expected Signer: unavailable: the attestation did not pass the E2EE policy/);
-  assert.match(pretty.stdout, /did not report this attestation as verified/);
-  assert.match(pretty.stdout, /Verified: ✗ No/);
-
-  const json = await runTee(withReplyFile('-f', 'json'), routes, { 'reply.txt': REPLY });
-  assert.equal(json.status, 1);
-  const { verification } = JSON.parse(json.stdout);
-  assert.equal(verification.expectedSigner, null);
-  assert.equal(verification.attestation.passed, false);
-  assert.equal(verification.verified, false);
-});
-
-test('tee signature --verify-signer with --expect-content skips the attestation', async () => {
-  const routes = { '/tee/signature': signatureRoute(PAIR_TEXT) };
-
-  const result = await runTee(withReplyFile('--verify-signer', `0x${enclaveAddress}`), routes, { 'reply.txt': REPLY });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(!result.requests.includes('/tee/attestation'));
-  assert.match(result.stdout, /Expected Signer: .* \(from --verify-signer\)/);
-  assert.match(result.stdout, /Verified: ✓ Yes\n/);
+  for (const args of cases) {
+    const result = await runTee(args, routes, { 'reply.txt': REPLY });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /--expect-content and --expect-sha256 need --verify-signer <address>/);
+    assert.match(result.stderr, /does not take the signer from the server's attestation/);
+    assert.deepEqual(result.requests, []);
+  }
 });
 
 test('tee signature rejects unusable expectations before any request', async () => {
@@ -320,6 +305,11 @@ test('tee signature rejects unusable expectations before any request', async () 
     [signatureArgs('--expect-sha256', 'abc'), /--expect-sha256 must be a 64-character hex SHA-256 digest/],
     [withReplyFile('--expect-sha256', sha256(REPLY)), /either --expect-content or --expect-sha256, not both/],
     [(dir) => signatureArgs('--expect-content', join(dir, 'missing.txt')), /Could not read --expect-content file/],
+    [signatureArgs('--verify-signer', 'not-an-address'), /--verify-signer must be a 40-character hex address/],
+    [
+      signatureArgs('--verify-signer', `${enclaveAddress}00`, '--expect-sha256', sha256(REPLY)),
+      /--verify-signer must be a 40-character hex address/,
+    ],
   ];
 
   for (const [args, failure] of cases) {
