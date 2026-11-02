@@ -366,11 +366,10 @@ async function buildAttachmentPart(
     const mimeType = normalizeMimeType(downloaded.contentType);
     assertSupportedMimeType(kind, mimeType, source);
     assertSizeWithinLimit(downloaded.buffer.length, maxBytes, label);
-    assertContentMatchesMimeType(downloaded.buffer, mimeType, label, source);
     return buildPart(
       kind,
       downloaded.buffer.toString('base64'),
-      mimeType,
+      contentMimeType(kind, downloaded.buffer, mimeType, label, source),
       filenameFromSource(source),
       downloaded.buffer.length
     );
@@ -381,24 +380,24 @@ async function buildAttachmentPart(
     assertSupportedMimeType(kind, parsed.mimeType, source);
     const bytes = decodedBase64Length(parsed.base64, label);
     assertSizeWithinLimit(bytes, maxBytes, label);
-    assertContentMatchesMimeType(leadingBytes(parsed.base64), parsed.mimeType, label, 'data URL');
-    return buildPart(kind, parsed.base64, parsed.mimeType, undefined, bytes);
+    const mimeType = contentMimeType(kind, leadingBytes(parsed.base64), parsed.mimeType, label, 'data URL');
+    return buildPart(kind, parsed.base64, mimeType, undefined, bytes);
   }
 
   if (kind === 'audio') {
     const file = readFileAsBase64(source, maxBytes, label);
     const bytes = decodedBase64Length(file.base64, label);
     assertSizeWithinLimit(bytes, maxBytes, label);
-    assertContentMatchesMimeType(leadingBytes(file.base64), file.mimeType, label, source);
-    return buildPart(kind, file.base64, file.mimeType, file.filename, bytes);
+    const mimeType = contentMimeType(kind, leadingBytes(file.base64), file.mimeType, label, source);
+    return buildPart(kind, file.base64, mimeType, file.filename, bytes);
   }
 
   const file = readFileAsDataUrl(source, maxBytes, label);
   const parsed = parseDataUrl(file.dataUrl, label);
   const bytes = decodedBase64Length(parsed.base64, label);
   assertSizeWithinLimit(bytes, maxBytes, label);
-  assertContentMatchesMimeType(leadingBytes(parsed.base64), file.mimeType, label, source);
-  return buildPart(kind, parsed.base64, file.mimeType, file.filename, bytes);
+  const mimeType = contentMimeType(kind, leadingBytes(parsed.base64), file.mimeType, label, source);
+  return buildPart(kind, parsed.base64, mimeType, file.filename, bytes);
 }
 
 // 8192 base64 characters decode to the first 6 KiB, enough for every check.
@@ -420,6 +419,13 @@ function isAiff(bytes: Buffer): boolean {
 
 function isMpegAudioFrame(bytes: Buffer): boolean {
   return bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0 && (bytes[1] & 0x06) !== 0;
+}
+
+function isMpegAudio(bytes: Buffer): boolean {
+  if (hasAscii(bytes, 0, 'ID3')) return true;
+  // Decoders skip zero padding before the first frame.
+  const start = bytes.findIndex((byte) => byte !== 0);
+  return start !== -1 && isMpegAudioFrame(bytes.subarray(start));
 }
 
 function isAdtsFrame(bytes: Buffer): boolean {
@@ -451,7 +457,7 @@ const CONTENT_SIGNATURES: Record<string, (bytes: Buffer) => boolean> = {
   'image/gif': (bytes) => hasAscii(bytes, 0, 'GIF87a') || hasAscii(bytes, 0, 'GIF89a'),
   'audio/wav': isWave,
   'audio/x-wav': isWave,
-  'audio/mpeg': (bytes) => hasAscii(bytes, 0, 'ID3') || isMpegAudioFrame(bytes),
+  'audio/mpeg': isMpegAudio,
   'audio/aiff': isAiff,
   'audio/x-aiff': isAiff,
   'audio/aac': (bytes) => hasAscii(bytes, 0, 'ID3') || hasAscii(bytes, 0, 'ADIF') || isAdtsFrame(bytes),
@@ -475,20 +481,39 @@ const CONTENT_SIGNATURES: Record<string, (bytes: Buffer) => boolean> = {
   ),
 };
 
-function assertContentMatchesMimeType(
+// Files keep their declared type: the ZIP-based document formats share one signature.
+// Where several types match the same bytes, the first listed wins.
+const DETECTABLE_MIME_TYPES: Record<Exclude<AttachmentKind, 'file'>, readonly string[]> = {
+  image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+  audio: ['audio/wav', 'audio/aiff', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/flac', 'audio/aac'],
+  video: ['video/mp4', 'video/webm', 'video/mpeg'],
+};
+
+function contentMimeType(
+  kind: AttachmentKind,
   bytes: Buffer,
   mimeType: string,
   label: string,
   source: string
-): void {
+): string {
   const normalized = normalizeMimeType(mimeType);
-  // The remaining supported types are text formats: reject binary content.
-  const matches = Object.hasOwn(CONTENT_SIGNATURES, normalized)
-    ? CONTENT_SIGNATURES[normalized](bytes)
-    : !bytes.subarray(0, 8192).includes(0);
-  if (!matches) {
+  // The remaining supported types are text formats.
+  if (!Object.hasOwn(CONTENT_SIGNATURES, normalized)) {
+    if (bytes.subarray(0, 8192).includes(0)) {
+      throw new Error(`${label} ${source} contains NUL bytes; ${normalized} attachments must be UTF-8 text.`);
+    }
+    return normalized;
+  }
+  if (CONTENT_SIGNATURES[normalized](bytes)) {
+    return normalized;
+  }
+  const detected = kind === 'file'
+    ? undefined
+    : DETECTABLE_MIME_TYPES[kind].find((type) => CONTENT_SIGNATURES[type](bytes));
+  if (!detected) {
     throw new Error(`${label} ${source} does not contain ${normalized} data.`);
   }
+  return detected;
 }
 
 function buildPart(
