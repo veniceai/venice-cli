@@ -21,6 +21,7 @@ import {
   formatToolsHelp,
   MAX_TOOL_ARGUMENTS_BYTES,
 } from '../lib/tools.js';
+import { promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatUsage,
   formatError,
@@ -327,10 +328,11 @@ export function registerChatCommand(program: Command): void {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
-      if (options.interactiveTools && !process.stdin.isTTY) {
+      const promptUnavailable = options.interactiveTools ? promptUnavailableReason() : undefined;
+      if (promptUnavailable) {
         console.error(formatError(
-          '--interactive-tools asks for approval on the terminal, but stdin is not a terminal. ' +
-          'Run the command in a terminal without piped input, or omit --interactive-tools.'
+          `--interactive-tools asks for approval on the terminal, but ${promptUnavailable}. ` +
+          'Run the command in a terminal, or omit --interactive-tools.'
         ));
         process.exit(1);
       }

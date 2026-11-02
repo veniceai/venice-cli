@@ -16,6 +16,21 @@ export interface PromptStreams {
   output?: NodeJS.WritableStream;
 }
 
+/**
+ * Where confirm() and askHidden() ask: stderr, which stays on the terminal
+ * when stdout is redirected, unless only stdout is a terminal.
+ */
+export function promptOutput(): NodeJS.WriteStream {
+  return !process.stderr.isTTY && process.stdout.isTTY ? process.stdout : process.stderr;
+}
+
+/** Why confirm() cannot reach the user, or undefined when it can. */
+export function promptUnavailableReason(): string | undefined {
+  if (!process.stdin.isTTY) return 'stdin is not a terminal';
+  if (!process.stderr.isTTY && !process.stdout.isTTY) return 'neither stdout nor stderr is a terminal';
+  return undefined;
+}
+
 function terminalInput(streams: PromptStreams): PromptInput {
   const input = streams.input ?? process.stdin;
   if (!input.isTTY) {
@@ -46,7 +61,7 @@ export function question(rl: readline.Interface, prompt: string): Promise<string
 export async function confirm(prompt: string, streams: PromptStreams = {}): Promise<boolean> {
   const rl = readline.createInterface({
     input: terminalInput(streams),
-    output: streams.output ?? process.stdout,
+    output: streams.output ?? promptOutput(),
   });
   try {
     const answer = (await question(rl, prompt)).trim().toLowerCase();
@@ -59,7 +74,7 @@ export async function confirm(prompt: string, streams: PromptStreams = {}): Prom
 /** Reads one line from the terminal without echoing it. */
 export async function askHidden(prompt: string, streams: PromptStreams = {}): Promise<string> {
   const input = terminalInput(streams);
-  const output = streams.output ?? process.stderr;
+  const output = streams.output ?? promptOutput();
   const mutedOutput = new Writable({
     write(_chunk, _encoding, callback) {
       callback();
