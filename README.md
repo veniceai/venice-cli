@@ -438,12 +438,14 @@ venice tee verify tee-qwen3-5-122b-a10b
 # Show a response signature (requires the completion ID of a previous request)
 venice tee signature e2ee-qwen3-5-122b-a10b <completion-id>
 
-# Check the signature against an enclave signing address you trust and the
-# exact reply text you received
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... --expect-content reply.txt
+# Check the signature against an enclave signing address you trust, the exact
+# request that was sent and the exact reply text you received
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... \
+  --expect-request request.json --expect-content reply.txt
 
-# Or compare with the reply's SHA-256
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... --expect-sha256 <sha256>
+# Or compare with their SHA-256 digests
+venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... \
+  --expect-request-sha256 <sha256> --expect-sha256 <sha256>
 ```
 
 **TEE Commands:**
@@ -452,9 +454,11 @@ venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x12
 |---------|-------------|
 | `attestation <model>` | Fetch and display the server's TEE attestation report |
 | `verify <model>` | Check the server's attestation report against the E2EE policy (internal consistency only) |
-| `signature <model> <id>` | Fetch a TEE response signature and check its signer with `--verify-signer`, and the reply with `--expect-content` or `--expect-sha256` |
+| `signature <model> <id>` | Fetch a TEE response signature and check its signer with `--verify-signer`, the reply with `--expect-content` or `--expect-sha256`, and the request with `--expect-request` or `--expect-request-sha256` |
 
-`tee signature` exits non-zero when the response is for a different request ID or when any requested check fails. `--expect-content` and `--expect-sha256` require `--verify-signer` with an enclave signing address you trust. The CLI does not take the signer from the server's attestation, because it does not yet verify the attestation's quote signature, so a pass is only as trustworthy as the address you give it. `--expect-content` compares the file byte for byte with the signed response, so a trailing newline counts. With `--verify-signer` alone, the CLI checks only who signed the text, not what the text says.
+`tee signature` exits non-zero when the response is for a different request ID or when any requested check fails. `--expect-content` and `--expect-sha256` require `--verify-signer` with an enclave signing address you trust. The CLI does not take the signer from the server's attestation, because it does not yet verify the attestation's quote signature, so a pass is only as trustworthy as the address you give it. With `--verify-signer` alone, the CLI checks only who signed the text, not what the text says.
+
+`--expect-content` and `--expect-request` compare the files byte for byte with what the signature covers, so a trailing newline counts. The request ID in the response is not signed, so only the signed request hash ties a signature to your request. When the signed text is a request and response hash pair, the check fails unless `--expect-request` or `--expect-request-sha256` matches the request half as well. When the signature covers only the reply, a pass is marked as reply only.
 
 ### Models
 

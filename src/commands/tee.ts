@@ -37,36 +37,65 @@ const normaliseAddress = (address: string) => address.toLowerCase().replace(/^0x
 
 /**
  * The API signs "<request SHA-256>:<response SHA-256>", a bare response
- * SHA-256, or the response text itself.
+ * SHA-256, or the response text itself. Only the hash pair covers a request.
  */
-function signedResponseDigest(signedText: string): string {
+function signedDigests(signedText: string): { request: string | null; response: string } {
   const pair = SIGNED_HASH_PAIR.exec(signedText);
-  if (pair) return pair[2].toLowerCase();
-  if (SIGNED_HASH.test(signedText)) return signedText.toLowerCase();
-  return sha256Hex(signedText);
+  if (pair) return { request: pair[1].toLowerCase(), response: pair[2].toLowerCase() };
+  if (SIGNED_HASH.test(signedText)) return { request: null, response: signedText.toLowerCase() };
+  return { request: null, response: sha256Hex(signedText) };
 }
 
-function readExpectedResponseSha256(options: { expectContent?: string; expectSha256?: string }): string | undefined {
-  if (options.expectContent !== undefined && options.expectSha256 !== undefined) {
-    throw new Error('Use either --expect-content or --expect-sha256, not both.');
+function readExpectedSha256(
+  fileFlag: string,
+  file: string | undefined,
+  digestFlag: string,
+  digest: string | undefined
+): string | undefined {
+  if (file !== undefined && digest !== undefined) {
+    throw new Error(`Use either ${fileFlag} or ${digestFlag}, not both.`);
   }
-  if (options.expectContent !== undefined) {
+  if (file !== undefined) {
     let content: Buffer;
     try {
-      content = readFileSync(options.expectContent);
+      content = readFileSync(file);
     } catch (error) {
-      throw new Error(`Could not read --expect-content file: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Could not read ${fileFlag} file: ${error instanceof Error ? error.message : String(error)}`);
     }
     return sha256Hex(content);
   }
-  if (options.expectSha256 !== undefined) {
-    const digest = options.expectSha256.toLowerCase().replace(/^0x/, '');
-    if (!SIGNED_HASH.test(digest)) {
-      throw new Error('--expect-sha256 must be a 64-character hex SHA-256 digest.');
+  if (digest !== undefined) {
+    const normalised = digest.toLowerCase().replace(/^0x/, '');
+    if (!SIGNED_HASH.test(normalised)) {
+      throw new Error(`${digestFlag} must be a 64-character hex SHA-256 digest.`);
     }
-    return digest;
+    return normalised;
   }
   return undefined;
+}
+
+function describeRequestMatch(
+  c: ReturnType<typeof getChalk>,
+  signedText: string | undefined,
+  signedRequestSha256: string | null,
+  expectedRequestSha256: string | undefined
+): string {
+  if (signedText === undefined) {
+    return c.red('No (the response has no signed text)');
+  }
+  if (signedRequestSha256 === null) {
+    return expectedRequestSha256 === undefined
+      ? c.yellow('not covered (the signature covers the reply only)')
+      : c.red('No (the signature covers the reply only, not a request)');
+  }
+  if (expectedRequestSha256 === undefined) {
+    return c.red(
+      `No (the signature covers request SHA-256 ${signedRequestSha256}; pass --expect-request or --expect-request-sha256)`
+    );
+  }
+  return signedRequestSha256 === expectedRequestSha256
+    ? c.green('Yes')
+    : c.red(`No (signed request SHA-256 ${signedRequestSha256}, expected ${expectedRequestSha256})`);
 }
 
 function readExpectedSigner(verifySigner: string | undefined, checkingContent: boolean): string | undefined {
@@ -277,12 +306,28 @@ export function registerTeeCommand(program: Command): void {
     .option('--verify-signer <address>', 'Enclave signing address you trust (required with --expect-content and --expect-sha256)')
     .option('--expect-content <file>', 'File with the exact reply text the signature must cover')
     .option('--expect-sha256 <hex>', 'SHA-256 of the exact reply text the signature must cover')
+    .option('--expect-request <file>', 'File with the exact request the signature must cover')
+    .option('--expect-request-sha256 <hex>', 'SHA-256 of the exact request the signature must cover')
     .action(async (modelId: string, completionId: string, options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
       try {
-        const expectedResponseSha256 = readExpectedResponseSha256(options);
+        const expectedResponseSha256 = readExpectedSha256(
+          '--expect-content',
+          options.expectContent,
+          '--expect-sha256',
+          options.expectSha256
+        );
+        const expectedRequestSha256 = readExpectedSha256(
+          '--expect-request',
+          options.expectRequest,
+          '--expect-request-sha256',
+          options.expectRequestSha256
+        );
+        if (expectedRequestSha256 !== undefined && expectedResponseSha256 === undefined) {
+          throw new Error('Use --expect-request or --expect-request-sha256 together with --expect-content or --expect-sha256.');
+        }
         const expectedSigner = readExpectedSigner(options.verifySigner, expectedResponseSha256 !== undefined);
         const checking = expectedSigner !== undefined;
         const response = await fetchTeeSignature(modelId, completionId);
@@ -302,9 +347,16 @@ export function registerTeeCommand(program: Command): void {
           signedText && signatureHex ? recoverSignerAddress(signedText, signatureHex) : null;
         const signerMatch =
           expectedSigner !== undefined && recoveredSigner !== null && normaliseAddress(recoveredSigner) === expectedSigner;
-        const signedResponseSha256 = signedText !== undefined ? signedResponseDigest(signedText) : null;
+        const signed = signedText !== undefined ? signedDigests(signedText) : null;
+        const signedResponseSha256 = signed?.response ?? null;
+        const signedRequestSha256 = signed?.request ?? null;
         const responseMatch = expectedResponseSha256 !== undefined && signedResponseSha256 === expectedResponseSha256;
-        const verified = signerMatch && (expectedResponseSha256 === undefined || responseMatch);
+        const requestMatch =
+          signedRequestSha256 === null && expectedRequestSha256 === undefined
+            ? null
+            : signedRequestSha256 === expectedRequestSha256;
+        const verified =
+          signerMatch && (expectedResponseSha256 === undefined || (responseMatch && requestMatch !== false));
 
         if (format === 'json') {
           if (!checking) {
@@ -316,6 +368,9 @@ export function registerTeeCommand(program: Command): void {
             verification.expectedResponseSha256 = expectedResponseSha256;
             verification.signedResponseSha256 = signedResponseSha256;
             verification.responseMatch = responseMatch;
+            verification.expectedRequestSha256 = expectedRequestSha256 ?? null;
+            verification.signedRequestSha256 = signedRequestSha256;
+            verification.requestMatch = requestMatch;
           }
           verification.verified = verified;
           console.log(JSON.stringify({ ...response, verification }, null, 2));
@@ -362,12 +417,18 @@ export function registerTeeCommand(program: Command): void {
               ? c.green('Yes')
               : c.red(`No (signed response SHA-256 ${signedResponseSha256 ?? 'unavailable'}, expected ${expectedResponseSha256})`);
           console.log(`${c.dim('Response Match:')} ${responseStatus}`);
+          if (expectedResponseSha256 !== undefined) {
+            const requestStatus = describeRequestMatch(c, signedText, signedRequestSha256, expectedRequestSha256);
+            console.log(`${c.dim('Request Match:')} ${requestStatus}`);
+          }
 
           const verdict = !verified
             ? c.red('✗ No')
             : expectedResponseSha256 === undefined
               ? c.green('✓ Yes') + c.dim(' (signer only; the signed text was not compared with a reply)')
-              : c.green('✓ Yes');
+              : requestMatch === null
+                ? c.green('✓ Yes') + c.dim(' (reply only; the signature does not cover a request)')
+                : c.green('✓ Yes');
           console.log(`${c.dim('Verified:')} ${verdict}`);
         }
 
