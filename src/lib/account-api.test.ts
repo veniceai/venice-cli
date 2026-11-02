@@ -61,3 +61,12 @@ test('billing usage stops after 100 pages of fresh cursors', async () => {
     assert.equal(pageCount(), 100);
   });
 });
+
+test('billing usage that stops at 100 small pages suggests a larger page size', async () => {
+  await withUsagePages((page) => `cursor-${page}`, async () => {
+    await assert.rejects(
+      getBillingUsage({ ...range, pageSize: 10 }),
+      /Use a shorter --days range or a larger --page-size \(at most 1000\)\./
+    );
+  });
+});

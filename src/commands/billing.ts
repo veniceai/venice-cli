@@ -5,6 +5,7 @@ import {
   getBillingAnalytics,
   getBillingBalance,
   getBillingUsage,
+  MAX_BILLING_USAGE_PAGE_SIZE,
 } from '../lib/account-api.js';
 import { detectOutputFormat, formatOutput, formatTable, getChalk } from '../lib/output.js';
 
@@ -40,11 +41,20 @@ export function registerBillingCommand(program: Command): void {
     .description('Show billed usage from all API clients')
     .option('-d, --days <number>', 'Number of days to show', '7')
     .option('-c, --currency <currency>', 'Filter by USD, DIEM, or BUNDLED_CREDITS')
-    .option('--page-size <number>', 'Entries fetched per API page (10-1000)', '1000')
+    .option(
+      '--page-size <number>',
+      `Entries fetched per API page (10-${MAX_BILLING_USAGE_PAGE_SIZE})`,
+      String(MAX_BILLING_USAGE_PAGE_SIZE)
+    )
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
       const days = parseIntegerInRange(options.days, 'days', 1, 3650);
-      const pageSize = parseIntegerInRange(options.pageSize, 'page-size', 10, 1000);
+      const pageSize = parseIntegerInRange(
+        options.pageSize,
+        'page-size',
+        10,
+        MAX_BILLING_USAGE_PAGE_SIZE
+      );
       const currency = parseCurrency(options.currency);
       const end = new Date();
       const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);

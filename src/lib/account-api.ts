@@ -81,6 +81,7 @@ const API_KEY_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_BILLING_USAGE_PAGES = 100;
+export const MAX_BILLING_USAGE_PAGE_SIZE = 1000;
 
 export function assertApiKeyId(id: string): void {
   if (!API_KEY_ID_PATTERN.test(id)) {
@@ -109,9 +110,13 @@ export async function getBillingUsage(options: {
 
   do {
     if (++pages > MAX_BILLING_USAGE_PAGES) {
+      const canUseLargerPages =
+        (options.pageSize ?? MAX_BILLING_USAGE_PAGE_SIZE) < MAX_BILLING_USAGE_PAGE_SIZE;
       throw new Error(
         `Usage history has more than ${MAX_BILLING_USAGE_PAGES} pages; refusing to fetch more. ` +
-        'Use a shorter --days range.'
+        (canUseLargerPages
+          ? `Use a shorter --days range or a larger --page-size (at most ${MAX_BILLING_USAGE_PAGE_SIZE}).`
+          : 'Use a shorter --days range.')
       );
     }
 
