@@ -38,8 +38,8 @@ import {
   zeroFill,
 } from '../lib/e2ee.js';
 import {
-  parseTdxQuote,
-  isTdDebugMode,
+  ATTESTATION_SCOPE_NOTE,
+  buildTeeVerificationResult,
   evaluateE2EEAttestationPolicy,
   evaluateTEEAttestationPolicy,
   type TeeVerificationResult,
@@ -96,55 +96,14 @@ async function setupE2EE(
   const c = getChalk();
 
   try {
-    // Generate ephemeral key pair
-    const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
-
     // Fetch attestation (spinner controlled by quiet flag)
     const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
-
-    // Validate attestation
-    if (response.verified !== true) {
-      throw new Error('TEE attestation verification failed on server');
-    }
-
-    if (response.nonce !== clientNonce) {
-      throw new Error('Attestation nonce mismatch - possible replay attack');
-    }
-
-    // Parse TDX quote
-    const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
-
-    // Check for debug mode
-    if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
-      throw new Error('TDX debug mode detected - cannot trust enclave for E2EE');
-    }
-
-    // Get signing key
-    const signingKey = response.signing_key || response.signing_public_key;
-    if (!signingKey) {
-      throw new Error('No signing key in attestation response');
-    }
-
-    // Build verification result for policy evaluation
-    const attestation: TeeVerificationResult = {
-      report: response as Record<string, unknown>,
-      nonce: response.nonce,
-      attestedModel: response.model,
-      evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
-      signingAddress: response.signing_address,
-      signingKey,
-      intelQuote: response.intel_quote,
-      parsedTdxQuote,
-      nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
-      serverVerification: response.server_verification,
-      teeProvider: response.tee_provider,
-      fetchedAt: Date.now(),
-      attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
-    };
+    const attestation = buildTeeVerificationResult(response, clientNonce, modelId);
+    const { parsedTdxQuote, signingKey } = attestation;
 
     // Evaluate policy
     const policy = evaluateE2EEAttestationPolicy(attestation, modelId);
-    if (!policy.passed) {
+    if (!policy.passed || !signingKey) {
       throw new Error(`E2EE attestation policy failed: ${policy.failures.join('; ')}`);
     }
 
@@ -152,7 +111,8 @@ async function setupE2EE(
     if (!quiet) {
       // Raw output must carry only the decrypted reply.
       const status = format === 'pretty' ? console.log : console.error;
-      status(c.green('✓') + ' TEE attestation verified');
+      status(c.green('✓') + " Server attestation report passed the CLI's consistency checks");
+      status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
       if (showDetails && format === 'pretty') {
         console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
@@ -165,6 +125,9 @@ async function setupE2EE(
         console.log('');
       }
     }
+
+    // Generate ephemeral key pair
+    const { privateKey, publicKeyHex } = generateEphemeralKeyPair();
 
     return {
       privateKey,
@@ -190,40 +153,8 @@ async function verifyTEEAttestation(
 
   // Fetch and verify attestation
   const { response, clientNonce } = await fetchTeeAttestation(modelId, { showSpinner: !quiet });
-
-  // Validate attestation
-  if (response.verified !== true) {
-    throw new Error('TEE attestation verification failed on server');
-  }
-
-  if (response.nonce !== clientNonce) {
-    throw new Error('Attestation nonce mismatch - possible replay attack');
-  }
-
-  // Parse TDX quote if present
-  const parsedTdxQuote = response.intel_quote ? parseTdxQuote(response.intel_quote) : undefined;
-
-  // Check for debug mode
-  if (parsedTdxQuote && isTdDebugMode(parsedTdxQuote.tdAttributes)) {
-    throw new Error('TDX debug mode detected - cannot trust enclave');
-  }
-
-  // Build verification result for policy evaluation
-  const attestation: TeeVerificationResult = {
-    report: response as Record<string, unknown>,
-    nonce: response.nonce,
-    attestedModel: response.model,
-    evidencePresent: !!response.intel_quote || !!response.nvidia_payload,
-    signingAddress: response.signing_address,
-    signingKey: response.signing_key || response.signing_public_key,
-    intelQuote: response.intel_quote,
-    parsedTdxQuote,
-    nvidiaPayload: response.nvidia_payload ? JSON.parse(response.nvidia_payload) : undefined,
-    serverVerification: response.server_verification,
-    teeProvider: response.tee_provider,
-    fetchedAt: Date.now(),
-    attestationEndpoint: `/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}`,
-  };
+  const attestation = buildTeeVerificationResult(response, clientNonce, modelId);
+  const { parsedTdxQuote } = attestation;
 
   const policy = evaluateTEEAttestationPolicy(attestation, modelId);
   if (!policy.passed) {
@@ -232,8 +163,11 @@ async function verifyTEEAttestation(
 
   // Show success message
   if (!quiet) {
-    console.log(c.cyan('🛡️  TEE model - running in Trusted Execution Environment'));
-    console.log(c.green('✓') + ' TEE attestation verified');
+    // Raw output must carry only the reply.
+    const status = format === 'pretty' ? console.log : console.error;
+    status(c.cyan("🛡️  TEE mode: not end-to-end encrypted; Venice's proxy can read the prompt"));
+    status("Server attestation report passed the CLI's consistency checks; it is not bound to this request");
+    status(c.dim(`  ${ATTESTATION_SCOPE_NOTE}`));
 
     if (showDetails && format === 'pretty') {
       console.log(c.dim(`\nTEE Provider: ${response.tee_provider || 'Unknown'}`));
@@ -244,7 +178,7 @@ async function verifyTEEAttestation(
         console.log(c.dim(`MRTD: ${parsedTdxQuote.mrtd.slice(0, 32)}...`));
       }
     }
-    console.log('');
+    status('');
   }
 }
 
@@ -254,6 +188,24 @@ function buildE2EEHeaders(context: E2EEContext): Record<string, string> {
     'X-Venice-TEE-Signing-Algo': 'ecdsa',
     'X-Venice-TEE-Model-Pub-Key': context.modelPublicKey,
   };
+}
+
+function rejectE2EEStream(reason: string, format: OutputFormat): never {
+  if (format === 'pretty') {
+    process.stdout.write('\n');
+  }
+  throw new Error(`E2EE response rejected: ${reason}`);
+}
+
+function decryptE2EEContent(content: string, privateKey: Uint8Array, format: OutputFormat): string {
+  if (!isHexEncrypted(content) || content.length % 2 !== 0) {
+    rejectE2EEStream('a response chunk was not encrypted. Output stopped at that chunk.', format);
+  }
+  try {
+    return decryptChunk(content, privateKey);
+  } catch {
+    rejectE2EEStream('a response chunk could not be decrypted. Output stopped at that chunk.', format);
+  }
 }
 
 function encryptMessagesForE2EE(
@@ -298,8 +250,8 @@ export function registerChatCommand(program: Command): void {
     .option('--strip-thinking', 'Strip thinking blocks from response')
     .option('--no-venice-prompt', 'Disable Venice system prompts')
     .option('--search-results-in-stream', 'Include search results in stream (when web-search enabled)')
-    .option('--e2ee', 'Enable E2EE encryption (auto-enabled for E2EE models)')
-    .option('--no-e2ee', 'Disable E2EE even for E2EE models')
+    .option('--e2ee', 'Require E2EE encryption (implied by model ids containing "e2ee")')
+    .option('--no-e2ee', "Disable E2EE; E2EE models fall back to TEE mode, where Venice's proxy can read the prompt")
     .option('--tee-verify', 'Show TEE attestation details')
     .option('-q, --quiet', 'Hide E2EE/TEE status messages (show only response)')
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
@@ -427,6 +379,9 @@ export function registerChatCommand(program: Command): void {
       if (privacyDecision.error) {
         console.error(formatError(privacyDecision.error));
         process.exit(1);
+      }
+      if (privacyDecision.notice) {
+        console.error(formatWarning(privacyDecision.notice));
       }
 
       useE2EE = privacyDecision.useE2EE;
@@ -894,16 +849,10 @@ export async function streamChat(
         if (chunk.content) {
           if (spinner) clearSpinner();
 
-          // E2EE: Decrypt content if encrypted
-          let displayContent = chunk.content;
-          if (e2eeContext && isHexEncrypted(chunk.content)) {
-            try {
-              displayContent = decryptChunk(chunk.content, e2eeContext.privateKey);
-            } catch (decryptError) {
-              console.error(c.red('\n[E2EE Decryption Error]'));
-              throw decryptError;
-            }
-          }
+          // E2EE: every content chunk must decrypt
+          const displayContent = e2eeContext
+            ? decryptE2EEContent(chunk.content, e2eeContext.privateKey, format)
+            : chunk.content;
 
           const { output, state: newState } = processThinkingContent(
             displayContent,
@@ -933,6 +882,9 @@ export async function streamChat(
         }
       }
       clearSpinner();
+      if (e2eeContext && !finishReason) {
+        rejectE2EEStream('the stream ended without a finish reason, so the reply may be incomplete.', format);
+      }
 
       const remaining = flushThinkingState(thinkingState, { strip: stripThinking, format }, c);
       if (remaining && format !== 'json') {
@@ -1313,7 +1265,11 @@ export function restoreCharacterSlug(lastConv?: {
 
 export function modelIdImpliesPrivateMode(modelId: string): boolean {
   const id = modelId.toLowerCase();
-  return id.includes('e2ee') || id.startsWith('tee-') || id.includes('-tee');
+  return modelIdRequiresE2EE(id) || id.startsWith('tee-') || id.includes('-tee');
+}
+
+export function modelIdRequiresE2EE(modelId: string): boolean {
+  return modelId.toLowerCase().includes('e2ee');
 }
 
 export function modelImpliesPrivateHistory(modelId: string): boolean {
@@ -1365,7 +1321,7 @@ export function resolveChatPrivacyMode(input: {
   modelInfo?: Model;
   catalogFailed: boolean;
   e2eeFlag?: boolean;
-}): { useE2EE: boolean; useTEE: boolean; error?: string } {
+}): { useE2EE: boolean; useTEE: boolean; error?: string; notice?: string } {
   if (input.catalogFailed) {
     if (input.e2eeFlag === true || modelIdImpliesPrivateMode(input.modelId)) {
       return {
@@ -1395,6 +1351,22 @@ export function resolveChatPrivacyMode(input: {
   const supportsTEE = isTEEModel(input.modelInfo);
 
   if (
+    input.e2eeFlag === true ||
+    (input.e2eeFlag !== false && modelIdRequiresE2EE(input.modelId))
+  ) {
+    if (!supportsE2EE) {
+      return {
+        useE2EE: false,
+        useTEE: false,
+        error:
+          `Model "${input.modelId}" does not support E2EE encryption (the model catalog does not ` +
+          'advertise supportsE2EE for it); refusing to send this request in the clear.',
+      };
+    }
+    return { useE2EE: true, useTEE: false };
+  }
+
+  if (
     modelIdImpliesPrivateMode(input.modelId) &&
     !supportsE2EE &&
     !supportsTEE
@@ -1408,19 +1380,18 @@ export function resolveChatPrivacyMode(input: {
     };
   }
 
-  if (input.e2eeFlag === true) {
-    if (!supportsE2EE) {
+  if (input.e2eeFlag === false) {
+    const useTEE = supportsTEE || supportsE2EE;
+    if (useTEE && (supportsE2EE || modelIdRequiresE2EE(input.modelId))) {
       return {
         useE2EE: false,
-        useTEE: false,
-        error: `Model "${input.modelId}" does not support E2EE encryption.`,
+        useTEE,
+        notice:
+          '--no-e2ee: end-to-end encryption is off for this E2EE model. ' +
+          "The request uses TEE mode, so Venice's proxy can read the prompt.",
       };
     }
-    return { useE2EE: true, useTEE: false };
-  }
-
-  if (input.e2eeFlag === false) {
-    return { useE2EE: false, useTEE: supportsTEE || supportsE2EE };
+    return { useE2EE: false, useTEE };
   }
 
   if (supportsE2EE) {
