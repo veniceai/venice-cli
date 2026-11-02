@@ -463,11 +463,13 @@ const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<s
           return 'Error: min and max must be safe integers';
         }
         if (min > max) return 'Error: min cannot be greater than max';
-        // crypto.randomInt draws from [min, max) and needs max - min < 2^48.
-        if (max - min >= 2 ** 48 - 1) {
+        // crypto.randomInt takes fewer than 2^48 values and safe-integer bounds,
+        // which max + 1 is not when max is Number.MAX_SAFE_INTEGER.
+        const range = max - min + 1;
+        if (range >= 2 ** 48) {
           return 'Error: max - min must be less than 2^48 - 1';
         }
-        const result = randomInt(min, max + 1);
+        const result = min + randomInt(range);
         return `Random number between ${min} and ${max}: ${result}`;
       }
       case 'choice': {

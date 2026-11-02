@@ -58,3 +58,16 @@ test('random numbers stay inside an inclusive integer range', async () => {
     /^Error: max - min must be less than 2\^48/
   );
 });
+
+test('random numbers can reach the ends of the safe integer range', async () => {
+  const limit = Number.MAX_SAFE_INTEGER;
+  for (const [min, max] of [[limit - 2, limit], [-limit, 2 - limit]]) {
+    for (let i = 0; i < 10; i++) {
+      const output = await random({ type: 'number', min, max });
+      const match = /: (-?\d+)$/.exec(output);
+      assert.ok(match, output);
+      const value = Number(match[1]);
+      assert.ok(value >= min && value <= max, output);
+    }
+  }
+});
