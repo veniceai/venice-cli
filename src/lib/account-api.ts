@@ -194,7 +194,8 @@ export async function createApiKey(input: {
     });
   } catch (error) {
     if (wasRefused(error)) throw error;
-    throw new ApiKeyCreationError(describeUnconfirmedFailure(error));
+    // apiRequest errors never quote a successful response, which would hold the secret.
+    throw new ApiKeyCreationError(error instanceof Error ? error.message : String(error));
   }
 
   const created = (response as { data?: unknown } | null)?.data;
@@ -214,14 +215,6 @@ function wasRefused(error: unknown): boolean {
     return error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
   }
   return error instanceof Error && error.message.startsWith('Authentication failed');
-}
-
-// Transport and JSON errors can quote the response body, which may hold the secret.
-function describeUnconfirmedFailure(error: unknown): string {
-  if (error instanceof VeniceApiError && error.statusCode === undefined) {
-    return 'No valid response was received for the create request';
-  }
-  return error instanceof Error ? error.message : String(error);
 }
 
 export async function deleteApiKey(id: string): Promise<void> {
