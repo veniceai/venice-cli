@@ -26,6 +26,7 @@ process.env.NODE_ENV = 'test';
 process.env.VENICE_API_BASE_URL = `${origin}/api/v1`;
 process.env.VENICE_API_KEY = 'test-key';
 process.env.VENICE_TEST_STREAM_IDLE_TIMEOUT_MS = '300';
+process.env.VENICE_TEST_STREAM_DATA_TIMEOUT_MS = '1500';
 const api = await import('./api.js');
 
 beforeEach(() => {
@@ -137,11 +138,38 @@ test('a response that is not text/event-stream is rejected', async () => {
   );
 });
 
-test('keepalive comments do not keep a stalled stream alive', { timeout: 10_000 }, async () => {
+test('a stream that sends nothing fails after the idle timeout', { timeout: 10_000 }, async () => {
   handler = async (_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
     response.write(`data: ${chunk({ content: 'partial' })}\n\n`);
-    const stopAt = Date.now() + 5000;
+    await new Promise((resolve) => response.on('close', resolve));
+  };
+
+  const chunks: StreamChunk[] = [];
+  await assert.rejects(collect({}, chunks), /Chat stream stalled: nothing received for 0\.3 seconds/);
+  assert.equal(content(chunks), 'partial');
+});
+
+test('keepalive comments keep a quiet stream alive past the idle timeout', { timeout: 10_000 }, async () => {
+  handler = async (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${chunk({ content: 'thinking, ' })}\n\n`);
+    const quietUntil = Date.now() + 600;
+    while (!response.destroyed && Date.now() < quietUntil) {
+      response.write(': keepalive\n\n');
+      await sleep(50);
+    }
+    response.end(`data: ${chunk({ content: 'answer' })}\n\ndata: [DONE]\n\n`);
+  };
+
+  assert.equal(content(await collect()), 'thinking, answer');
+});
+
+test('keepalive comments cannot hold a stream open past the data timeout', { timeout: 10_000 }, async () => {
+  handler = async (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${chunk({ content: 'partial' })}\n\n`);
+    const stopAt = Date.now() + 8000;
     while (!response.destroyed && Date.now() < stopAt) {
       response.write(': keepalive\n\n');
       await sleep(50);
@@ -150,9 +178,7 @@ test('keepalive comments do not keep a stalled stream alive', { timeout: 10_000 
   };
 
   const chunks: StreamChunk[] = [];
-  const started = Date.now();
-  await assert.rejects(collect({}, chunks), /Chat stream stalled: no data for 0\.3 seconds/);
-  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  await assert.rejects(collect({}, chunks), /Chat stream stalled: no data for 1\.5 seconds/);
   assert.equal(content(chunks), 'partial');
 });
 

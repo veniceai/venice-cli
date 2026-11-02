@@ -59,6 +59,7 @@ const RETRY_DELAY_MS = durationFromTestEnv('VENICE_TEST_RETRY_DELAY_MS', 1000);
 const MAX_RETRY_AFTER_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes default timeout
 const STREAM_IDLE_TIMEOUT_MS = durationFromTestEnv('VENICE_TEST_STREAM_IDLE_TIMEOUT_MS', 120000);
+const STREAM_DATA_TIMEOUT_MS = durationFromTestEnv('VENICE_TEST_STREAM_DATA_TIMEOUT_MS', 600000);
 const DOCUMENT_PARSE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_DOCUMENT_PARSE_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_STATUS_BYTES = 1024 * 1024;
@@ -709,12 +710,14 @@ export async function* chatCompletionStream(
   const parser = new ServerSentEventParser(MAX_EVENT_STREAM_LINE_LENGTH);
   let totalUsage: any = null;
   let completionId: string | undefined;
-  // Only data events push the deadline back; keepalive comments do not.
-  let deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
+  // Keepalives push back only the idle deadline, so they cannot hold a stream open forever.
+  let idleDeadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
+  let dataDeadline = Date.now() + STREAM_DATA_TIMEOUT_MS;
 
   try {
     while (true) {
-      const { done, value } = await readBeforeDeadline(reader, deadline);
+      const { done, value } = await readBeforeDeadline(reader, idleDeadline, dataDeadline);
+      idleDeadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
       const events = done
         ? parser.end(decoder.decode())
         : parser.push(decoder.decode(value, { stream: true }));
@@ -744,7 +747,7 @@ export async function* chatCompletionStream(
         if (json.error) {
           throw new Error(`Chat stream failed: ${streamErrorMessage(data)}`);
         }
-        deadline = Date.now() + STREAM_IDLE_TIMEOUT_MS;
+        dataDeadline = Date.now() + STREAM_DATA_TIMEOUT_MS;
 
         const choice = json.choices?.[0];
         const delta = choice?.delta;
@@ -789,8 +792,12 @@ export async function* chatCompletionStream(
 
 async function readBeforeDeadline(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: number
+  idleDeadline: number,
+  dataDeadline: number
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const message = idleDeadline <= dataDeadline
+    ? `Chat stream stalled: nothing received for ${STREAM_IDLE_TIMEOUT_MS / 1000} seconds.`
+    : `Chat stream stalled: no data for ${STREAM_DATA_TIMEOUT_MS / 1000} seconds.`;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
@@ -798,10 +805,8 @@ async function readBeforeDeadline(
       reader.read(),
       new Promise<never>((_resolve, reject) => {
         timeoutId = setTimeout(() => {
-          reject(new Error(
-            `Chat stream stalled: no data for ${STREAM_IDLE_TIMEOUT_MS / 1000} seconds.`
-          ));
-        }, Math.max(0, deadline - Date.now()));
+          reject(new Error(message));
+        }, Math.max(0, Math.min(idleDeadline, dataDeadline) - Date.now()));
       }),
     ]);
   } finally {
