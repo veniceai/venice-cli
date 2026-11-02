@@ -2030,6 +2030,7 @@ export async function completeVideo(
   const response = await apiRequest<unknown>('/video/complete', {
     method: 'POST',
     body: { queue_id: queueId, model },
+    idempotent: true,
     spinnerText: 'Cleaning up video...',
   });
   return parseCompleteResponse(response, '/video/complete');
@@ -2287,6 +2288,7 @@ export async function completeAudioGeneration(
   const response = await apiRequest<unknown>('/audio/complete', {
     method: 'POST',
     body: { queue_id: queueId, model },
+    idempotent: true,
     spinnerText: 'Cleaning up generated audio...',
   });
   return parseCompleteResponse(response, '/audio/complete');

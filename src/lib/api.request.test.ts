@@ -481,6 +481,24 @@ test('a POST marked idempotent is retried with the same body and headers', async
   assert.equal(posted[1].headers['idempotency-key'], 'key-1');
 });
 
+test('media cleanup is retried after a 5xx, since completing a job twice is harmless', async () => {
+  const cleanups = [
+    ['/video/complete', () => api.completeVideo('q-1', 'video-model')],
+    ['/audio/complete', () => api.completeAudioGeneration('q-1', 'audio-model')],
+  ] as const;
+
+  for (const [path, complete] of cleanups) {
+    let posts = 0;
+    handler = (_request, response) => {
+      posts++;
+      if (posts === 1) sendJson(response, 500, { error: 'Inference processing failed' });
+      else sendJson(response, 200, { success: true });
+    };
+    assert.deepEqual(await complete(), { success: true });
+    assert.equal(count('POST', path), 2, path);
+  }
+});
+
 test('a body that cannot be serialised fails once, before any request is sent', async () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
