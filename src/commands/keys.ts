@@ -1,5 +1,4 @@
 import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
 import {
   closeSync,
   fchmodSync,
@@ -36,6 +35,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { parseDecimalOption } from '../lib/options.js';
+import { promptOutput, promptUnavailableReason } from '../lib/prompt.js';
 import { assertApiKeyList, assertApiKeyRateLimits } from '../lib/response-checks.js';
 
 const KEY_TYPES = ['INFERENCE', 'ADMIN'] as const;
@@ -183,10 +183,11 @@ export function registerKeysCommand(program: Command): void {
       assertApiKeyId(normalizedId);
 
       if (!options.force) {
-        if (!stdin.isTTY || !stdout.isTTY) {
-          throw new Error('Refusing to delete non-interactively without --force');
+        const promptUnavailable = promptUnavailableReason();
+        if (promptUnavailable) {
+          throw new Error(`Refusing to delete non-interactively without --force: ${promptUnavailable}`);
         }
-        const readline = createInterface({ input: stdin, output: stdout });
+        const readline = createInterface({ input: process.stdin, output: promptOutput() });
         try {
           const answer = await readline.question(
             `Permanently delete API key ${normalizedId}? Type "delete" to confirm: `
