@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
 
 ### Prerequisites
 
-- Node.js 18.0.0 or higher
+- Node.js 20 or later
 - npm or yarn
 - A Venice AI API key for testing
 
@@ -99,6 +99,14 @@ venice-cli/
 
 ### Testing
 
+- Run `npm test`, which builds the project and runs the compiled tests with a
+  temporary `HOME`, so your own `~/.venice` is never read or changed. Options
+  after `--` are passed to `node --test`, for example
+  `npm test -- --test-concurrency=2`
+- Name test files `*.test.ts`. They compile into `dist/` for the test runner
+  but are left out of the npm package; `npm run check:package` (run in CI)
+  fails if the package would contain anything other than the compiled CLI,
+  `examples/`, `README.md` and `LICENSE`
 - Test new features manually before submitting
 - Test with and without API key configured
 - Test with `--no-color` flag
@@ -141,6 +149,9 @@ docs(readme): add shell completion instructions
 3. Update documentation if needed
 4. Test your changes thoroughly
 5. Submit a PR with a clear description
+
+CI runs `npm run build`, `npm run lint`, `npm test` and `npm run check:package`
+on Node.js 20, 22 and 24 for every pull request; make sure it passes.
 
 #### PR Description Template
 
@@ -207,6 +218,9 @@ export function registerExampleCommand(program: Command): void {
 4. Document in README.md
 
 ## Security Considerations
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in public issues or pull requests.
 
 - Never log API keys or tokens
 - Use restrictive file permissions for sensitive files

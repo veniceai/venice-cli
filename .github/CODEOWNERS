@@ -1,0 +1,9 @@
+# Encryption, attestation, dependencies, CI, and release tooling.
+/src/lib/e2ee.ts @joshua-mo-143
+/src/lib/tee.ts @joshua-mo-143
+/src/commands/tee.ts @joshua-mo-143
+/src/commands/chat.ts @joshua-mo-143
+/.github/ @joshua-mo-143
+/scripts/ @joshua-mo-143
+/package.json @joshua-mo-143
+/package-lock.json @joshua-mo-143
