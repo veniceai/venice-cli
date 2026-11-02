@@ -64,13 +64,24 @@ test('parseDocument keeps its timeout active while reading the response body', a
   }
 });
 
-test('parseDocument rejects oversized declared error responses', async () => {
+test('parseDocument reads only the start of an oversized error response', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const document = createDocument();
+  let bytesPulled = 0;
+  let bodyCancelled = false;
 
   process.env.VENICE_API_KEY = 'test-key';
-  globalThis.fetch = (async () => new Response(null, {
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = new Uint8Array(16 * 1024).fill(0x41);
+      bytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      bodyCancelled = true;
+    },
+  }), {
     status: 413,
     headers: {
       'Content-Length': String(MAX_DOCUMENT_PARSE_RESPONSE_BYTES + 1),
@@ -80,8 +91,13 @@ test('parseDocument rejects oversized declared error responses', async () => {
   try {
     await assert.rejects(
       () => parseDocument(document.path),
-      /Document parse API error response is too large \(50\.0 MB\).*Maximum allowed size is 50\.0 MB/
+      (error: Error) => {
+        assert.equal(error.message, `${'A'.repeat(1000)}… (truncated)`);
+        return true;
+      }
     );
+    assert.equal(bodyCancelled, true);
+    assert.ok(bytesPulled <= 128 * 1024, `pulled ${bytesPulled} bytes`);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) delete process.env.VENICE_API_KEY;

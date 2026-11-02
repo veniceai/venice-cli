@@ -80,6 +80,9 @@ export interface ApiKeyRateLimits {
 const API_KEY_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const MAX_BILLING_USAGE_PAGES = 100;
+export const MAX_BILLING_USAGE_PAGE_SIZE = 1000;
+
 export function assertApiKeyId(id: string): void {
   if (!API_KEY_ID_PATTERN.test(id)) {
     throw new Error(
@@ -103,8 +106,20 @@ export async function getBillingUsage(options: {
   const entries: BillingUsageEntry[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
+  let pages = 0;
 
   do {
+    if (++pages > MAX_BILLING_USAGE_PAGES) {
+      const canUseLargerPages =
+        (options.pageSize ?? MAX_BILLING_USAGE_PAGE_SIZE) < MAX_BILLING_USAGE_PAGE_SIZE;
+      throw new Error(
+        `Usage history has more than ${MAX_BILLING_USAGE_PAGES} pages; refusing to fetch more. ` +
+        (canUseLargerPages
+          ? `Use a shorter --days range or a larger --page-size (at most ${MAX_BILLING_USAGE_PAGE_SIZE}).`
+          : 'Use a shorter --days range.')
+      );
+    }
+
     const params = new URLSearchParams();
     if (cursor) {
       if (seenCursors.has(cursor)) {
@@ -179,7 +194,8 @@ export async function createApiKey(input: {
     });
   } catch (error) {
     if (wasRefused(error)) throw error;
-    throw new ApiKeyCreationError(describeUnconfirmedFailure(error));
+    // apiRequest errors never quote a successful response, which would hold the secret.
+    throw new ApiKeyCreationError(error instanceof Error ? error.message : String(error));
   }
 
   const created = (response as { data?: unknown } | null)?.data;
@@ -193,20 +209,12 @@ export async function createApiKey(input: {
   return created as ApiKeyMetadata & { apiKey: string };
 }
 
-// apiRequest reports 401 and 403 as a plain Error without the status code.
+// apiRequest reports a 401 as a plain Error without the status code.
 function wasRefused(error: unknown): boolean {
   if (error instanceof VeniceApiError) {
     return error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
   }
   return error instanceof Error && error.message.startsWith('Authentication failed');
-}
-
-// Transport and JSON errors can quote the response body, which may hold the secret.
-function describeUnconfirmedFailure(error: unknown): string {
-  if (error instanceof VeniceApiError && error.statusCode === undefined) {
-    return 'No valid response was received for the create request';
-  }
-  return error instanceof Error ? error.message : String(error);
 }
 
 export async function deleteApiKey(id: string): Promise<void> {
