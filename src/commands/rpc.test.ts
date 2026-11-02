@@ -183,6 +183,7 @@ test('parseRpcParam rejects unsafe numeric literals at every JSON depth', () => 
     '-9007199254740991.1',
     '9.0071992547409911e15',
     '-90071992547409911e-1',
+    '9007199254740990.999',
     '1e400',
     '{"amount":9007199254740993}',
     '{"nested":{"amount":-9007199254740992}}',
@@ -203,7 +204,6 @@ test('parseRpcParam preserves safe decimals and ignores numbers in JSON strings'
     parseRpcParam(
       '{"decimal":1.25,"exponent":1.25e3,"max":9007199254740991,' +
       '"maxDecimal":9007199254740991.0,"maxExponent":9.007199254740991e15,' +
-      '"belowMax":9007199254740990.999,' +
       '"values":["9007199254740991.1","1e400","escaped: \\"-9007199254740992\\""]}'
     ),
     {
@@ -212,7 +212,6 @@ test('parseRpcParam preserves safe decimals and ignores numbers in JSON strings'
       max: Number.MAX_SAFE_INTEGER,
       maxDecimal: Number.MAX_SAFE_INTEGER,
       maxExponent: Number.MAX_SAFE_INTEGER,
-      belowMax: Number.MAX_SAFE_INTEGER,
       values: ['9007199254740991.1', '1e400', 'escaped: "-9007199254740992"'],
     }
   );

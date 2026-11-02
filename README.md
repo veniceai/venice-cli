@@ -181,7 +181,8 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `-q, --quiet` | Hide E2EE/TEE status messages (show only response; a `--no-e2ee` downgrade is still announced) |
 | `-f, --format <format>` | Output format (pretty\|json\|markdown\|raw) |
 
-Schema files are limited to 1 MiB and are compiled locally with strict JSON
+Schema files are limited to 1 MiB, 1000 objects and arrays, 64 levels of
+nesting, and 1000 values per enum. They are compiled locally with strict JSON
 Schema validation before a completion request is sent. Draft 7, 2019-09, and
 2020-12 schemas are supported, including local `$ref` references and standard
 formats. Invalid schemas and unsupported keywords are rejected.
@@ -377,7 +378,7 @@ venice video status <queue_id> -m wan-2.6-text-to-video
 # Wait for completion (polls every 5s, times out after 10 minutes)
 venice video status -w <queue_id> -m <model>
 
-# Set a custom wait timeout in seconds
+# Set a custom wait timeout in seconds (at most 86400)
 venice video status -w <queue_id> -m <model> --timeout 900
 
 # Download completed video
@@ -429,6 +430,7 @@ venice music generate -m elevenlabs-music --lyrics lyrics.txt \
 # Check once, or poll until complete (polls every 5s, times out after 10 minutes)
 venice music status <queue_id> -m elevenlabs-music
 venice music status <queue_id> -m elevenlabs-music --wait
+# Set a custom wait timeout in seconds (at most 86400)
 venice music status <queue_id> -m elevenlabs-music --wait --timeout 900
 
 # Download the finished audio

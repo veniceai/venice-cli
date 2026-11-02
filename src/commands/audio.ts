@@ -21,6 +21,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { parseDecimalOption } from '../lib/options.js';
 import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 
@@ -53,10 +54,8 @@ export function registerAudioCommands(program: Command): void {
       const voice = options.voice || getDefaultVoice();
 
       try {
-        const speed = parseNumberOption(options.speed, 'speed', 0.25, 4);
-        const temperature = options.temperature === undefined
-          ? undefined
-          : parseNumberOption(options.temperature, 'temperature', 0, 2);
+        const speed = parseDecimalOption(options.speed, '--speed', { min: 0.25, max: 4 });
+        const temperature = parseDecimalOption(options.temperature, '--temperature', { min: 0, max: 2 });
         const requestedFormat = options.format || formatFromOutputPath(options.output);
         const result = await textToSpeech(text, {
           model: options.model,
@@ -234,19 +233,6 @@ async function readStdin(): Promise<string> {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf-8').trim();
-}
-
-function parseNumberOption(
-  value: string,
-  name: string,
-  minimum: number,
-  maximum: number
-): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`--${name} must be a number from ${minimum} to ${maximum}.`);
-  }
-  return parsed;
 }
 
 function formatFromContentType(contentType?: string): string | undefined {

@@ -8,6 +8,7 @@ import {
   MAX_BILLING_USAGE_PAGE_SIZE,
 } from '../lib/account-api.js';
 import { detectOutputFormat, formatOutput, formatTable, getChalk } from '../lib/output.js';
+import { parseIntegerOption } from '../lib/options.js';
 
 const CURRENCIES = ['USD', 'DIEM', 'BUNDLED_CREDITS'] as const;
 
@@ -48,13 +49,11 @@ export function registerBillingCommand(program: Command): void {
     )
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
-      const days = parseIntegerInRange(options.days, 'days', 1, 3650);
-      const pageSize = parseIntegerInRange(
-        options.pageSize,
-        'page-size',
-        10,
-        MAX_BILLING_USAGE_PAGE_SIZE
-      );
+      const days = parseIntegerOption(options.days, '--days', { min: 1, max: 3650 });
+      const pageSize = parseIntegerOption(options.pageSize, '--page-size', {
+        min: 10,
+        max: MAX_BILLING_USAGE_PAGE_SIZE,
+      });
       const currency = parseCurrency(options.currency);
       const end = new Date();
       const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
@@ -126,17 +125,6 @@ function parseCurrency(value?: string): BillingCurrency | undefined {
     throw new Error(`currency must be one of: ${CURRENCIES.join(', ')}`);
   }
   return normalized as BillingCurrency;
-}
-
-function parseIntegerInRange(value: string, label: string, min: number, max: number): number {
-  if (!/^\d+$/.test(value)) {
-    throw new Error(`${label} must be an integer between ${min} and ${max}`);
-  }
-  const parsed = Number(value);
-  if (parsed < min || parsed > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-  return parsed;
 }
 
 function validateLookback(value: string): void {

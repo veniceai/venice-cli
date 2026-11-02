@@ -215,28 +215,32 @@ test('validateAgainstSchema enforces modern constraints, composition, and local 
     additionalProperties: false,
   };
 
-  assert.deepEqual(validateAgainstSchema({
+  const valid = {
     status: 'ready',
     version: 2,
     score: 7,
     tags: ['ok'],
     choice: 101,
     nested: { enabled: true },
-  }, schema), []);
+  };
+  assert.deepEqual(validateAgainstSchema(valid, schema), []);
 
-  const errors = validateAgainstSchema({
-    status: 'waiting',
-    version: 1,
-    score: 11,
-    tags: ['A', 'A', 'toolong'],
-    choice: 'x',
-    nested: { extra: true },
-  }, schema);
-  assert.ok(errors.some((error) => error.includes('allowed values')));
-  assert.ok(errors.some((error) => error.includes('equal to constant')));
-  assert.ok(errors.some((error) => error.includes('<= 10')));
-  assert.ok(errors.some((error) => error.includes('more than 2 items')));
-  assert.ok(errors.some((error) => error.includes('oneOf')));
-  assert.ok(errors.some((error) => error.includes('missing required property "enabled"')));
-  assert.ok(errors.some((error) => error.includes('unexpected property "extra"')));
+  const violations: Array<[Record<string, unknown>, string]> = [
+    [{ status: 'waiting' }, 'allowed values'],
+    [{ version: 1 }, 'equal to constant'],
+    [{ score: 11 }, '<= 10'],
+    [{ tags: ['ab', 'cd', 'ef'] }, 'more than 2 items'],
+    [{ tags: ['ab', 'ab'] }, 'duplicate items'],
+    [{ tags: ['AB'] }, 'must match pattern'],
+    [{ choice: 'x' }, 'oneOf'],
+    [{ nested: {} }, 'missing required property "enabled"'],
+    [{ nested: { enabled: true, extra: true } }, 'unexpected property "extra"'],
+  ];
+  for (const [change, expected] of violations) {
+    const errors = validateAgainstSchema({ ...valid, ...change }, schema);
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      `${JSON.stringify(change)}: ${errors.join('; ')}`
+    );
+  }
 });

@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 import { loadUsage, UsageEntry } from '../lib/config.js';
+import { parseIntegerOption } from '../lib/options.js';
 import {
   formatJson,
   getChalk,
@@ -22,6 +23,7 @@ export function registerUsageCommand(program: Command): void {
     .action((options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
+      const dayCount = parseIntegerOption(options.days, '--days', { min: 1, max: 3650 });
 
       const usage = loadUsage();
 
@@ -36,9 +38,8 @@ export function registerUsageCommand(program: Command): void {
         const month = now.toISOString().slice(0, 7);
         filtered = usage.filter(u => u.timestamp.startsWith(month));
       } else {
-        const days = parseInt(options.days, 10);
         const cutoff = new Date(now);
-        cutoff.setDate(cutoff.getDate() - days);
+        cutoff.setDate(cutoff.getDate() - dayCount);
         filtered = usage.filter(u => new Date(u.timestamp) >= cutoff);
       }
 
@@ -53,7 +54,7 @@ export function registerUsageCommand(program: Command): void {
       }
 
       const summary = summarizeUsage(filtered);
-      const periodLabel = options.today ? 'Today' : options.month ? 'This Month' : `Last ${options.days} days`;
+      const periodLabel = options.today ? 'Today' : options.month ? 'This Month' : `Last ${dayCount} days`;
 
       console.log(c.bold(`\n📊 Usage Summary - ${periodLabel}\n`));
 

@@ -349,7 +349,7 @@ test('video generate falls back to the requested model when the queue response o
   }
 }));
 
-test('video status --wait accepts a --timeout beyond the 32-bit timer limit', { timeout: 20_000 }, () => withScratch(async (dir) => {
+test('video status --wait accepts the maximum --timeout of 24 hours', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'POST /api/v1/video/retrieve': async (_request, response) => {
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -358,7 +358,7 @@ test('video status --wait accepts a --timeout beyond the 32-bit timer limit', { 
   });
   try {
     const result = await runCli(
-      ['video', 'status', 'q1', '-m', 'test-model', '--wait', '--timeout', '2147484'],
+      ['video', 'status', 'q1', '-m', 'test-model', '--wait', '--timeout', '86400'],
       dir,
       stub.origin
     );

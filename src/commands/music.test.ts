@@ -32,7 +32,7 @@ test('music generate rejects invalid duration before sending a request', () => {
   const result = runCli(['music', 'generate', '--duration', '1.5', 'rain sounds']);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Duration must be a positive integer/);
+  assert.match(result.stderr, /--duration must be a positive integer/);
 });
 
 test('models help includes the music model type', () => {

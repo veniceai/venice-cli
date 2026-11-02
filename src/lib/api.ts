@@ -67,7 +67,6 @@ const MAX_AUDIO_STATUS_BYTES = 1024 * 1024;
 const AUDIO_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 120000;
 const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_MODELS_RESPONSE_BYTES = 32 * 1024 * 1024;
-const MAX_RPC_RESPONSE_BYTES = 64 * 1024 * 1024;
 // Up to four base64-encoded images of MAX_IMAGE_DOWNLOAD_BYTES each.
 const MAX_IMAGE_GENERATION_RESPONSE_BYTES =
   Math.ceil((MAX_IMAGE_DOWNLOAD_BYTES * 4 * 4) / 3) + 1024 * 1024;
@@ -314,6 +313,14 @@ type ApiRequestOptions = {
       expectedContentType?: never;
     }
   | {
+      // Resolves to { value, text }: the parsed body and the exact text it was parsed from.
+      responseType: 'jsonText';
+      stream?: false;
+      maxResponseBytes: number;
+      responseLabel: string;
+      expectedContentType?: never;
+    }
+  | {
       responseType: 'arrayBuffer';
       stream?: false;
       maxResponseBytes: number;
@@ -416,6 +423,8 @@ export async function apiRequest<T>(
           );
         }
         result = Uint8Array.from(bytes).buffer as T;
+      } else if (options.responseType === 'jsonText') {
+        result = await readJsonText(response, maxResponseBytes, options.responseLabel) as T;
       } else {
         result = await readJsonResponse<T>(response, maxResponseBytes, responseLabel);
       }
@@ -545,6 +554,21 @@ async function readJsonResponse<T>(
   try {
     // Unlike Buffer#toString, TextDecoder drops a leading BOM, as response.json() does.
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch {
+    throw new ResponseValidationError(`${label} was not valid JSON.`);
+  }
+}
+
+// Invalid UTF-8 is rejected rather than replaced, so the text matches the bytes received.
+async function readJsonText(
+  response: Response,
+  maxBytes: number,
+  label: string
+): Promise<{ value: unknown; text: string }> {
+  const bytes = await readResponseBodyWithLimit(response, maxBytes, label);
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return { value: JSON.parse(text) as unknown, text };
   } catch {
     throw new ResponseValidationError(`${label} was not valid JSON.`);
   }
@@ -880,7 +904,7 @@ export async function generateImage(
 
   const response = await apiRequest<{
     id: string;
-    images: string[];
+    images: unknown;
   }>('/image/generate', {
     method: 'POST',
     body,
@@ -893,7 +917,15 @@ export async function generateImage(
     model: options.model || 'flux-2-pro',
   });
 
-  return response.images;
+  const images = response.images;
+  if (
+    !Array.isArray(images) ||
+    images.length === 0 ||
+    !images.every((image): image is string => typeof image === 'string')
+  ) {
+    throw new Error('Image generation response did not contain any base64 image strings.');
+  }
+  return images;
 }
 
 type ImageEditOptions = {
@@ -1115,7 +1147,7 @@ export async function upscaleImage(
 
     const contentType = response.headers.get('content-type') || '';
 
-    if (!isImageContentType(contentType) && !looksLikeImageBytes(bytes)) {
+    if (!isImageContentType(contentType) || !looksLikeImageBytes(bytes)) {
       const preview = bytes.subarray(0, 200).toString('utf-8');
       throw new Error(
         `Upscale did not return an image (content-type: ${contentType || 'unknown'}). ` +
@@ -2586,10 +2618,14 @@ export type JsonRpcResponse = {
 
 export type CryptoRpcResult = {
   body: JsonRpcResponse | JsonRpcResponse[];
+  // The response as sent, so integers beyond 2^53 can be printed exactly.
+  text: string;
   credits?: string;
   costUsd?: string;
   requestId?: string;
 };
+
+export const MAX_RPC_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export async function listCryptoNetworks(): Promise<string[]> {
   const response = await apiRequest<{ networks?: string[] }>('/crypto/rpc/networks', {
@@ -2628,13 +2664,15 @@ export async function cryptoRpc(
   let costUsd: string | undefined;
   let requestId: string | undefined;
 
-  const data = await apiRequest<JsonRpcResponse | JsonRpcResponse[]>(
+  const { value, text } = await apiRequest<{ value: JsonRpcResponse | JsonRpcResponse[]; text: string }>(
     `/crypto/rpc/${encodeURIComponent(network)}`,
     {
       method: 'POST',
       body,
       idempotent: true,
+      responseType: 'jsonText',
       maxResponseBytes: MAX_RPC_RESPONSE_BYTES,
+      responseLabel: 'RPC response',
       spinnerText: 'Sending RPC request...',
       additionalHeaders: { 'Idempotency-Key': idempotencyKey },
       onHeaders: (headers) => {
@@ -2645,5 +2683,5 @@ export async function cryptoRpc(
     }
   );
 
-  return { body: data, credits, costUsd, requestId };
+  return { body: value, text, credits, costUsd, requestId };
 }
