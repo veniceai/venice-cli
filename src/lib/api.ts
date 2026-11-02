@@ -150,6 +150,11 @@ export class VeniceApiError extends Error {
   isRateLimited(): boolean {
     return this.statusCode === 429;
   }
+
+  // Venice answers 503 when a model is at capacity: like a 429, nothing ran.
+  isUnavailable(): boolean {
+    return this.statusCode === 503;
+  }
 }
 
 // Venice 400s list per-field reasons as { field: { _errors: [reason] } } under `details`.
@@ -218,7 +223,7 @@ function paidRequestError(error: unknown, timeoutMessage: string): unknown {
     return withProcessedNote(error);
   }
   if (error instanceof VeniceApiError) {
-    return error.isRetryable() ? withProcessedNote(error) : error;
+    return error.isRetryable() && !error.isUnavailable() ? withProcessedNote(error) : error;
   }
   if (isNetworkError(error)) {
     if (isRedirectError(error)) return new Error(REDIRECT_REFUSED);
@@ -445,7 +450,8 @@ export async function apiRequest<T>(
           throw new VeniceApiError(`Permission denied: ${error.message}`, 403, error.code);
         }
 
-        const retryable = error.isRateLimited() || (idempotent && error.isRetryable());
+        const retryable =
+          error.isRateLimited() || error.isUnavailable() || (idempotent && error.isRetryable());
         const delayMs = retryable && canRetry ? retryDelayMs(error, attempt) : undefined;
         if (delayMs !== undefined) {
           if (spinner) {
@@ -462,7 +468,9 @@ export async function apiRequest<T>(
           error.message +=
             `\nThe server asked to wait ${Math.ceil(error.retryAfterMs / 1000)} seconds before retrying.`;
         }
-        throw !idempotent && error.isRetryable() ? withProcessedNote(error) : error;
+        throw !idempotent && error.isRetryable() && !error.isUnavailable()
+          ? withProcessedNote(error)
+          : error;
       }
 
       if (error instanceof ResponseValidationError) {

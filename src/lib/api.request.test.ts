@@ -400,6 +400,46 @@ test('a paid POST is retried after a 429', async () => {
   assert.equal(count('POST', '/image/generate'), 2);
 });
 
+const AT_CAPACITY = 'The model is at capacity. Please try again later.';
+
+test('a paid POST is retried after a 503, which Venice sends when a model is at capacity', async () => {
+  let posts = 0;
+  handler = (_request, response) => {
+    posts++;
+    if (posts === 1) sendJson(response, 503, { error: AT_CAPACITY });
+    else sendJson(response, 200, { images: [] });
+  };
+
+  assert.deepEqual(
+    await api.apiRequest('/image/generate', { method: 'POST', body: {}, showSpinner: false }),
+    { images: [] }
+  );
+  assert.equal(count('POST', '/image/generate'), 2);
+});
+
+test('a 503 that outlasts the retries does not say the request may have been processed', async () => {
+  handler = (_request, response) => sendJson(response, 503, { error: AT_CAPACITY });
+  await assert.rejects(
+    api.apiRequest('/chat/completions', { method: 'POST', body: {}, showSpinner: false, retries: 1 }),
+    (error: Error) => {
+      assert.equal(error.message, AT_CAPACITY);
+      return true;
+    }
+  );
+  assert.equal(count('POST', '/chat/completions'), 2);
+
+  await assert.rejects(api.textToSpeech('hello'), (error: Error) => {
+    assert.equal(error.message, AT_CAPACITY);
+    return true;
+  });
+
+  handler = (_request, response) => sendJson(response, 500, { error: 'Inference processing failed' });
+  await assert.rejects(api.textToSpeech('hello'), (error: Error) => {
+    assert.equal(error.message, `Inference processing failed\n${PROCESSED_NOTE}`);
+    return true;
+  });
+});
+
 test('idempotent requests are retried after a 5xx and after a dropped connection', async () => {
   let gets = 0;
   handler = (request, response) => {
