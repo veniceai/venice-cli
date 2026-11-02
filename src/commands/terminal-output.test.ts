@@ -364,6 +364,62 @@ test('video, music and image style output on a terminal strips control sequences
   }));
 });
 
+test('billing and keys output on a terminal strips control sequences, and JSON escapes them', async () => {
+  const routes: Routes = {
+    'GET /billing/balance': ok({
+      canConsume: true,
+      consumptionCurrency: `USD${PAYLOAD}`,
+      balances: { usd: `12.5${PAYLOAD}`, diem: null },
+      diemEpochAllocation: `7${PAYLOAD}`,
+    }),
+    'GET /billing/usage-history': ok({
+      data: [{
+        amount: `1${PAYLOAD}`,
+        currency: 'USD',
+        inferenceDetails: null,
+        notes: '',
+        pricePerUnitUsd: 0,
+        sku: `sku${PAYLOAD}`,
+        timestamp: '2026-11-01T00:00:00Z',
+        units: `2${PAYLOAD}`,
+      }],
+      nextCursor: null,
+    }),
+    'GET /api_keys/rate_limits': ok({
+      data: {
+        accessPermitted: true,
+        apiTier: { id: `tier${PAYLOAD}`, isCharged: false },
+        balances: { USD: 1.5 },
+        keyExpiration: `expiry${PAYLOAD}`,
+        nextEpochBegins: `epoch${PAYLOAD}`,
+        rateLimits: [{ apiModelId: `model${PAYLOAD}`, rateLimits: [{ type: 'RPM', amount: 10 }] }],
+      },
+    }),
+  };
+  await withApi(routes, (baseUrl) => withHome(async (home) => {
+    const runs: Array<[string[], RegExp]> = [
+      [['billing', 'balance'], /USD: 12\.5link textsafetxt\.exe[\s\S]*DIEM epoch allocation: 7link textsafetxt\.exe/],
+      [['billing', 'usage'], /skulink textsafetxt\.exe/],
+      [['keys', 'rate-limits'], /Tier: tierlink textsafetxt\.exe[\s\S]*Next epoch: epochlink textsafetxt\.exe/],
+    ];
+    for (const [args, expected] of runs) {
+      const label = args.join(' ');
+      const terminal = await runCli([...args, '-f', 'pretty'], { home, baseUrl, terminal: true });
+      assert.equal(terminal.status, 0, `${label}: ${terminal.stderr}`);
+      assertClean(terminal.stdout, label);
+      assert.match(terminal.stdout, expected, label);
+
+      const json = await runCli([...args, '-f', 'json'], { home, baseUrl });
+      assert.equal(json.status, 0, `${label} -f json: ${json.stderr}`);
+      assertClean(json.stdout.replace(/\n/g, ''), `${label} -f json`);
+      JSON.parse(json.stdout);
+    }
+
+    const piped = await runCli(['billing', 'balance', '-f', 'pretty'], { home, baseUrl });
+    assert.ok(piped.stdout.includes(`USD: 12.5${PAYLOAD}`), 'piped output is unchanged');
+  }));
+});
+
 test('rpc output on a terminal strips control sequences, and response JSON is escaped only on a terminal', async () => {
   const response = { jsonrpc: '2.0', id: 1, result: `value${PAYLOAD}` };
   const routes: Routes = {

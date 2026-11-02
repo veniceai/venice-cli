@@ -132,6 +132,15 @@ test('terminalSafeJson escapes the same characters in JSON text, only for termin
   assert.equal(terminalSafeJson(json, { isTTY: false }), json);
 });
 
+test('terminalSafeJson drops raw carriage returns, which valid JSON allows only between tokens', () => {
+  const json = '{"result":"0xREAL","x":\r{"result":"0xFAKE"}  }';
+  const escaped = terminalSafeJson(json, { isTTY: true });
+
+  assert.equal(escaped, '{"result":"0xREAL","x":{"result":"0xFAKE"}  }');
+  assert.deepEqual(JSON.parse(escaped), JSON.parse(json));
+  assert.equal(terminalSafeJson(json, { isTTY: false }), json);
+});
+
 test('formatWarning sanitises the message for the stream it is printed on', () => {
   assert.equal(formatWarning(`saved ${OSC52}${BIDI}`, { isTTY: true }), '⚠ saved safetxt.exe');
   assert.equal(formatWarning(`saved ${OSC52}`, { isTTY: false }), `⚠ saved ${OSC52}`);

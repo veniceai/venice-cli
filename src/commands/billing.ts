@@ -141,7 +141,9 @@ function validateLookback(value: string): void {
   }
 }
 
-function formatAmount(value: number | null): string {
+// Billing responses are not shape-checked, so an amount can arrive as any JSON value.
+function formatAmount(value: unknown): string {
   if (value === null) return 'n/a';
+  if (typeof value !== 'number') return terminalSafe(value);
   return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }

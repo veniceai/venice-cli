@@ -300,11 +300,15 @@ export function formatJson(value: unknown, indent = 2): string {
 
 /**
  * JSON text printed as received: on a terminal, the characters formatJson
- * escapes are written as \uXXXX; piped output is unchanged. `json` must be
- * valid JSON, so those characters can only occur inside strings.
+ * escapes are written as \uXXXX and raw carriage returns are dropped; piped
+ * output is unchanged. `json` must be valid JSON, so the escaped characters
+ * can only occur inside strings and a raw carriage return only between
+ * tokens, where dropping it leaves the parsed value unchanged.
  */
 export function terminalSafeJson(json: string, stream: TerminalStream = process.stdout): string {
-  return isTerminal(stream) ? json.replace(JSON_RAW_CONTROLS, unicodeEscape) : json;
+  return isTerminal(stream)
+    ? json.replace(JSON_RAW_CONTROLS, unicodeEscape).replace(/\r/g, '')
+    : json;
 }
 
 // Controls, format and private-use characters, unassigned code points,
