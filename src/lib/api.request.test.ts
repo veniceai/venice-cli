@@ -167,6 +167,14 @@ test('JSON responses are read within a per-request size limit', async () => {
   assert.equal(count('GET', '/characters'), 1);
 });
 
+test('a JSON body that starts with a byte order mark is read as response.json() reads it', async () => {
+  handler = (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"ok":true}')]));
+  };
+  assert.deepEqual(await api.apiRequest('/billing/balance', { showSpinner: false }), { ok: true });
+});
+
 test('a response that declares more than 16 MiB is refused before it is read', { timeout: 10_000 }, async () => {
   handler = (_request, response) => {
     response.writeHead(200, {

@@ -542,7 +542,8 @@ async function readJsonResponse<T>(
 ): Promise<T> {
   const bytes = await readResponseBodyWithLimit(response, maxBytes, label);
   try {
-    return JSON.parse(bytes.toString('utf-8')) as T;
+    // Unlike Buffer#toString, TextDecoder drops a leading BOM, as response.json() does.
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch {
     throw new ResponseValidationError(`${label} was not valid JSON.`);
   }
