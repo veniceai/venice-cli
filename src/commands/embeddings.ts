@@ -56,7 +56,7 @@ export function registerEmbeddingsCommand(program: Command): void {
         assertEmbeddings(result);
 
         if (options.output) {
-          writeOutputFile(options.output, JSON.stringify(result, null, 2));
+          writeOutputFile(options.output, formatJson(result));
           console.log(formatSuccess(`Saved embeddings to ${options.output}`));
           console.log(c.dim(`Dimension: ${result[0]?.embedding?.length || 0}`));
           return;

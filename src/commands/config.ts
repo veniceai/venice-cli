@@ -11,7 +11,7 @@ import {
   getConfigPath,
 } from '../lib/config.js';
 import { formatSuccess, formatError, getChalk, detectOutputFormat } from '../lib/output.js';
-import { askHidden, question } from '../lib/prompt.js';
+import { askHidden, promptOutput, promptUnavailableReason, question } from '../lib/prompt.js';
 import type { VeniceConfig } from '../types/index.js';
 
 export function registerConfigCommand(program: Command): void {
@@ -130,9 +130,11 @@ export function registerConfigCommand(program: Command): void {
         if (options.stdin && !process.stdin.isTTY) {
           value = await readStdin();
         } else if (value === undefined) {
-          if (!process.stdin.isTTY) {
+          const promptUnavailable = promptUnavailableReason();
+          if (promptUnavailable) {
             throw new Error(
-              'Interactive API key input requires a terminal. Pipe the key using --stdin instead.'
+              `Interactive API key input requires a terminal, but ${promptUnavailable}. ` +
+              'Pipe the key using --stdin instead.'
             );
           }
           value = await askHidden(
@@ -201,15 +203,17 @@ export function registerConfigCommand(program: Command): void {
       const c = getChalk();
 
       loadConfig();
-      if (!process.stdin.isTTY) {
+      const promptUnavailable = promptUnavailableReason();
+      if (promptUnavailable) {
         throw new Error(
-          'config init asks its questions on a terminal, but stdin is not a terminal. ' +
+          `config init asks its questions on a terminal, but ${promptUnavailable}. ` +
           'To save an API key from a pipe or file, run: venice config set api_key --stdin'
         );
       }
 
-      console.log(c.bold('\nVenice CLI Setup\n'));
-      console.log(`Config will be saved to: ${getConfigPath()}\n`);
+      const output = promptOutput();
+      output.write(`${c.bold('\nVenice CLI Setup\n')}\n`);
+      output.write(`Config will be saved to: ${getConfigPath()}\n\n`);
 
       const apiKey = await askHidden(
         'API Key (get from https://venice.ai/settings/api): '
@@ -221,7 +225,7 @@ export function registerConfigCommand(program: Command): void {
 
       const rl = readline.createInterface({
         input: process.stdin,
-        output: process.stdout,
+        output,
       });
       try {
         const model = await question(rl, 'Default chat model [kimi-k2-5]: ');

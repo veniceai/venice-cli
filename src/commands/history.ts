@@ -11,7 +11,7 @@ import {
 } from '../lib/config.js';
 import { messageContentToText } from '../types/index.js';
 import { parseIntegerOption } from '../lib/options.js';
-import { confirm } from '../lib/prompt.js';
+import { confirm, promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatSuccess,
   formatError,
@@ -174,9 +174,10 @@ export function registerHistoryCommand(program: Command): void {
       const c = getChalk();
 
       if (!options.yes) {
-        if (!process.stdin.isTTY) {
+        const promptUnavailable = promptUnavailableReason();
+        if (promptUnavailable) {
           throw new Error(
-            'Refusing to clear history without confirmation: stdin is not a terminal. ' +
+            `Refusing to clear history without confirmation: ${promptUnavailable}. ` +
             'Run "venice history clear --yes" to clear it.'
           );
         }
@@ -199,7 +200,7 @@ export function registerHistoryCommand(program: Command): void {
       try {
         const conversations = loadHistory();
 
-        writeOutputFile(file, JSON.stringify(conversations, null, 2), { mode: 0o600 });
+        writeOutputFile(file, formatJson(conversations), { mode: 0o600 });
         console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));

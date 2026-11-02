@@ -767,6 +767,8 @@ venice chat -f json "List items" | jq '.'
 venice chat "Generate code" | pbcopy
 ```
 
+Model replies, other text from the Venice API, and your saved history are printed with terminal escape sequences, control characters, and bidirectional text controls removed; tabs and newlines are kept. This applies to piped output too, because a pipe can still end at a terminal (`| tee`, `| less`). Output redirected to a regular file with `> file` or `-o file` keeps the exact text. JSON output writes those characters as `\uXXXX` escapes instead, so it parses to the same values.
+
 ## Privacy
 
 Venice CLI is designed with privacy in mind:

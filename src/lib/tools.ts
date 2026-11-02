@@ -8,7 +8,7 @@ import type { ToolDefinition } from '../types/index.js';
 import { Ajv, type ValidateFunction } from 'ajv';
 import { randomInt, randomUUID } from 'crypto';
 import { escapeInvisible, getChalk } from './output.js';
-import { confirm } from './prompt.js';
+import { confirm, promptOutput, promptUnavailableReason } from './prompt.js';
 
 export const MAX_TOOL_ARGUMENTS_BYTES = 64 * 1024;
 export const MAX_TOOL_RESULT_BYTES = 64 * 1024;
@@ -593,20 +593,29 @@ export async function executeTool(
   return result;
 }
 
+/** The tool call shown for approval, with invisible characters escaped. */
+export function formatToolApprovalRequest(name: string, args: unknown): string {
+  const c = getChalk();
+  return [
+    '',
+    c.yellow('⚡ Tool Call Request'),
+    `${c.cyan('Tool:')} ${escapeInvisible(name)}`,
+    `${c.cyan('Args:')} ${escapeInvisible(String(JSON.stringify(args, null, 2)))}`,
+    '',
+  ].join('\n');
+}
+
 async function promptForApproval(name: string, args: unknown): Promise<boolean> {
-  if (!process.stdin.isTTY) {
+  const unavailable = promptUnavailableReason();
+  if (unavailable) {
     throw new Error(
-      'Tool calls need approval on a terminal, but stdin is not a terminal. ' +
+      `Tool calls need approval on a terminal, but ${unavailable}. ` +
       'Run the command in a terminal, or omit --interactive-tools.'
     );
   }
-  const c = getChalk();
-  
-  console.log('\n' + c.yellow('⚡ Tool Call Request'));
-  console.log(`${c.cyan('Tool:')} ${escapeInvisible(name)}`);
-  console.log(`${c.cyan('Args:')} ${escapeInvisible(String(JSON.stringify(args, null, 2)))}`);
-
-  return confirm(c.yellow('\nApprove? [y/N] '));
+  const output = promptOutput();
+  output.write(formatToolApprovalRequest(name, args));
+  return confirm(getChalk().yellow('\nApprove? [y/N] '), { output });
 }
 
 export function formatToolsHelp(): string {

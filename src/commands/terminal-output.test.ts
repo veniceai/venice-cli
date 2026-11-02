@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -55,12 +55,28 @@ async function withApi<T>(routes: Routes, run: (baseUrl: string) => Promise<T>):
   }
 }
 
-function runCli(
-  args: string[],
-  options: { home: string; baseUrl?: string; terminal?: boolean; cwd?: string }
-): Promise<CliResult> {
+interface RunOptions {
+  home: string;
+  baseUrl?: string;
+  cwd?: string;
+  /** Redirects stdout and stderr to regular files, as `> out 2> err` does. */
+  toFiles?: boolean;
+  /**
+   * A bash script that runs the CLI as "$@". Node's 'pipe' stdio is a socket,
+   * and opening /dev/stdout on a socket fails; bash joins `|` with real pipes.
+   */
+  bash?: string;
+}
+
+function runCli(args: string[], options: RunOptions): Promise<CliResult> {
+  const [command, commandArgs]: [string, string[]] = options.bash
+    ? ['bash', ['-o', 'pipefail', '-c', options.bash, 'bash', process.execPath, cliPath, ...args]]
+    : [process.execPath, [cliPath, ...args]];
+  const filesDir = options.toFiles ? mkdtempSync(join(tmpdir(), 'venice-terminal-output-files-')) : undefined;
+  // Appending, as `>>` does, so a write through /dev/stdout is not overwritten by later output.
+  const files = filesDir ? ['stdout', 'stderr'].map((name) => openSync(join(filesDir, name), 'a')) : [];
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
+    const child = spawn(command, commandArgs, {
       cwd: options.cwd ?? options.home,
       env: {
         ...process.env,
@@ -69,16 +85,23 @@ function runCli(
         NO_COLOR: '1',
         VENICE_API_BASE_URL: options.baseUrl ?? 'http://127.0.0.1:9/api/v1',
         VENICE_API_KEY: 'test-key',
-        VENICE_TEST_TERMINAL_OUTPUT: options.terminal ? '1' : '',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', files[0] ?? 'pipe', files[1] ?? 'pipe'],
     });
+    files.forEach((fd) => closeSync(fd));
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    child.stdout?.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.once('error', reject);
-    child.once('close', (status) => resolve({ status, stdout, stderr }));
+    child.once('close', (status) => {
+      if (filesDir) {
+        stdout = readFileSync(join(filesDir, 'stdout'), 'utf8');
+        stderr = readFileSync(join(filesDir, 'stderr'), 'utf8');
+        rmSync(filesDir, { recursive: true, force: true });
+      }
+      resolve({ status, stdout, stderr });
+    });
   });
 }
 
@@ -93,7 +116,7 @@ function assertClean(output: string, label: string): void {
   assert.doesNotMatch(output, UNSAFE, `${label}: ${JSON.stringify(output)}`);
 }
 
-test('history output on a terminal strips control sequences stored in history.json', async () => {
+test('history output strips control sequences stored in history.json unless redirected to a file', async () => {
   await withHome(async (home) => {
     mkdirSync(join(home, '.venice'), { recursive: true, mode: 0o700 });
     writeFileSync(join(home, '.venice', 'history.json'), JSON.stringify([{
@@ -109,34 +132,40 @@ test('history output on a terminal strips control sequences stored in history.js
     }]));
 
     for (const args of [['history', 'show'], ['history', 'show', '-f', 'markdown'], ['history'], ['history', 'list']]) {
-      const result = await runCli(args, { home, terminal: true });
+      const result = await runCli(args, { home });
       assert.equal(result.status, 0, result.stderr);
       assertClean(result.stdout, args.join(' '));
       assert.match(result.stdout, /modellink textsafetxt\.exe/, args.join(' '));
     }
-    const shown = await runCli(['history', 'show'], { home, terminal: true });
+    const shown = await runCli(['history', 'show'], { home });
     assert.match(shown.stdout, /User: questionlink textsafetxt\.exe/);
     assert.match(shown.stdout, /Assistant: answerlink textsafetxt\.exe/);
     assert.match(shown.stdout, /Character: characterlink textsafetxt\.exe/);
 
-    const piped = await runCli(['history', 'show'], { home });
-    assert.equal(piped.status, 0, piped.stderr);
-    assert.ok(piped.stdout.includes(`Assistant: answer${PAYLOAD}`), 'piped output is unchanged');
+    const redirected = await runCli(['history', 'show'], { home, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.ok(redirected.stdout.includes(`Assistant: answer${PAYLOAD}`), 'output redirected to a file is unchanged');
 
-    const json = await runCli(['history', 'show', '-f', 'json'], { home, terminal: true });
+    const json = await runCli(['history', 'show', '-f', 'json'], { home });
     assertClean(json.stdout.replace(/\n/g, ''), 'history show -f json');
     assert.equal(JSON.parse(json.stdout).messages[1].content, `answer${PAYLOAD}`);
+
+    const exported = await runCli(['history', 'export', 'export.json'], { home });
+    assert.equal(exported.status, 0, exported.stderr);
+    const exportedJson = readFileSync(join(home, 'export.json'), 'utf8');
+    assertClean(exportedJson, 'history export');
+    assert.equal(JSON.parse(exportedJson)[0].messages[1].content, `answer${PAYLOAD}`);
   });
 });
 
-test('models output on a terminal strips control sequences, and JSON escapes them', async () => {
+test('models output strips control sequences, and JSON escapes them', async () => {
   const models = [{
     id: `model${PAYLOAD}`,
     type: 'text',
     model_spec: { description: `description ${PAYLOAD} end` },
   }];
   await withApi({ 'GET /models': ok({ data: models }) }, (baseUrl) => withHome(async (home) => {
-    const pretty = await runCli(['models'], { home, baseUrl, terminal: true });
+    const pretty = await runCli(['models'], { home, baseUrl });
     assert.equal(pretty.status, 0, pretty.stderr);
     assertClean(pretty.stdout, 'models');
     assert.match(pretty.stdout, /modellink textsafetxt\.exe/);
@@ -149,20 +178,20 @@ test('models output on a terminal strips control sequences, and JSON escapes the
   }));
 });
 
-test('API error text is sanitised only when stderr is a terminal', async () => {
+test('API error text is sanitised unless stderr is a regular file', async () => {
   const error = () => ({ status: 400, json: { error: { message: `bad request ${PAYLOAD}` } } });
   await withApi({ 'GET /models': error }, (baseUrl) => withHome(async (home) => {
-    const terminal = await runCli(['models'], { home, baseUrl, terminal: true });
-    assert.equal(terminal.status, 1);
-    assert.equal(terminal.stderr, 'Error: bad request link textsafetxt.exe\n');
-
     const piped = await runCli(['models'], { home, baseUrl });
     assert.equal(piped.status, 1);
-    assert.equal(piped.stderr, `Error: bad request ${PAYLOAD}\n`);
+    assert.equal(piped.stderr, 'Error: bad request link textsafetxt.exe\n');
+
+    const redirected = await runCli(['models'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 1);
+    assert.equal(redirected.stderr, `Error: bad request ${PAYLOAD}\n`);
   }));
 });
 
-test('search, scrape, parse and transcribe strip control sequences on a terminal', async () => {
+test('search, scrape, parse and transcribe strip control sequences unless redirected to a file', async () => {
   const routes: Routes = {
     'POST /augment/search': ok({
       query: 'q',
@@ -191,19 +220,51 @@ test('search, scrape, parse and transcribe strip control sequences on a terminal
       [['transcribe', 'clip.wav', '-f', 'pretty', '--timestamps'], /saidlink textsafetxt\.exe[\s\S]*segmentlink textsafetxt\.exe/],
     ];
     for (const [args, expected] of runs) {
-      const result = await runCli(args, { home, baseUrl, terminal: true });
+      const result = await runCli(args, { home, baseUrl });
       assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
       assertClean(result.stdout, args.join(' '));
       assert.match(result.stdout, expected, args.join(' '));
     }
 
-    const saved = await runCli(['parse', 'doc.txt', '-o', 'out.txt'], { home, baseUrl, terminal: true });
-    assert.equal(saved.status, 0, saved.stderr);
-    assert.equal(readFileSync(join(home, 'out.txt'), 'utf8'), `parsed${PAYLOAD}`);
+    const redirected = await runCli(['scrape', 'https://example.com/'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.equal(redirected.stdout, `page${PAYLOAD}\n`);
   }));
 });
 
-test('voices and characters show strip control sequences from catalog fields on a terminal', async () => {
+test(
+  'parse and scrape -o strip control sequences unless the destination is a regular file',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const routes: Routes = {
+      'POST /augment/scrape': ok({ url: 'https://example.com/', content: `page${PAYLOAD}`, format: 'markdown' }),
+      'POST /augment/text-parser': ok({ text: `parsed${PAYLOAD}`, tokens: 7 }),
+    };
+    await withApi(routes, (baseUrl) => withHome(async (home) => {
+      writeFileSync(join(home, 'doc.txt'), 'document');
+
+      for (const [args, text] of [[['parse', 'doc.txt'], 'parsed'], [['scrape', 'https://example.com/'], 'page']] as const) {
+        for (const script of ['"$@" -o /dev/stdout | cat', '"$@" -o >(cat)']) {
+          const label = `${args[0]}: ${script}`;
+          const piped = await runCli([...args], { home, baseUrl, bash: script });
+          assert.equal(piped.status, 0, `${label}: ${piped.stderr}`);
+          assertClean(piped.stdout, label);
+          assert.ok(piped.stdout.includes(`${text}link textsafetxt.exe`), `${label}: ${JSON.stringify(piped.stdout)}`);
+        }
+
+        const redirected = await runCli([...args, '-o', '/dev/stdout'], { home, baseUrl, toFiles: true });
+        assert.equal(redirected.status, 0, redirected.stderr);
+        assert.ok(redirected.stdout.startsWith(`${text}${PAYLOAD}`), JSON.stringify(redirected.stdout));
+
+        const saved = await runCli([...args, '-o', 'out.txt'], { home, baseUrl });
+        assert.equal(saved.status, 0, saved.stderr);
+        assert.equal(readFileSync(join(home, 'out.txt'), 'utf8'), `${text}${PAYLOAD}`);
+      }
+    }));
+  }
+);
+
+test('voices and characters show strip control sequences from catalog fields unless redirected to a file', async () => {
   const routes: Routes = {
     'GET /models': ok({
       data: [{
@@ -237,25 +298,26 @@ test('voices and characters show strip control sequences from catalog fields on 
     }),
   };
   await withApi(routes, (baseUrl) => withHome(async (home) => {
-    const voices = await runCli(['voices'], { home, baseUrl, terminal: true });
+    const voices = await runCli(['voices'], { home, baseUrl });
     assert.equal(voices.status, 0, voices.stderr);
     assertClean(voices.stdout, 'voices');
     assert.match(voices.stdout, /tts-modellink textsafetxt\.exe · cloning \(30link textsafetxt\.exe-day handles\)/);
     assert.match(voices.stdout, /voicelink textsafetxt\.exe/);
 
-    const character = await runCli(['characters', 'show', 'sample'], { home, baseUrl, terminal: true });
+    const character = await runCli(['characters', 'show', 'sample'], { home, baseUrl });
     assert.equal(character.status, 0, character.stderr);
     assertClean(character.stdout, 'characters show');
     assert.match(character.stdout, /Rating: 4\.9link textsafetxt\.exe \(3link textsafetxt\.exe ratings\)/);
     assert.match(character.stdout, /Average 5link textsafetxt\.exe · 1link textsafetxt\.exe review/);
     assert.match(character.stdout, /userlink textsafetxt\.exe/);
 
-    const piped = await runCli(['characters', 'show', 'sample'], { home, baseUrl });
-    assert.ok(piped.stdout.includes(`name${PAYLOAD}`), 'piped output is unchanged');
+    const redirected = await runCli(['characters', 'show', 'sample'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.ok(redirected.stdout.includes(`name${PAYLOAD}`), 'output redirected to a file is unchanged');
   }));
 });
 
-test('non-streaming chat output is sanitised on a terminal and unchanged when piped', async () => {
+test('non-streaming chat output is sanitised unless redirected to a file', async () => {
   const routes: Routes = {
     'GET /models': ok({ data: [{ id: 'test-model', type: 'text' }] }),
     'POST /chat/completions': ok({
@@ -263,13 +325,13 @@ test('non-streaming chat output is sanitised on a terminal and unchanged when pi
     }),
   };
   await withApi(routes, (baseUrl) => withHome(async (home) => {
-    const terminal = await runCli(['chat', '-m', 'test-model', 'hi'], { home, baseUrl, terminal: true });
-    assert.equal(terminal.status, 0, terminal.stderr);
-    assert.equal(terminal.stdout, 'replylink textsafetxt.exe\n');
-
     const piped = await runCli(['chat', '-m', 'test-model', 'hi'], { home, baseUrl });
     assert.equal(piped.status, 0, piped.stderr);
-    assert.equal(piped.stdout, `reply${PAYLOAD}\n`);
+    assert.equal(piped.stdout, 'replylink textsafetxt.exe\n');
+
+    const redirected = await runCli(['chat', '-m', 'test-model', 'hi'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.equal(redirected.stdout, `reply${PAYLOAD}\n`);
 
     const json = await runCli(['chat', '-m', 'test-model', '-f', 'json', 'hi'], { home, baseUrl });
     assert.equal(json.status, 0, json.stderr);
@@ -278,7 +340,7 @@ test('non-streaming chat output is sanitised on a terminal and unchanged when pi
   }));
 });
 
-test('tee output on a terminal strips control sequences from server fields, and JSON escapes them', async () => {
+test('tee output strips control sequences from server fields, and JSON escapes them', async () => {
   const attestation = {
     model: `model${PAYLOAD}`,
     tee_provider: `provider${PAYLOAD}`,
@@ -314,10 +376,10 @@ test('tee output on a terminal strips control sequences from server fields, and 
     ];
     for (const [args, status] of cases) {
       const label = args.join(' ');
-      const terminal = await runCli(args, { home, baseUrl, terminal: true });
-      assert.equal(terminal.status, status, `${label}: ${terminal.stderr}`);
-      assertClean(terminal.stdout, label);
-      assert.match(terminal.stdout, /link textsafetxt\.exe/, label);
+      const output = await runCli(args, { home, baseUrl });
+      assert.equal(output.status, status, `${label}: ${output.stderr}`);
+      assertClean(output.stdout, label);
+      assert.match(output.stdout, /link textsafetxt\.exe/, label);
 
       const json = await runCli([...args, '-f', 'json'], { home, baseUrl });
       assert.equal(json.status, status, `${label} -f json: ${json.stderr}`);
@@ -327,7 +389,7 @@ test('tee output on a terminal strips control sequences from server fields, and 
   }));
 });
 
-test('video, music and image style output on a terminal strips control sequences, and JSON escapes them', async () => {
+test('video, music and image style output strips control sequences, and JSON escapes them', async () => {
   const routes: Routes = {
     'POST /video/retrieve': ok({
       status: `queued${PAYLOAD}`,
@@ -350,11 +412,11 @@ test('video, music and image style output on a terminal strips control sequences
     ];
     for (const args of commands) {
       const label = args.join(' ');
-      const terminal = await runCli([...args, '-f', 'pretty'], { home, baseUrl, terminal: true });
-      assert.equal(terminal.status, 0, `${label}: ${terminal.stderr}`);
-      assertClean(terminal.stdout, label);
-      assertClean(terminal.stderr, `${label} (stderr)`);
-      assert.match(terminal.stdout, /link textsafetxt\.exe/, label);
+      const pretty = await runCli([...args, '-f', 'pretty'], { home, baseUrl });
+      assert.equal(pretty.status, 0, `${label}: ${pretty.stderr}`);
+      assertClean(pretty.stdout, label);
+      assertClean(pretty.stderr, `${label} (stderr)`);
+      assert.match(pretty.stdout, /link textsafetxt\.exe/, label);
 
       const json = await runCli([...args, '-f', 'json'], { home, baseUrl });
       assert.equal(json.status, 0, `${label} -f json: ${json.stderr}`);
@@ -364,7 +426,7 @@ test('video, music and image style output on a terminal strips control sequences
   }));
 });
 
-test('billing and keys output on a terminal strips control sequences, and JSON escapes them', async () => {
+test('billing and keys output strips control sequences, and JSON escapes them', async () => {
   const routes: Routes = {
     'GET /billing/balance': ok({
       canConsume: true,
@@ -404,10 +466,10 @@ test('billing and keys output on a terminal strips control sequences, and JSON e
     ];
     for (const [args, expected] of runs) {
       const label = args.join(' ');
-      const terminal = await runCli([...args, '-f', 'pretty'], { home, baseUrl, terminal: true });
-      assert.equal(terminal.status, 0, `${label}: ${terminal.stderr}`);
-      assertClean(terminal.stdout, label);
-      assert.match(terminal.stdout, expected, label);
+      const pretty = await runCli([...args, '-f', 'pretty'], { home, baseUrl });
+      assert.equal(pretty.status, 0, `${label}: ${pretty.stderr}`);
+      assertClean(pretty.stdout, label);
+      assert.match(pretty.stdout, expected, label);
 
       const json = await runCli([...args, '-f', 'json'], { home, baseUrl });
       assert.equal(json.status, 0, `${label} -f json: ${json.stderr}`);
@@ -415,35 +477,36 @@ test('billing and keys output on a terminal strips control sequences, and JSON e
       JSON.parse(json.stdout);
     }
 
-    const piped = await runCli(['billing', 'balance', '-f', 'pretty'], { home, baseUrl });
-    assert.ok(piped.stdout.includes(`USD: 12.5${PAYLOAD}`), 'piped output is unchanged');
+    const redirected = await runCli(['billing', 'balance', '-f', 'pretty'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.ok(redirected.stdout.includes(`USD: 12.5${PAYLOAD}`), 'output redirected to a file is unchanged');
   }));
 });
 
-test('rpc output on a terminal strips control sequences, and response JSON is escaped only on a terminal', async () => {
+test('rpc output strips control sequences, and response JSON is escaped unless redirected to a file', async () => {
   const response = { jsonrpc: '2.0', id: 1, result: `value${PAYLOAD}` };
   const routes: Routes = {
     'POST /crypto/rpc/test-net': () => ({ json: response, headers: { 'x-venice-rpc-credits': '1\u009b2J' } }),
     'GET /crypto/rpc/networks': ok({ networks: [`net${PAYLOAD}`] }),
   };
   await withApi(routes, (baseUrl) => withHome(async (home) => {
-    const pretty = await runCli(['rpc', 'test-net', 'eth_test', '-f', 'pretty'], { home, baseUrl, terminal: true });
+    const pretty = await runCli(['rpc', 'test-net', 'eth_test', '-f', 'pretty'], { home, baseUrl });
     assert.equal(pretty.status, 0, pretty.stderr);
     assertClean(pretty.stdout, 'rpc -f pretty');
     assert.match(pretty.stdout, /valuelink textsafetxt\.exe/);
     assert.match(pretty.stdout, /Credits: 1\n/);
 
-    const terminal = await runCli(['rpc', 'test-net', 'eth_test', '-f', 'json'], { home, baseUrl, terminal: true });
-    assert.equal(terminal.status, 0, terminal.stderr);
-    assertClean(terminal.stdout.replace(/\n/g, ''), 'rpc -f json on a terminal');
-    assert.deepEqual(JSON.parse(terminal.stdout), response);
-
     const piped = await runCli(['rpc', 'test-net', 'eth_test', '-f', 'json'], { home, baseUrl });
     assert.equal(piped.status, 0, piped.stderr);
-    assert.equal(piped.stdout, `${JSON.stringify(response)}\n`);
+    assertClean(piped.stdout.replace(/\n/g, ''), 'rpc -f json');
+    assert.deepEqual(JSON.parse(piped.stdout), response);
+
+    const redirected = await runCli(['rpc', 'test-net', 'eth_test', '-f', 'json'], { home, baseUrl, toFiles: true });
+    assert.equal(redirected.status, 0, redirected.stderr);
+    assert.equal(redirected.stdout, `${JSON.stringify(response)}\n`);
 
     for (const format of ['raw', 'pretty']) {
-      const networks = await runCli(['rpc', 'networks', '-f', format], { home, baseUrl, terminal: true });
+      const networks = await runCli(['rpc', 'networks', '-f', format], { home, baseUrl });
       assert.equal(networks.status, 0, networks.stderr);
       assertClean(networks.stdout, `rpc networks -f ${format}`);
       assert.match(networks.stdout, /netlink textsafetxt\.exe/);
