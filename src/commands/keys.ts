@@ -221,8 +221,8 @@ export function registerKeysCommand(program: Command): void {
       console.log(`Access permitted: ${limits.accessPermitted ? c.green('yes') : c.red('no')}`);
       console.log(`Tier: ${limits.apiTier.id}`);
       console.log(`Charged: ${limits.apiTier.isCharged ? 'yes' : 'no'}`);
-      console.log(`USD balance: ${limits.balances.USD}`);
-      console.log(`DIEM balance: ${limits.balances.DIEM}`);
+      console.log(`USD balance: ${limits.balances.USD ?? 'none'}`);
+      console.log(`DIEM balance: ${limits.balances.DIEM ?? 'none'}`);
       console.log(`Key expiration: ${limits.keyExpiration ?? 'never'}`);
       console.log(`Next epoch: ${limits.nextEpochBegins}`);
 

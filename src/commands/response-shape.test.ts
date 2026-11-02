@@ -142,7 +142,8 @@ test('keys rate-limits fails on a response without the expected fields', async (
     {},
     { data: {} },
     { data: { ...valid, apiTier: undefined } },
-    { data: { ...valid, balances: { USD: 1 } } },
+    { data: { ...valid, balances: undefined } },
+    { data: { ...valid, balances: { USD: 'lots' } } },
     { data: { ...valid, rateLimits: [{ apiModelId: 'model' }] } },
   ];
   for (const [body, format] of cases(bodies, ['pretty', 'json'])) {
@@ -190,6 +191,18 @@ test('keys list and rate-limits accept well-formed responses', async () => {
     assert.match(limits.stdout, /RPM/);
   } finally {
     rmSync(limits.homeDir, { recursive: true, force: true });
+  }
+});
+
+test('keys rate-limits accepts a response that omits optional balances', async () => {
+  const body = { data: { ...rateLimits(), balances: {} } };
+  const result = await runCli(body, () => ['keys', 'rate-limits']);
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /USD balance: none/);
+    assert.match(result.stdout, /DIEM balance: none/);
+  } finally {
+    rmSync(result.homeDir, { recursive: true, force: true });
   }
 });
 

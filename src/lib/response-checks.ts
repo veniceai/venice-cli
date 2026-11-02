@@ -89,8 +89,8 @@ export function assertApiKeyRateLimits(value: unknown): void {
     !isString(value.apiTier.id) ||
     !isBoolean(value.apiTier.isCharged) ||
     !isObject(value.balances) ||
-    !isNullable(value.balances.USD, isNumber) ||
-    !isNullable(value.balances.DIEM, isNumber) ||
+    !isOptional(value.balances.USD, isNumber) ||
+    !isOptional(value.balances.DIEM, isNumber) ||
     !isOptional(value.keyExpiration, isString) ||
     !isString(value.nextEpochBegins) ||
     !isArrayOf(value.rateLimits, isModelLimits)
