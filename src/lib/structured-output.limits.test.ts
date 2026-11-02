@@ -229,6 +229,10 @@ test('reply-derived text in error messages is escaped and shortened', () => {
     validateAgainstSchema({ 'a\u009bb\u202e': 'x' }, { type: 'object', additionalProperties: { type: 'integer' } }),
     ['$/a\\u009bb\\u202e: must be integer']
   );
+  assert.deepEqual(
+    validateAgainstSchema({ 'a\u061cb\u200ec\u200fd\ne': 1 }, closed),
+    ['$: unexpected property "a\\u061cb\\u200ec\\u200fd\\u000ae"']
+  );
 
   const [line] = validateAgainstSchema({ [`${'k'.repeat(10_000)}\u001b`]: 1 }, closed);
   assert.ok(line.length < 300, `${line.length} characters`);

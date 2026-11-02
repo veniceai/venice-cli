@@ -13,6 +13,7 @@ import {
 import { Ajv2019 } from 'ajv/dist/2019.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import * as formatsModule from 'ajv-formats';
+import { escapeInvisible } from './output.js';
 
 export const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
 export const MAX_SCHEMA_NODES = 1000;
@@ -24,7 +25,6 @@ const RESPONSE_FORMAT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const URL_FORMAT_PROTOCOLS = new Set(['http:', 'https:', 'ftp:']);
 const MAX_REPORTED_SCHEMA_ERRORS = 20;
 const MAX_ERROR_DETAIL_LENGTH = 200;
-const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 
 // Keyed by schema object: loading the schema, building each request and
 // validating the reply all pass the same object, so a run compiles it once.
@@ -419,10 +419,8 @@ function displayText(value: string): string {
   const shortened = value.length > MAX_ERROR_DETAIL_LENGTH
     ? `${value.slice(0, MAX_ERROR_DETAIL_LENGTH)}…`
     : value;
-  return shortened.replace(
-    UNSAFE_DISPLAY_CHARACTERS,
-    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
+  // Each error is reported on one line.
+  return escapeInvisible(shortened).replace(/\n/g, '\\u000a');
 }
 
 function schemaSizeError(filePath: string): Error {
