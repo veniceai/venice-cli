@@ -106,17 +106,26 @@ export class VeniceApiError extends Error {
   static fromResponse(status: number, body: string): VeniceApiError {
     let message: unknown;
     let code: unknown;
+    let details: unknown;
     try {
       const json = JSON.parse(body);
       const error = json?.error;
       message = typeof error === 'string' ? error : error?.message || json?.message;
       code = error?.code;
+      details = json?.details;
     } catch {
       // Not JSON: the body text is the message.
     }
-    const text = typeof message === 'string' && message.trim()
-      ? message
-      : body.trim() || `HTTP ${status}`;
+    const reasons = detailReasons(details);
+    let text: string;
+    if (typeof message !== 'string' || !message.trim()) {
+      text = body.trim() || `HTTP ${status}`;
+    } else if (reasons.length > 0) {
+      text = `${message}:\n${reasons.map((reason) => `  - ${reason}`).join('\n')}`;
+    } else {
+      // Details in a shape we cannot read are kept by showing the whole body.
+      text = details == null ? message : body.trim();
+    }
     return new VeniceApiError(
       truncateErrorMessage(text),
       status,
@@ -141,6 +150,24 @@ export class VeniceApiError extends Error {
   isRateLimited(): boolean {
     return this.statusCode === 429;
   }
+}
+
+// Venice 400s list per-field reasons as { field: { _errors: [reason] } } under `details`.
+function detailReasons(details: unknown, path: string[] = []): string[] {
+  if (details === null || typeof details !== 'object' || path.length > 10) return [];
+  const reasons: string[] = [];
+  for (const [key, value] of Object.entries(details)) {
+    if (key !== '_errors') {
+      reasons.push(...detailReasons(value, [...path, key]));
+    } else if (Array.isArray(value)) {
+      for (const reason of value) {
+        if (typeof reason === 'string' && reason.trim()) {
+          reasons.push(path.length > 0 ? `${path.join('.')}: ${reason}` : reason);
+        }
+      }
+    }
+  }
+  return reasons;
 }
 
 function withProcessedNote<E extends Error>(error: E): E {

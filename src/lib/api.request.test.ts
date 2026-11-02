@@ -226,6 +226,39 @@ test('error bodies are read up to 64 KiB and long messages are truncated', async
   );
 });
 
+test('a 400 lists the fields Venice rejected, and unreadable details keep the whole body', async () => {
+  handler = (_request, response) => sendJson(response, 400, {
+    error: 'Invalid request parameters',
+    details: {
+      _errors: [],
+      temperature: { _errors: ['Number must be less than or equal to 2'] },
+      messages: { 0: { content: { _errors: ['Required'] } } },
+    },
+  });
+  await assert.rejects(
+    api.apiRequest('/chat/completions', { method: 'POST', body: {}, showSpinner: false }),
+    (error: Error) => {
+      assert.equal(
+        error.message,
+        'Invalid request parameters:\n' +
+        '  - temperature: Number must be less than or equal to 2\n' +
+        '  - messages.0.content: Required'
+      );
+      return true;
+    }
+  );
+
+  const unreadable = { error: 'Invalid request parameters', details: { hint: 'use fewer tokens' } };
+  handler = (_request, response) => sendJson(response, 400, unreadable);
+  await assert.rejects(
+    api.apiRequest('/chat/completions', { method: 'POST', body: {}, showSpinner: false }),
+    (error: Error) => {
+      assert.equal(error.message, JSON.stringify(unreadable));
+      return true;
+    }
+  );
+});
+
 async function connectionRefusedError(): Promise<unknown> {
   const closed = createServer();
   await listen(closed);
