@@ -96,6 +96,15 @@ export function registerConfigCommand(program: Command): void {
     .command('set <key> [value]')
     .description('Set a configuration value')
     .option('--stdin', 'Read the API key from standard input')
+    .addHelpText(
+      'after',
+      `
+The API key is never read from the command line, where it would end up in
+shell history and process listings. Type it at the hidden prompt, or pipe it
+in with --stdin:
+  $ venice config set api_key
+  $ printf '%s' "$VENICE_API_KEY" | venice config set api_key --stdin`
+    )
     .action(async (key: string, value: string | undefined, options: { stdin?: boolean }) => {
       const validKeys: Array<keyof VeniceConfig> = [
         'api_key',
@@ -118,8 +127,12 @@ export function registerConfigCommand(program: Command): void {
         throw new Error('--stdin is only supported for api_key');
       }
 
-      if (options.stdin && value !== undefined) {
-        throw new Error('Do not provide a value when using --stdin');
+      if (key === 'api_key' && value !== undefined) {
+        throw new Error(
+          'Refusing to read the API key from the command line, where it can end up in shell history, ' +
+          'process listings and logs. Run "venice config set api_key" to type it without echo, or pipe it ' +
+          'from a file or environment variable to "venice config set api_key --stdin".'
+        );
       }
 
       // Fail before prompting if the existing config cannot be updated safely.
@@ -129,7 +142,7 @@ export function registerConfigCommand(program: Command): void {
         // A key typed at a terminal is read without echo, even with --stdin.
         if (options.stdin && !process.stdin.isTTY) {
           value = await readStdin();
-        } else if (value === undefined) {
+        } else {
           const promptUnavailable = promptUnavailableReason();
           if (promptUnavailable) {
             throw new Error(
@@ -139,11 +152,6 @@ export function registerConfigCommand(program: Command): void {
           }
           value = await askHidden(
             'API Key (get from https://venice.ai/settings/api): '
-          );
-        } else {
-          console.error(
-            'Warning: passing an API key as an argument may expose it. ' +
-            'Use "venice config set api_key" or "--stdin" instead.'
           );
         }
       } else if (value === undefined) {

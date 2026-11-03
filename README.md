@@ -45,7 +45,8 @@ To upgrade, run `npm install -g veniceai-cli@latest`.
    `~/.venice/config.json`, which only your user account can read. To set the
    key and your default models in one go, run `venice config init` instead.
    For non-interactive use, pipe the key over standard input with
-   `venice config set api_key --stdin`.
+   `venice config set api_key --stdin`. The key can't be passed as an argument,
+   because command lines end up in shell history and process listings.
 
    Alternatively, set an environment variable, which takes precedence over the
    config file:

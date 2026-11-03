@@ -169,7 +169,7 @@ test('config show --format json masks api_key', () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
 
   try {
-    const setResult = runCli(['config', 'set', 'api_key', 'sk-test-1234567890'], homeDir);
+    const setResult = runCli(['config', 'set', 'api_key', '--stdin'], homeDir, 'sk-test-1234567890\n');
     assert.equal(setResult.status, 0, setResult.stderr);
 
     const showResult = runCli(['config', 'show', '--format', 'json'], homeDir);
@@ -202,16 +202,36 @@ test('config set api_key --stdin saves without printing the key', () => {
   }
 });
 
-test('config set api_key warns when the key is passed as an argument', () => {
+test('config set api_key refuses a key passed as an argument and saves nothing', () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
   const apiKey = 'sk-argv-1234567890';
+  const runs: Array<[string, string[]]> = [
+    ['argument', ['config', 'set', 'api_key', apiKey]],
+    ['argument with --stdin', ['config', 'set', 'api_key', apiKey, '--stdin']],
+  ];
 
   try {
-    const result = runCli(['config', 'set', 'api_key', apiKey], homeDir);
+    for (const [label, args] of runs) {
+      const result = runCli(args, homeDir, `${apiKey}\n`);
+      assert.equal(result.status, 1, label);
+      assert.match(result.stderr, /Refusing to read the API key from the command line/, label);
+      assert.match(result.stderr, /venice config set api_key --stdin/, label);
+      assert.ok(!result.stdout.includes(apiKey) && !result.stderr.includes(apiKey), label);
+    }
+    assert.equal(existsSync(join(homeDir, '.venice', 'config.json')), false);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test('config set --help says the API key is never read from the command line', () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
+
+  try {
+    const result = runCli(['config', 'set', '--help'], homeDir);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stderr, /passing an API key as an argument may expose it/);
-    assert.ok(!result.stdout.includes(apiKey));
-    assert.ok(!result.stderr.includes(apiKey));
+    assert.match(result.stdout, /The API key is never read from the command line/);
+    assert.match(result.stdout, /venice config set api_key --stdin/);
   } finally {
     rmSync(homeDir, { recursive: true, force: true });
   }
