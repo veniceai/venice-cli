@@ -23,3 +23,8 @@ export function getVersion(): string {
     return '0.0.0';
   }
 }
+
+// Only for requests to the Venice API: downloads from other hosts must not send it.
+export function getUserAgent(): string {
+  return `veniceai-cli/${getVersion()}`;
+}

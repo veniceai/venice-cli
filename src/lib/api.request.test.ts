@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, beforeEach } from 'node:test';
+import { getVersion } from './version.js';
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => void;
 
@@ -60,6 +61,8 @@ process.env.VENICE_API_BASE_URL = `${origin}/api/v1`;
 process.env.VENICE_API_KEY = 'test-key';
 process.env.VENICE_TEST_RETRY_DELAY_MS = '1';
 const api = await import('./api.js');
+const { downloadToBuffer } = await import('./media.js');
+const { fetchDownload } = await import('./download-guard.js');
 
 beforeEach(() => {
   requests.length = 0;
@@ -644,4 +647,73 @@ test('a 403 shows the server reason; only a 401 suggests replacing the key', asy
     );
     return true;
   });
+});
+
+test('every request to the Venice API names the CLI and its version in the User-Agent', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'venice-user-agent-'));
+  const file = (name: string): string => {
+    const filePath = join(directory, name);
+    writeFileSync(filePath, Buffer.alloc(64, 1));
+    return filePath;
+  };
+  // A refused first connection makes the client send its connectivity probe.
+  const refused = await connectionRefusedError();
+  let refuseNext = true;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (refuseNext) {
+      refuseNext = false;
+      throw refused;
+    }
+    return guardedFetch(input, init);
+  }) as typeof fetch;
+  handler = (_request, response) => sendJson(response, 400, { error: 'stop here' });
+
+  try {
+    for (const send of [
+      () => api.apiRequest('/characters', { showSpinner: false }),
+      () => api.transcribe(file('clip.wav')),
+      () => api.parseDocument(file('notes.txt')),
+      () => api.upscaleImage(file('photo.png')),
+      () => api.textToSpeech('hello'),
+      () => api.cloneVoice(file('voice.wav')),
+      () => api.getVideoStatus('q-1', 'video-model'),
+    ]) {
+      await send().catch(() => undefined);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(requests.map((request) => `${request.method} ${request.path}`), [
+    'HEAD /api/v1/models',
+    'GET /api/v1/characters',
+    'POST /api/v1/audio/transcriptions',
+    'POST /api/v1/augment/text-parser',
+    'POST /api/v1/image/upscale',
+    'POST /api/v1/audio/speech',
+    'POST /api/v1/audio/voices',
+    'POST /api/v1/video/retrieve',
+  ]);
+  for (const request of requests) {
+    assert.equal(
+      request.headers['user-agent'],
+      `veniceai-cli/${getVersion()}`,
+      `${request.method} ${request.path}`
+    );
+  }
+});
+
+test('downloads do not send the CLI User-Agent', async () => {
+  handler = (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+    response.end(Buffer.alloc(8));
+  };
+
+  await downloadToBuffer(`${origin}/attachment.png`, { maxBytes: 1024 });
+  await (await fetchDownload(`${origin}/result.mp4`, new AbortController().signal)).arrayBuffer();
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.doesNotMatch(String(request.headers['user-agent']), /veniceai-cli/, request.path);
+  }
 });

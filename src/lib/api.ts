@@ -7,7 +7,7 @@
 import { requireApiKey, trackUsage, type UsageEntry } from './config.js';
 import { startSpinner, stopSpinner } from './output.js';
 import { ServerSentEventParser } from './sse.js';
-import { getVersion } from './version.js';
+import { getUserAgent } from './version.js';
 import { Readable } from 'stream';
 import type { ReadableStreamReadResult } from 'stream/web';
 import { randomBytes, randomUUID } from 'crypto';
@@ -257,7 +257,7 @@ function getHeaders(
   contentType = 'application/json'
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    'User-Agent': `venice-cli/${getVersion()}`,
+    'User-Agent': getUserAgent(),
   };
   if (contentType) {
     headers['Content-Type'] = contentType;
@@ -279,6 +279,7 @@ async function checkOnline(): Promise<boolean> {
   try {
     await fetch(`${VENICE_API}/models`, {
       method: 'HEAD',
+      headers: { 'User-Agent': getUserAgent() },
       signal: controller.signal,
       redirect: 'manual',
     });
@@ -1405,7 +1406,7 @@ export async function transcribe(
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${requireApiKey()}`,
-        'User-Agent': `venice-cli/${getVersion()}`,
+        'User-Agent': getUserAgent(),
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': String(contentLength),
       },
@@ -2477,7 +2478,7 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${requireApiKey()}`,
-        'User-Agent': `venice-cli/${getVersion()}`,
+        'User-Agent': getUserAgent(),
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': String(contentLength),
       },
