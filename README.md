@@ -220,6 +220,9 @@ Extract text from PDF, DOCX, PPTX, XLSX, and plain text files (up to 25 MB):
 # Print extracted text
 venice parse report.pdf
 
+# Download a document over https, then parse it
+venice parse https://example.com/whitepaper.pdf
+
 # Save extracted text
 venice parse report.pdf -o report.txt
 
@@ -228,6 +231,11 @@ venice parse report.pdf -f json
 ```
 
 Parsing runs in memory on Venice infrastructure with zero data retention and does not invoke a model.
+
+A document URL is downloaded by the CLI, not by Venice, then uploaded like a
+local file. The CLI only downloads over https from public addresses (never
+`localhost`, private networks or cloud metadata addresses), follows at most 5
+redirects, and accepts PDF, Word, Office, EPUB and `text/*` responses.
 
 ### Web Scraping
 

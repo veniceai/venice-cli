@@ -2491,8 +2491,12 @@ function sanitizeMultipartFilename(filename: string): string {
   return filename.replace(/[\u0000-\u001f\u007f"\\]/g, '_');
 }
 
-// Parse a document without model inference
-export async function parseDocument(filePath: string): Promise<DocumentParseResponse> {
+// Parse a document without model inference. `upload` replaces the filename and
+// media type that would otherwise come from filePath.
+export async function parseDocument(
+  filePath: string,
+  upload: { filename?: string; mimeType?: string } = {}
+): Promise<DocumentParseResponse> {
   const fs = await import('fs');
   const path = await import('path');
   const crypto = await import('crypto');
@@ -2506,8 +2510,8 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
     MAX_DOCUMENT_PARSE_BYTES,
     'Document'
   );
-  const filename = path.basename(filePath);
-  const mimeType = mimeTypeFromPath(filePath);
+  const filename = upload.filename ?? path.basename(filePath);
+  const mimeType = upload.mimeType ?? mimeTypeFromPath(filePath);
   const boundary = `----venice-cli-${crypto.randomUUID()}`;
   const CRLF = '\r\n';
   const safeFilename = sanitizeMultipartFilename(filename);
