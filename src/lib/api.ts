@@ -902,6 +902,9 @@ export function buildImageGenerationBody(
     ['hideWatermark', 'hide_watermark'],
     ['safeMode', 'safe_mode'],
     ['embedExifMetadata', 'embed_exif_metadata'],
+    ['enhancePrompt', 'enhance_prompt'],
+    ['enableWebSearch', 'enable_web_search'],
+    ['disablePromptOptimizationThinking', 'disable_prompt_optimization_thinking'],
   ];
 
   for (const [optionName, fieldName] of optionalFields) {
@@ -952,6 +955,9 @@ export async function generateImage(
 type ImageEditOptions = {
   model?: string;
   aspectRatio?: string;
+  resolution?: ImageGenerationOptions['resolution'];
+  quality?: ImageGenerationOptions['quality'];
+  outputFormat?: ImageGenerationOptions['format'];
   enhancePrompt?: boolean;
   safeMode?: boolean;
 };
@@ -978,6 +984,8 @@ export async function editImage(
   };
   if (options.model) body.model = options.model;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.outputFormat) body.output_format = options.outputFormat;
   if (options.enhancePrompt) body.enhance_prompt = true;
   if (options.safeMode === false) body.safe_mode = false;
 
@@ -1011,6 +1019,9 @@ export async function multiEditImage(
   };
   if (options.model) body.modelId = options.model;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.quality) body.quality = options.quality;
+  if (options.outputFormat) body.output_format = options.outputFormat;
   if (options.enhancePrompt) body.enhance_prompt = true;
   if (options.safeMode === false) body.safe_mode = false;
 

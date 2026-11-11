@@ -11,7 +11,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { Command } from 'commander';
-import { parseImageGenerationOptions, registerImageCommand } from './image.js';
+import {
+  imageOutputPath,
+  MAX_STYLE_REFERENCE_BYTES,
+  parseImageFileFormat,
+  parseImageGenerationOptions,
+  registerImageCommand,
+} from './image.js';
 import { buildImageGenerationBody } from '../lib/api.js';
 
 const baseOptions = {
@@ -149,6 +155,174 @@ test('preserves IPv6 style reference URLs without a strength suffix', () => {
   });
 
   assert.deepEqual(options.styleReferences, [{ image: 'http://[::1]/style.png' }]);
+});
+
+test('omits prompt, web search and file format controls unless set', () => {
+  const body = buildImageGenerationBody('a canal', parseImageGenerationOptions({ ...baseOptions, promptThinking: true }));
+
+  assert.equal(body.format, 'png');
+  for (const field of ['enhance_prompt', 'enable_web_search', 'disable_prompt_optimization_thinking']) {
+    assert.equal(field in body, false, field);
+  }
+});
+
+test('maps prompt, web search and file format controls to API fields', () => {
+  const body = buildImageGenerationBody('a canal', parseImageGenerationOptions({
+    ...baseOptions,
+    enhancePrompt: false,
+    webSearch: true,
+    promptThinking: false,
+    imageFormat: 'JPG',
+  }));
+
+  assert.equal(body.format, 'jpeg');
+  assert.equal(body.enhance_prompt, false);
+  assert.equal(body.enable_web_search, true);
+  assert.equal(body.disable_prompt_optimization_thinking, true);
+  assert.throws(
+    () => parseImageGenerationOptions({ ...baseOptions, imageFormat: 'gif' }),
+    /Image format must be one of: png, jpeg, webp/
+  );
+});
+
+test('image file format sets the default extension and replaces a conflicting -o extension', () => {
+  assert.equal(parseImageFileFormat(undefined), undefined);
+  assert.equal(parseImageFileFormat(' webp '), 'webp');
+  assert.match(imageOutputPath(undefined, 'image', undefined), /^image_\d+\.png$/);
+  assert.match(imageOutputPath(undefined, 'edited', 'jpeg'), /^edited_\d+\.jpg$/);
+  assert.match(imageOutputPath(undefined, 'multi_edited', 'webp'), /^multi_edited_\d+\.webp$/);
+  assert.equal(imageOutputPath('out.png', 'image', undefined), 'out.png');
+  assert.equal(imageOutputPath('out.jpeg', 'image', 'jpeg'), 'out.jpeg');
+  assert.equal(imageOutputPath('OUT.JPG', 'image', 'jpeg'), 'OUT.JPG');
+  assert.equal(imageOutputPath('dir/out.png', 'image', 'webp'), 'dir/out.webp');
+  assert.equal(imageOutputPath('out', 'image', 'png'), 'out.png');
+});
+
+test('local style reference files are sent inline as base64', () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-style-reference-test-'));
+  const stylePath = join(tempDir, 'style.png');
+  writeFileSync(stylePath, PNG_BYTES);
+
+  try {
+    const options = parseImageGenerationOptions({
+      ...baseOptions,
+      styleReference: [stylePath, `${stylePath}::0.5`, 'data:image/png;base64,AAAA', 'QUJD'],
+    });
+    assert.deepEqual(options.styleReferences, [
+      { image: PNG_BYTES.toString('base64') },
+      { image: PNG_BYTES.toString('base64'), strength: 0.5 },
+      { image: 'data:image/png;base64,AAAA' },
+      { image: 'QUJD' },
+    ]);
+    assert.throws(
+      () => parseImageGenerationOptions({ ...baseOptions, styleReference: [join(tempDir, 'missing.png')] }),
+      /Style reference file not found/
+    );
+
+    const largePath = join(tempDir, 'large.png');
+    writeFileSync(largePath, Buffer.alloc(MAX_STYLE_REFERENCE_BYTES + 1));
+    assert.throws(
+      () => parseImageGenerationOptions({ ...baseOptions, styleReference: [largePath] }),
+      /Style reference image is too large/
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('image edit commands validate resolution, quality and file format before requesting', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const originalError = console.error;
+  const originalExit = process.exit;
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-edit-validation-test-'));
+  const inputPath = join(tempDir, 'input.png');
+  const errors: string[] = [];
+  let requests = 0;
+
+  writeFileSync(inputPath, PNG_BYTES);
+  process.env.VENICE_API_KEY = 'test-key';
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(PNG_BYTES, { headers: { 'Content-Type': 'image/png' } });
+  };
+  console.error = (...values: unknown[]) => errors.push(values.join(' '));
+  process.exit = ((code?: number) => {
+    throw new Error(`exit ${code}`);
+  }) as typeof process.exit;
+
+  try {
+    const cases: Array<[string[], RegExp]> = [
+      [['image-edit', inputPath, 'Fix', '--resolution', '8K'], /Resolution must be one of: 1K, 2K, 4K/],
+      [['image-edit', inputPath, 'Fix', '--image-format', 'bmp'], /Image format must be one of/],
+      [['image-multi-edit', inputPath, '-p', 'Fix', '--quality', 'ultra'], /Quality must be one of/],
+      [['image-multi-edit', inputPath, '-p', 'Fix', '--resolution', ' '], /Resolution must not be blank/],
+      [['image-multi-edit', inputPath, '-p', 'Fix', '--image-format', 'tiff'], /Image format must be one of/],
+    ];
+    for (const [args, message] of cases) {
+      await assert.rejects(runImageCommand(args), /exit 1/, args.join(' '));
+      assert.match(errors.at(-1) ?? '', message, args.join(' '));
+    }
+    assert.equal(requests, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    process.exit = originalExit;
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('image commands save with the requested file format extension', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const originalCwd = process.cwd();
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-image-format-test-'));
+  const inputPath = join(tempDir, 'input.png');
+  const bodies: Array<Record<string, unknown>> = [];
+
+  writeFileSync(inputPath, PNG_BYTES);
+  process.env.VENICE_API_KEY = 'test-key';
+  process.chdir(tempDir);
+  globalThis.fetch = async (input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    if (String(input).endsWith('/image/generate')) {
+      return Response.json({ id: 'image-id', images: [PNG_BYTES.toString('base64')] });
+    }
+    return new Response(PNG_BYTES, { headers: { 'Content-Type': 'image/png' } });
+  };
+
+  try {
+    await runImageCommand(['image', 'a cube', '--image-format', 'webp', '-o', 'cube.png']);
+    await runImageCommand(['image-edit', inputPath, 'Fix', '--image-format', 'jpeg', '--resolution', '2k']);
+    await runImageCommand([
+      'image-multi-edit', inputPath, '-p', 'Fix', '--image-format', 'webp', '--quality', 'LOW', '-o', 'layers',
+    ]);
+
+    assert.equal(bodies[0].format, 'webp');
+    assert.equal(bodies[1].output_format, 'jpeg');
+    assert.equal(bodies[1].resolution, '2K');
+    assert.equal(bodies[2].output_format, 'webp');
+    assert.equal(bodies[2].quality, 'low');
+    const files = readdirSync(tempDir).sort();
+    assert.ok(files.includes('cube.webp'), files.join(', '));
+    assert.ok(files.includes('layers.webp'), files.join(', '));
+    assert.ok(files.some((file) => /^edited_\d+\.jpg$/.test(file)), files.join(', '));
+    assert.equal(files.includes('cube.png'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.chdir(originalCwd);
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('rejects a blank aspect ratio', () => {

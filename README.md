@@ -266,6 +266,15 @@ venice image --negative "clouds, rain" --seed 123 --style "3D Model" "A sunny ci
 # Guide the style with one or more references (optional strength: 0.1-1)
 venice image --style-reference "https://example.com/style.png::0.75" "A woodland cabin"
 
+# Local style references are sent inline (up to 8 MB each)
+venice image --style-reference moodboard.jpg "A woodland cabin"
+
+# Rewrite the prompt, allow web search, and skip prompt-optimization thinking
+venice image --enhance-prompt --web-search --no-prompt-thinking "This week's skyline"
+
+# Choose the image file format (png, jpeg, webp)
+venice image --image-format webp "A lighthouse at dawn"
+
 # Use a specific model
 venice image -m flux-1-dev "Artistic portrait"
 
@@ -283,9 +292,17 @@ venice image-edit photo.jpg "Remove the cars in the background" -o edited.png
 venice image-edit portrait.jpg "Turn this into an illustration" \
   --enhance-prompt -o illustrated.png
 
+# Set the output resolution tier and file format
+venice image-edit photo.jpg "Make it golden hour" \
+  --resolution 2K --image-format jpeg -o golden.jpg
+
 # Edit with up to three layered images
 venice image-multi-edit base.jpg overlay.png \
   --prompt "Blend the overlay into the scene" -o composited.png
+
+# Multi-edit also accepts --resolution, --quality, and --image-format
+venice image-multi-edit base.jpg overlay.png --prompt "Blend them" \
+  --resolution 4K --quality high --image-format webp
 
 # Remove a background and save a transparent PNG
 venice image-bg-remove product.jpg -o cutout.png
@@ -299,6 +316,12 @@ Image sizing is model-specific. Use `--width` and `--height` together for
 pixel-based models, `--aspect-ratio` for ratio-based models, and add
 `--resolution` for models with `1K`, `2K`, or `4K` tiers. These sizing modes
 cannot be mixed.
+
+`--image-format` sets the image file format on `image`, `image-edit`, and
+`image-multi-edit` (`-f, --format` still selects pretty or JSON output). Without
+`-o`, the saved file gets the matching extension. As with `venice tts`, a
+conflicting `-o` extension is replaced, so `-o out.png --image-format webp`
+saves `out.webp`.
 
 Run `venice image --help` for all generation controls, including CFG scale,
 steps, LoRA strength, watermark, safe-mode, and EXIF metadata flags.

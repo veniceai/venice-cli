@@ -158,6 +158,9 @@ export interface ImageGenerationOptions {
   hideWatermark?: boolean;
   safeMode?: boolean;
   embedExifMetadata?: boolean;
+  enhancePrompt?: boolean;
+  enableWebSearch?: boolean;
+  disablePromptOptimizationThinking?: boolean;
 }
 
 export interface ImageStyleReference {
