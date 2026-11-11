@@ -87,33 +87,6 @@ function sendJson(response: ServerResponse, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
-test('scrape --content-format sends format, and omits it by default', async () => {
-  await withApiServer((_request, response) => {
-    sendJson(response, { url: 'https://example.com/', content: '<p>hi</p>', format: 'html' });
-  }, async ({ run, requests }) => {
-    const html = await run(['scrape', 'https://example.com/', '--content-format', 'html']);
-    assert.equal(html.status, 0, html.stderr);
-    assert.equal(html.stdout, '<p>hi</p>\n');
-
-    const plain = await run(['scrape', 'https://example.com/']);
-    assert.equal(plain.status, 0, plain.stderr);
-
-    assert.deepEqual(JSON.parse(requests[0].body.toString()), { url: 'https://example.com/', format: 'html' });
-    assert.deepEqual(JSON.parse(requests[1].body.toString()), { url: 'https://example.com/' });
-  });
-});
-
-test('scrape rejects an unknown --content-format before any request', async () => {
-  await withApiServer((_request, response) => {
-    sendJson(response, {});
-  }, async ({ run, requests }) => {
-    const result = await run(['scrape', 'https://example.com/', '--content-format', 'pdf']);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /--content-format must be one of: markdown, html, text/);
-    assert.equal(requests.length, 0);
-  });
-});
-
 test('parse downloads a document URL and uploads it with its name and media type', async () => {
   await withApiServer((request, response) => {
     if (request.url === '/files/Annual%20Report.pdf') {

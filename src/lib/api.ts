@@ -2461,23 +2461,17 @@ export async function dedicatedWebSearch(
   });
 }
 
-export const WEB_SCRAPE_FORMATS = ['markdown', 'html', 'text'] as const;
-export type WebScrapeFormat = (typeof WEB_SCRAPE_FORMATS)[number];
-
 export type WebScrapeResponse = {
   url: string;
   content: string;
-  format: WebScrapeFormat;
+  format: 'markdown';
 };
 
-// Scrape a public page without model inference; Venice returns Markdown unless asked otherwise
-export async function scrapeWebPage(
-  url: string,
-  options: { format?: WebScrapeFormat } = {}
-): Promise<WebScrapeResponse> {
+// Scrape a public page to Markdown without model inference
+export async function scrapeWebPage(url: string): Promise<WebScrapeResponse> {
   return apiRequest<WebScrapeResponse>('/augment/scrape', {
     method: 'POST',
-    body: options.format ? { url, format: options.format } : { url },
+    body: { url },
     spinnerText: 'Scraping page...',
   });
 }

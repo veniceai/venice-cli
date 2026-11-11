@@ -246,9 +246,6 @@ venice scrape https://docs.venice.ai/llms.txt
 # Save the Markdown or return the full structured response
 venice scrape https://example.com/article -o article.md
 venice scrape https://example.com/article -f json
-
-# Ask for HTML or plain text instead of Markdown
-venice scrape https://example.com/article --content-format text
 ```
 
 ### Image Generation
