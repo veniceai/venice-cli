@@ -120,10 +120,20 @@ export function registerAudioCommands(program: Command): void {
     .option('-m, --model <model>', 'Model: nvidia/parakeet-tdt-0.6b-v3, openai/whisper-large-v3', 'nvidia/parakeet-tdt-0.6b-v3')
     .option('-l, --language <lang>', 'Audio language ISO code (e.g., en, es, fr)')
     .option('-t, --timestamps', 'Include word/segment timestamps in output')
+    .option('--response-format <format>', 'Transcript format requested from the API (json|text)')
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
     .action(async (audioPath: string, options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
+      const responseFormat = options.responseFormat as 'json' | 'text' | undefined;
+      if (responseFormat !== undefined && responseFormat !== 'json' && responseFormat !== 'text') {
+        console.error(formatError('--response-format must be json or text'));
+        process.exit(1);
+      }
+      if (responseFormat === 'text' && options.timestamps) {
+        console.error(formatError('--timestamps needs --response-format json; text transcripts have no timestamps.'));
+        process.exit(1);
+      }
 
       // Resolve path
       const resolvedPath = path.resolve(audioPath);
@@ -138,6 +148,7 @@ export function registerAudioCommands(program: Command): void {
           model: options.model,
           language: options.language,
           timestamps: options.timestamps,
+          responseFormat,
         });
         assertTranscription(result);
 

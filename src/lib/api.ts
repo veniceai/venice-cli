@@ -1334,6 +1334,15 @@ export async function cloneVoice(
   }
 }
 
+export type TranscriptionResult = {
+  text: string;
+  duration?: number;
+  timestamps?: {
+    word?: Array<{ word: string; start: number; end: number }>;
+    segment?: Array<{ text: string; start: number; end: number }>;
+  };
+};
+
 // Transcription (STT) -- requires multipart/form-data upload
 export async function transcribe(
   audioPath: string,
@@ -1341,15 +1350,9 @@ export async function transcribe(
     model?: string;
     language?: string;
     timestamps?: boolean;
+    responseFormat?: 'json' | 'text';
   } = {}
-): Promise<{
-  text: string;
-  duration?: number;
-  timestamps?: {
-    word?: Array<{ word: string; start: number; end: number }>;
-    segment?: Array<{ text: string; start: number; end: number }>;
-  };
-}> {
+): Promise<TranscriptionResult> {
   const fs = await import('fs');
   const path = await import('path');
   const crypto = await import('crypto');
@@ -1372,7 +1375,7 @@ export async function transcribe(
 
   const formFields: Array<[string, string]> = [
     ['model', options.model || 'nvidia/parakeet-tdt-0.6b-v3'],
-    ['response_format', 'json'],
+    ['response_format', options.responseFormat ?? 'json'],
   ];
   if (options.language) {
     formFields.push(['language', options.language]);
@@ -1434,14 +1437,28 @@ export async function transcribe(
       throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
     }
 
-    const response = await readJsonResponse<{
-      text: string;
-      duration?: number;
-      timestamps?: {
-        word?: Array<{ word: string; start: number; end: number }>;
-        segment?: Array<{ text: string; start: number; end: number }>;
-      };
-    }>(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+    let response: TranscriptionResult;
+    if (options.responseFormat === 'text') {
+      // A plain-text transcript may still arrive as a JSON string or object.
+      const bytes = await readResponseBodyWithLimit(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+      const body = new TextDecoder().decode(bytes);
+      const contentType = res.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      let value: unknown = body;
+      if (contentType === 'application/json') {
+        try {
+          value = JSON.parse(body);
+        } catch {
+          throw new ResponseValidationError('Transcription response was not valid JSON.');
+        }
+      }
+      response = typeof value === 'string' ? { text: value } : value as TranscriptionResult;
+    } else {
+      response = await readJsonResponse<TranscriptionResult>(
+        res,
+        MAX_JSON_RESPONSE_BYTES,
+        'Transcription response'
+      );
+    }
 
     if (spinner) stopSpinner(true);
 

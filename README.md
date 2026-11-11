@@ -349,6 +349,9 @@ venice transcribe -l es spanish_audio.mp3
 
 # JSON output
 venice transcribe -f json interview.wav
+
+# Ask the API for a plain-text transcript (no timestamps)
+venice transcribe --response-format text interview.wav
 ```
 
 **Available STT Models:**
