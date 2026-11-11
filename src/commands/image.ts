@@ -110,10 +110,10 @@ export function parseImageResolution(value: string | undefined): ImageGeneration
   if (value !== undefined && !resolution) {
     throw new Error('Resolution must not be blank');
   }
-  if (resolution && !['1K', '2K', '4K'].includes(resolution)) {
-    throw new Error('Resolution must be one of: 1K, 2K, 4K');
+  if (resolution && !/^\d+(\.\d+)?K$/.test(resolution)) {
+    throw new Error('Resolution must be a tier such as 1K, 1.5K, 2K or 4K');
   }
-  return resolution as ImageGenerationOptions['resolution'];
+  return resolution;
 }
 
 export function parseImageQuality(value: string | undefined): ImageGenerationOptions['quality'] {
@@ -221,7 +221,7 @@ export function registerImageCommand(program: Command): void {
     .option('-w, --width <pixels>', 'Image width (pixel-based models)')
     .option('-h, --height <pixels>', 'Image height (pixel-based models)')
     .option('-a, --aspect-ratio <ratio>', 'Aspect ratio, for example 16:9')
-    .option('--resolution <tier>', 'Resolution tier (1K|2K|4K)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
     .option('--quality <quality>', 'Output quality (low|medium|high)')
     .option('--style <preset>', 'Style preset')
     .option(
@@ -290,7 +290,7 @@ export function registerImageCommand(program: Command): void {
     .option('-m, --model <model>', 'Edit model to use')
     .option('-o, --output <path>', 'Save result to file')
     .option('-a, --aspect-ratio <ratio>', 'Output aspect ratio (for example, 16:9 or auto)')
-    .option('--resolution <tier>', 'Resolution tier (1K|2K|4K)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
     .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input image')
     .option('--no-safe-mode', 'Disable adult-content blurring')
@@ -322,7 +322,7 @@ export function registerImageCommand(program: Command): void {
     .option('-m, --model <model>', 'Edit model to use')
     .option('-o, --output <path>', 'Save result to file')
     .option('-a, --aspect-ratio <ratio>', 'Output aspect ratio (for example, 16:9 or auto)')
-    .option('--resolution <tier>', 'Resolution tier (1K|2K|4K)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
     .option('--quality <quality>', 'Output quality (low|medium|high)')
     .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input images')

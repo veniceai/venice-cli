@@ -314,8 +314,8 @@ venice image-styles --format json
 
 Image sizing is model-specific. Use `--width` and `--height` together for
 pixel-based models, `--aspect-ratio` for ratio-based models, and add
-`--resolution` for models with `1K`, `2K`, or `4K` tiers. These sizing modes
-cannot be mixed.
+`--resolution` for models with resolution tiers such as `1K`, `1.5K`, `2K`, or
+`4K`; supported tiers vary by model. These sizing modes cannot be mixed.
 
 `--image-format` sets the image file format on `image`, `image-edit`, and
 `image-multi-edit` (`-f, --format` still selects pretty or JSON output). Without

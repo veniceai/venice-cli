@@ -146,7 +146,7 @@ export interface ImageGenerationOptions {
   count?: number;
   format?: 'jpeg' | 'png' | 'webp';
   aspectRatio?: string;
-  resolution?: '1K' | '2K' | '4K';
+  resolution?: string;
   quality?: 'low' | 'medium' | 'high';
   stylePreset?: string;
   styleReferences?: ImageStyleReference[];

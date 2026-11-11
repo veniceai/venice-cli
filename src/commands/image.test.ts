@@ -16,6 +16,7 @@ import {
   MAX_STYLE_REFERENCE_BYTES,
   parseImageFileFormat,
   parseImageGenerationOptions,
+  parseImageResolution,
   registerImageCommand,
 } from './image.js';
 import { buildImageGenerationBody } from '../lib/api.js';
@@ -253,7 +254,7 @@ test('image edit commands validate resolution, quality and file format before re
 
   try {
     const cases: Array<[string[], RegExp]> = [
-      [['image-edit', inputPath, 'Fix', '--resolution', '8K'], /Resolution must be one of: 1K, 2K, 4K/],
+      [['image-edit', inputPath, 'Fix', '--resolution', '1080p'], /Resolution must be a tier such as 1K, 1.5K, 2K or 4K/],
       [['image-edit', inputPath, 'Fix', '--image-format', 'bmp'], /Image format must be one of/],
       [['image-multi-edit', inputPath, '-p', 'Fix', '--quality', 'ultra'], /Quality must be one of/],
       [['image-multi-edit', inputPath, '-p', 'Fix', '--resolution', ' '], /Resolution must not be blank/],
@@ -343,6 +344,10 @@ test('trims resolution and quality and rejects blank values', () => {
 
   assert.equal(options.resolution, '2K');
   assert.equal(options.quality, 'medium');
+  assert.equal(parseImageResolution('1.5k'), '1.5K');
+  for (const invalid of ['1080p', 'K', '2', '1.K', '2K4K']) {
+    assert.throws(() => parseImageResolution(invalid), /Resolution must be a tier/, invalid);
+  }
   assert.throws(
     () => parseImageGenerationOptions({
       ...baseOptions,
