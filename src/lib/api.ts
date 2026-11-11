@@ -855,6 +855,57 @@ function streamErrorMessage(data: string): string {
     : 'the server reported an error.';
 }
 
+export type ResponsesInputPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string };
+
+export interface ResponsesRequest {
+  model: string;
+  input: string | Array<{ role: 'user'; content: ResponsesInputPart[] }>;
+  max_output_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  reasoning?: { effort: ReasoningEffort };
+}
+
+export interface ResponsesResult {
+  id: string;
+  model: string;
+  status: string;
+  output: Array<{
+    type: string;
+    content?: Array<{ type: string; text?: string }>;
+  }>;
+  output_text?: string;
+  incomplete_details?: { reason?: string };
+  error?: { code?: string; message?: string };
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+// Responses API (alpha, stateless, non-streaming)
+export async function createResponse(request: ResponsesRequest): Promise<ResponsesResult> {
+  const response = await apiRequest<ResponsesResult>('/responses', {
+    method: 'POST',
+    body: request,
+    spinnerText: 'Thinking...',
+  });
+
+  const usage = response?.usage;
+  if (usage && typeof usage === 'object') {
+    trackUsage({
+      ...tokenCounts({
+        prompt_tokens: usage.input_tokens,
+        completion_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+      }),
+      command: 'responses',
+      model: request.model,
+    });
+  }
+
+  return response;
+}
+
 // Image generation (Venice-native endpoint)
 export function buildImageGenerationBody(
   prompt: string,

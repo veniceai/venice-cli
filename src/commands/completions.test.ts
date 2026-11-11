@@ -24,6 +24,7 @@ import { registerImageCommand } from './image.js';
 import { registerKeysCommand } from './keys.js';
 import { registerModelsCommand } from './models.js';
 import { registerMusicCommands } from './music.js';
+import { registerResponsesCommand } from './responses.js';
 import { registerRpcCommand } from './rpc.js';
 import { registerSearchCommand } from './search.js';
 import { registerTeeCommand } from './tee.js';
@@ -49,6 +50,7 @@ function buildProgram(): Command {
     .option('--no-color', 'Disable colored output');
   for (const register of [
     registerChatCommand,
+    registerResponsesCommand,
     registerSearchCommand,
     registerImageCommand,
     registerAudioCommands,
