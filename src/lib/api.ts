@@ -322,6 +322,13 @@ type ApiRequestOptions = {
       expectedContentType?: never;
     }
   | {
+      responseType: 'text';
+      stream?: false;
+      maxResponseBytes: number;
+      responseLabel: string;
+      expectedContentType?: never;
+    }
+  | {
       responseType: 'arrayBuffer';
       stream?: false;
       maxResponseBytes: number;
@@ -426,6 +433,9 @@ export async function apiRequest<T>(
         result = Uint8Array.from(bytes).buffer as T;
       } else if (options.responseType === 'jsonText') {
         result = await readJsonText(response, maxResponseBytes, options.responseLabel) as T;
+      } else if (options.responseType === 'text') {
+        const bytes = await readResponseBodyWithLimit(response, maxResponseBytes, options.responseLabel);
+        result = new TextDecoder().decode(bytes) as T;
       } else {
         result = await readJsonResponse<T>(response, maxResponseBytes, responseLabel);
       }

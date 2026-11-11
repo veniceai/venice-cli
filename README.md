@@ -630,9 +630,22 @@ venice billing balance
 # Billed usage from the replacement usage-history endpoint
 venice billing usage --days 7
 
+# Billed usage for an exact UTC range (start inclusive, end exclusive)
+venice billing usage --start 2026-10-01T00:00:00Z --end 2026-11-01T00:00:00Z
+
+# The same usage as one CSV document
+venice billing usage --days 30 -f csv > usage.csv
+
 # Aggregated usage by date, model, and API key
 venice billing analytics --lookback 30d
+
+# Aggregated usage for a date range (YYYY-MM-DD)
+venice billing analytics --start 2026-10-01 --end 2026-10-31
 ```
+
+`--start`/`--end` replace `--days` or `--lookback`; they cannot be combined.
+`billing usage` fetches every page up to 100 pages, so use `--page-size 1000`
+or a shorter range for long histories.
 
 ### API Keys
 

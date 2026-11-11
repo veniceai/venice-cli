@@ -82,6 +82,7 @@ const API_KEY_ID_PATTERN =
 
 const MAX_BILLING_USAGE_PAGES = 100;
 export const MAX_BILLING_USAGE_PAGE_SIZE = 1000;
+const MAX_BILLING_USAGE_CSV_PAGE_BYTES = 16 * 1024 * 1024;
 
 export function assertApiKeyId(id: string): void {
   if (!API_KEY_ID_PATTERN.test(id)) {
@@ -97,13 +98,18 @@ export async function getBillingBalance(): Promise<BillingBalance> {
   });
 }
 
-export async function getBillingUsage(options: {
-  startTimestamp: string;
-  endTimestamp: string;
+export interface BillingUsageQuery {
+  startTimestamp?: string;
+  endTimestamp?: string;
   currency?: BillingCurrency;
   pageSize?: number;
-}): Promise<BillingUsageEntry[]> {
-  const entries: BillingUsageEntry[] = [];
+}
+
+// Calls fetchPage with each page's query until it returns no next cursor.
+async function walkBillingUsagePages(
+  options: BillingUsageQuery,
+  fetchPage: (query: string, spinnerText: string) => Promise<string | null>
+): Promise<void> {
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
   let pages = 0;
@@ -115,8 +121,8 @@ export async function getBillingUsage(options: {
       throw new Error(
         `Usage history has more than ${MAX_BILLING_USAGE_PAGES} pages; refusing to fetch more. ` +
         (canUseLargerPages
-          ? `Use a shorter --days range or a larger --page-size (at most ${MAX_BILLING_USAGE_PAGE_SIZE}).`
-          : 'Use a shorter --days range.')
+          ? `Use a shorter time range or a larger --page-size (at most ${MAX_BILLING_USAGE_PAGE_SIZE}).`
+          : 'Use a shorter time range.')
       );
     }
 
@@ -128,28 +134,87 @@ export async function getBillingUsage(options: {
       seenCursors.add(cursor);
       params.set('cursor', cursor);
     } else {
-      params.set('startTimestamp', options.startTimestamp);
-      params.set('endTimestamp', options.endTimestamp);
+      if (options.startTimestamp) params.set('startTimestamp', options.startTimestamp);
+      if (options.endTimestamp) params.set('endTimestamp', options.endTimestamp);
       if (options.currency) params.set('currency', options.currency);
       if (options.pageSize) params.set('pageSize', String(options.pageSize));
     }
 
+    cursor = await fetchPage(
+      params.toString(),
+      cursor ? 'Fetching more usage...' : 'Fetching billed usage...'
+    );
+  } while (cursor);
+}
+
+export async function getBillingUsage(options: BillingUsageQuery): Promise<BillingUsageEntry[]> {
+  const entries: BillingUsageEntry[] = [];
+  await walkBillingUsagePages(options, async (query, spinnerText) => {
     const response: {
       data: BillingUsageEntry[];
       nextCursor: string | null;
-    } = await apiRequest(`/billing/usage-history?${params.toString()}`, {
-      spinnerText: cursor ? 'Fetching more usage...' : 'Fetching billed usage...',
-    });
-
+    } = await apiRequest(`/billing/usage-history?${query}`, { spinnerText });
     entries.push(...response.data);
-    cursor = response.nextCursor;
-  } while (cursor);
-
+    return response.nextCursor;
+  });
   return entries;
 }
 
-export async function getBillingAnalytics(lookback: string): Promise<unknown> {
-  const params = new URLSearchParams({ lookback });
+/**
+ * Usage history as one CSV document: the header row of the first page, then
+ * the data rows of every page. Venice sends the next cursor in X-Next-Cursor.
+ */
+export async function getBillingUsageCsv(options: BillingUsageQuery): Promise<string> {
+  let header: { line: string; text: string } | undefined;
+  const bodies: string[] = [];
+
+  await walkBillingUsagePages(options, async (query, spinnerText) => {
+    const page: { contentType: string | null; nextCursor: string | null } = {
+      contentType: null,
+      nextCursor: null,
+    };
+    const csv = await apiRequest<string>(`/billing/usage-history?${query}`, {
+      spinnerText,
+      additionalHeaders: { Accept: 'text/csv' },
+      responseType: 'text',
+      maxResponseBytes: MAX_BILLING_USAGE_CSV_PAGE_BYTES,
+      responseLabel: 'Usage history CSV page',
+      onHeaders: (headers) => {
+        page.contentType = headers.get('content-type');
+        page.nextCursor = headers.get('x-next-cursor') || null;
+      },
+    });
+
+    if (!page.contentType?.toLowerCase().startsWith('text/csv')) {
+      throw new Error(
+        `Usage history did not return CSV (received: ${page.contentType || 'no Content-Type'}).`
+      );
+    }
+
+    if (csv.length > 0) {
+      const newline = csv.indexOf('\n');
+      const line = newline === -1 ? `${csv}\n` : csv.slice(0, newline + 1);
+      const text = line.replace(/\r?\n$/, '');
+      if (!header) {
+        header = { line, text };
+      } else if (header.text !== text) {
+        throw new Error('Usage history CSV pages have different header rows; refusing to combine them.');
+      }
+      const body = newline === -1 ? '' : csv.slice(newline + 1);
+      if (body.length > 0) bodies.push(body.endsWith('\n') ? body : `${body}\n`);
+    }
+    return page.nextCursor;
+  });
+
+  return header ? header.line + bodies.join('') : '';
+}
+
+export type BillingAnalyticsQuery =
+  | { lookback: string }
+  | { startDate: string; endDate: string };
+
+export async function getBillingAnalytics(query: BillingAnalyticsQuery): Promise<unknown> {
+  const params = new URLSearchParams(query);
   return apiRequest(`/billing/usage-analytics?${params.toString()}`, {
     spinnerText: 'Fetching usage analytics...',
   });
