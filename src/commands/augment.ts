@@ -4,7 +4,12 @@
 
 import { Command } from 'commander';
 import * as path from 'path';
-import { parseDocument, scrapeWebPage } from '../lib/api.js';
+import {
+  parseDocument,
+  scrapeWebPage,
+  WEB_SCRAPE_FORMATS,
+  type WebScrapeFormat,
+} from '../lib/api.js';
 import {
   detectOutputFormat,
   formatError,
@@ -49,15 +54,20 @@ export function registerAugmentCommands(program: Command): void {
 
   program
     .command('scrape <url>')
-    .description('Scrape a public web page to Markdown without model inference')
+    .description('Scrape a public web page (Markdown by default) without model inference')
     .option('-o, --output <path>', 'Save scraped content to a file')
+    .option('--content-format <format>', `Format of the scraped content (${WEB_SCRAPE_FORMATS.join('|')})`)
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
     .action(async (url: string, options) => {
       const format = detectOutputFormat(options.format);
 
       try {
+        const contentFormat = options.contentFormat as WebScrapeFormat | undefined;
+        if (contentFormat !== undefined && !WEB_SCRAPE_FORMATS.includes(contentFormat)) {
+          throw new Error(`--content-format must be one of: ${WEB_SCRAPE_FORMATS.join(', ')}`);
+        }
         assertPublicWebUrl(url);
-        const result = await scrapeWebPage(url);
+        const result = await scrapeWebPage(url, { format: contentFormat });
         const output = format === 'json'
           ? formatJson(result)
           : result.content;
