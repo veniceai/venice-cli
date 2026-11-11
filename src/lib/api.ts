@@ -1137,6 +1137,7 @@ export async function upscaleImage(
   options: {
     model?: string;
     scale?: number;
+    creativity?: number;
   } = {}
 ): Promise<UpscaleImageResult> {
   const fs = await import('fs');
@@ -1152,6 +1153,7 @@ export async function upscaleImage(
     image: imageData.toString('base64'),
     scale: options.scale || 2,
     ...(options.model ? { model: options.model } : {}),
+    ...(options.creativity !== undefined ? { creativity: options.creativity } : {}),
   };
 
   const spinner = startSpinner('Upscaling image...');

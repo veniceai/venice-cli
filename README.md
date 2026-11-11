@@ -334,6 +334,9 @@ venice upscale photo.jpg -o photo_upscaled.jpg
 
 # 4x upscale
 venice upscale photo.jpg -s 4 -o photo_4x.jpg
+
+# Let the upscaler invent more detail (0-0.02)
+venice upscale photo.jpg --creativity 0.02 -o photo_detailed.jpg
 ```
 
 ### Text-to-Speech

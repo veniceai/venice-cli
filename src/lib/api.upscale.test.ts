@@ -45,6 +45,10 @@ test('upscaleImage posts to /image/upscale and requires image bytes', async () =
     assert.equal(typeof (requests[0].body as { image: string }).image, 'string');
     assert.equal(result.contentType, 'image/png');
     assert.equal(result.bytes.equals(PNG_MAGIC), true);
+    assert.equal('creativity' in (requests[0].body as Record<string, unknown>), false);
+
+    await upscaleImage(imagePath, { scale: 4, creativity: 0 });
+    assert.equal((requests[1].body as { creativity: number }).creativity, 0);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) {

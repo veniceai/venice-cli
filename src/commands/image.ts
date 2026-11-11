@@ -395,6 +395,7 @@ export function registerImageCommand(program: Command): void {
     .description('Upscale an image')
     .option('-m, --model <model>', 'Model to use')
     .option('-s, --scale <factor>', 'Scale factor (2 or 4)', '2')
+    .option('--creativity <number>', 'How much detail the upscaler invents (0-0.02)')
     .option('-o, --output <path>', 'Save result to file')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, options) => {
@@ -402,8 +403,10 @@ export function registerImageCommand(program: Command): void {
       const c = getChalk();
 
       let scale: number;
+      let creativity: number | undefined;
       try {
         scale = parseIntegerOption(options.scale, '--scale', { allowed: [2, 4] });
+        creativity = parseDecimalOption(options.creativity, '--creativity', { min: 0, max: 0.02 });
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -420,6 +423,7 @@ export function registerImageCommand(program: Command): void {
         const result = await upscaleImage(resolvedPath, {
           model: options.model,
           scale,
+          creativity,
         });
 
         if (format === 'json') {

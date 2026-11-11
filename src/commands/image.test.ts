@@ -258,6 +258,7 @@ test('image edit commands validate resolution, quality and file format before re
       [['image-multi-edit', inputPath, '-p', 'Fix', '--quality', 'ultra'], /Quality must be one of/],
       [['image-multi-edit', inputPath, '-p', 'Fix', '--resolution', ' '], /Resolution must not be blank/],
       [['image-multi-edit', inputPath, '-p', 'Fix', '--image-format', 'tiff'], /Image format must be one of/],
+      [['upscale', inputPath, '--creativity', '0.03'], /--creativity must be a number between 0 and 0.02/],
     ];
     for (const [args, message] of cases) {
       await assert.rejects(runImageCommand(args), /exit 1/, args.join(' '));

@@ -69,6 +69,7 @@ test('malformed numeric options are rejected before any request is sent', async 
     [['image', '--cfg-scale', '0x10', 'p'], /--cfg-scale must be a number greater than 0 and at most 20/],
     [['image', '-n', ' 2 ', 'p'], /--count must be/],
     [['upscale', 'in.png', '-s', '2.9'], /--scale must be 2 or 4/],
+    [['upscale', 'in.png', '--creativity', '1e-2'], /--creativity must be a number between 0 and 0.02/],
     [['tts', '--temperature', '', 'hello'], /--temperature must be a number between 0 and 2 \(got ""\)/],
     [['tts', '-s', ' 3 ', 'hello'], /--speed must be/],
     [['music', 'generate', '-d', '0x10', 'p'], /--duration must be a positive integer/],
