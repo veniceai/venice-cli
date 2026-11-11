@@ -167,6 +167,10 @@ venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like norma
 | `--reasoning-effort <level>` | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
 | `--prompt-cache-key <key>` | Route requests for better prompt-cache affinity |
 | `--prompt-cache-retention <mode>` | Prompt cache retention (`default`, `extended`, `24h`) |
+| `--temperature <number>` | Sampling temperature (0-2) |
+| `--top-p <number>` | Nucleus sampling probability mass (0-1) |
+| `--max-tokens <integer>` | Maximum completion tokens, including reasoning tokens (sent as `max_completion_tokens`) |
+| `--stop <sequence>` | Stop generating at this sequence (repeatable, up to 4) |
 | `--image <path>` | Attach an image file or URL (repeatable) |
 | `--file <path>` | Attach a document or source file (repeatable) |
 | `--audio <path>` | Attach an audio file or URL (repeatable) |
@@ -191,7 +195,8 @@ Structured output, reasoning effort, and X search are fail-closed features:
 the selected model must be present in the model catalog and explicitly
 advertise the corresponding capability. They are unavailable when the catalog
 cannot be fetched. E2EE does not support structured output, reasoning effort,
-or prompt-cache key/retention options.
+prompt-cache key/retention options, or `--stop`, because stop sequences would
+be sent unencrypted.
 
 ### Web Search
 

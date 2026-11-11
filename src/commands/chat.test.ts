@@ -31,6 +31,10 @@ interface ChatRequest {
   reasoning_effort?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: string;
+  temperature?: number;
+  top_p?: number;
+  max_completion_tokens?: number;
+  stop?: string[];
 }
 
 function runCli(args: string[], homeDir: string) {
@@ -184,6 +188,16 @@ test('chat preserves options and enforces the allowlist across tool rounds', asy
           'session-123',
           '--prompt-cache-retention',
           '24h',
+          '--temperature',
+          '0.3',
+          '--top-p',
+          '0.8',
+          '--max-tokens',
+          '512',
+          '--stop',
+          'END',
+          '--stop',
+          'STOP',
           'Use two tools',
         ],
         {
@@ -221,6 +235,10 @@ test('chat preserves options and enforces the allowlist across tool rounds', asy
       assert.equal(request.reasoning_effort, 'high');
       assert.equal(request.prompt_cache_key, 'session-123');
       assert.equal(request.prompt_cache_retention, '24h');
+      assert.equal(request.temperature, 0.3);
+      assert.equal(request.top_p, 0.8);
+      assert.equal(request.max_completion_tokens, 512);
+      assert.deepEqual(request.stop, ['END', 'STOP']);
     }
 
     assert.equal(
@@ -281,8 +299,14 @@ test('chat --continue resends the previous reply without its reasoning', async (
 
     const first = await runAsync(['My name is Ada']);
     assert.equal(first.status, 0, first.stderr);
-    const second = await runAsync(['--continue', 'What is my name?']);
+    const second = await runAsync(['--continue', '--temperature', '1.5', '--stop', 'Ada', 'What is my name?']);
     assert.equal(second.status, 0, second.stderr);
+
+    for (const field of ['temperature', 'top_p', 'max_completion_tokens', 'stop']) {
+      assert.equal(field in requests[0], false, field);
+    }
+    assert.equal(requests[1].temperature, 1.5);
+    assert.deepEqual(requests[1].stop, ['Ada']);
 
     assert.deepEqual(
       requests[1].messages.map((message) => [message.role, message.content]),
@@ -660,6 +684,22 @@ test('E2EE chat rejects explicit --no-stream before attestation or completion', 
   assert.ok(!result.requests.some((request) => /attestation|completions/.test(request)), result.requests.join('\n'));
 });
 
+test('E2EE chat rejects --stop before attestation or completion', async () => {
+  const result = await runE2EEChat(['--stop', 'END', 'hello'], ['unused']);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--stop is not supported with E2EE/);
+  assert.ok(!result.requests.some((request) => /attestation|completions/.test(request)), result.requests.join('\n'));
+});
+
+test('E2EE chat rejects --stop before attestation or completion', async () => {
+  const result = await runE2EEChat(['--stop', 'END', 'hello'], ['unused']);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--stop is not supported with E2EE/);
+  assert.ok(!result.requests.some((request) => /attestation|completions/.test(request)), result.requests.join('\n'));
+});
+
 test('streaming chat -f json buffers output and honours --strip-thinking', async () => {
   const clientKeys = generateEphemeralKeyPair();
   const completionStream: NonNullable<NonNullable<Parameters<typeof streamChat>[5]>['completionStream']> =
@@ -839,6 +879,7 @@ test('E2EE streaming strips server-side controls from the request', async () => 
         reasoningEffort: 'high',
         promptCacheKey: 'must-not-leak',
         promptCacheRetention: '24h',
+        sampling: { temperature: 0.2, topP: 0.5, maxTokens: 100, stop: ['must-not-leak'] },
         completionStream,
       }
     );
@@ -857,6 +898,10 @@ test('E2EE streaming strips server-side controls from the request', async () => 
   assert.equal(seenOptions.reasoning_effort, undefined);
   assert.equal(seenOptions.prompt_cache_key, undefined);
   assert.equal(seenOptions.prompt_cache_retention, undefined);
+  assert.equal(seenOptions.stop, undefined);
+  assert.equal(seenOptions.temperature, 0.2);
+  assert.equal(seenOptions.top_p, 0.5);
+  assert.equal(seenOptions.max_completion_tokens, 100);
   assert.match(output.join(''), /^normal-content/);
   assert.doesNotMatch(output.join(''), /secret-reasoning/);
 });

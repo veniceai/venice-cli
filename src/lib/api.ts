@@ -585,6 +585,10 @@ export interface ChatCompletionRequestOptions {
   reasoning_effort?: ReasoningEffort;
   prompt_cache_key?: string;
   prompt_cache_retention?: PromptCacheRetention;
+  temperature?: number;
+  top_p?: number;
+  max_completion_tokens?: number;
+  stop?: string[];
   recordUsage?: boolean;
 }
 
@@ -649,6 +653,22 @@ export function buildChatCompletionBody(
 
   if (options.prompt_cache_retention) {
     body.prompt_cache_retention = options.prompt_cache_retention;
+  }
+
+  if (options.temperature !== undefined) {
+    body.temperature = options.temperature;
+  }
+
+  if (options.top_p !== undefined) {
+    body.top_p = options.top_p;
+  }
+
+  if (options.max_completion_tokens !== undefined) {
+    body.max_completion_tokens = options.max_completion_tokens;
+  }
+
+  if (options.stop?.length) {
+    body.stop = options.stop;
   }
 
   return body;
