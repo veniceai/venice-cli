@@ -21,6 +21,8 @@ import {
   assertApiKeyId,
   createApiKey,
   deleteApiKey,
+  getApiKey,
+  getApiKeyRateLimitLogs,
   getApiKeyRateLimits,
   listApiKeys,
 } from '../lib/account-api.js';
@@ -36,7 +38,12 @@ import {
 } from '../lib/output.js';
 import { parseDecimalOption } from '../lib/options.js';
 import { promptOutput, promptUnavailableReason } from '../lib/prompt.js';
-import { assertApiKeyList, assertApiKeyRateLimits } from '../lib/response-checks.js';
+import {
+  assertApiKeyDetails,
+  assertApiKeyList,
+  assertApiKeyRateLimitLogs,
+  assertApiKeyRateLimits,
+} from '../lib/response-checks.js';
 
 const KEY_TYPES = ['INFERENCE', 'ADMIN'] as const;
 const LIMIT_PERIODS = ['EPOCH', 'MONTH', 'LIFETIME'] as const;
@@ -84,6 +91,57 @@ export function registerKeysCommand(program: Command): void {
         { key: 'expires', label: 'Expires', width: 24 },
         { key: 'lastUsed', label: 'Last used', width: 24 },
       ]));
+    });
+
+  keys
+    .command('show <id>')
+    .description('Show metadata, limits and usage for one API key without exposing key material')
+    .option('-f, --format <format>', 'Output format (pretty|json)')
+    .action(async (id: string, options) => {
+      const normalizedId = id.trim();
+      assertApiKeyId(normalizedId);
+      const key = await getApiKey(normalizedId);
+      assertApiKeyDetails(key);
+      const safe = toSafeApiKeyMetadata(key);
+      if (detectOutputFormat(options.format) === 'json') {
+        console.log(formatJson(safe));
+        return;
+      }
+
+      const c = getChalk();
+      const text = (value: unknown) => terminalSafe(value ?? 'none');
+      console.log(c.bold(`\nAPI Key ${terminalSafe(safe.description ?? '')}\n`));
+      console.log(`ID: ${terminalSafe(safe.id)}`);
+      console.log(`Type: ${terminalSafe(safe.apiKeyType)}`);
+      console.log(`Key: …${terminalSafe(safe.last6Chars)}`);
+      console.log(`Created: ${text(safe.createdAt)}`);
+      console.log(`Expires: ${terminalSafe(safe.expiresAt ?? 'never')}`);
+      console.log(`Last used: ${terminalSafe(safe.lastUsedAt ?? 'never')}`);
+      if (safe.modelPrivacy !== undefined) {
+        console.log(`Model privacy: ${terminalSafe(safe.modelPrivacy)}`);
+      }
+      if (safe.ipAllowlist !== undefined) {
+        const allowlist = safe.ipAllowlist.map((entry) => terminalSafe(entry)).join(', ');
+        console.log(`IP allowlist: ${allowlist || 'any address'}`);
+      }
+
+      console.log(c.bold('\nLimits'));
+      console.log(`USD limit: ${text(safe.consumptionLimits?.usd)}`);
+      console.log(`DIEM limit: ${text(safe.consumptionLimits?.diem)}`);
+      console.log(`Limit period: ${text(safe.limitPeriod)}`);
+
+      if (safe.currentPeriodUsage !== undefined || safe.usage !== undefined) {
+        console.log(c.bold('\nUsage'));
+      }
+      if (safe.currentPeriodUsage !== undefined) {
+        console.log(
+          `Current period: ${text(safe.currentPeriodUsage.usd)} USD, ${text(safe.currentPeriodUsage.diem)} DIEM`
+        );
+      }
+      const trailing = safe.usage?.trailingSevenDays;
+      if (trailing !== undefined) {
+        console.log(`Last 7 days: ${text(trailing.usd)} USD, ${text(trailing.diem)} DIEM`);
+      }
     });
 
   keys
@@ -246,6 +304,32 @@ export function registerKeysCommand(program: Command): void {
         ])}`);
       }
     });
+
+  keys
+    .command('rate-limit-logs')
+    .description('Show the last 50 rate limits the account exceeded (experimental)')
+    .option('-f, --format <format>', 'Output format (pretty|json)')
+    .action(async (options) => {
+      const logs = await getApiKeyRateLimitLogs();
+      assertApiKeyRateLimitLogs(logs);
+      if (detectOutputFormat(options.format) === 'json') {
+        console.log(formatJson(logs));
+        return;
+      }
+
+      if (logs.length === 0) {
+        console.log(getChalk().dim('No exceeded rate limits recorded.'));
+        return;
+      }
+
+      console.log(formatTable(logs.map((entry) => ({ ...entry })), [
+        { key: 'timestamp', label: 'Time', width: 24 },
+        { key: 'apiKeyId', label: 'Key ID', width: 36 },
+        { key: 'modelId', label: 'Model', width: 30 },
+        { key: 'rateLimitType', label: 'Limit', width: 12 },
+        { key: 'rateLimitTier', label: 'Tier', width: 10 },
+      ]));
+    });
 }
 
 function parseEnum<const T extends readonly string[]>(
@@ -279,6 +363,8 @@ function toSafeApiKeyMetadata(key: ApiKeyMetadata): ApiKeyMetadata {
     id: key.id,
     last6Chars: key.last6Chars,
     lastUsedAt: key.lastUsedAt,
+    ...(key.modelPrivacy === undefined ? {} : { modelPrivacy: key.modelPrivacy }),
+    ...(key.ipAllowlist === undefined ? {} : { ipAllowlist: key.ipAllowlist }),
     ...(key.usage === undefined ? {} : { usage: key.usage }),
     ...(key.currentPeriodUsage === undefined
       ? {}
