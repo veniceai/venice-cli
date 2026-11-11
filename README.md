@@ -698,8 +698,14 @@ venice characters
 # Search the catalog
 venice characters --search philosophy
 
-# Show details (and reviews when available)
+# Filter and sort (--tag, --category and --model are repeatable)
+venice characters --tag philosophy --no-adult --sort highestRating --order desc
+
+# Show details (and the first page of reviews when available)
 venice characters show alan-watts
+
+# Page through reviews
+venice characters reviews alan-watts --page 2 --page-size 20
 
 # Chat as a catalog character — sends character_slug, not a local system prompt
 venice chat -c alan-watts "What is the nature of reality?"

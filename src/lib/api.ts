@@ -1592,8 +1592,26 @@ export async function listTtsModels(): Promise<Model[]> {
   }));
 }
 
+export const CHARACTER_SORT_FIELDS = [
+  'featured',
+  'highestRating',
+  'highlyRated',
+  'highlyRatedAndRecent',
+  'imports',
+  'mostRecent',
+  'ratingCount',
+] as const;
+
 export type ListCharactersOptions = {
   search?: string;
+  tags?: string[];
+  categories?: string[];
+  isAdult?: boolean;
+  isPro?: boolean;
+  isWebEnabled?: boolean;
+  modelIds?: string[];
+  sortBy?: (typeof CHARACTER_SORT_FIELDS)[number];
+  sortOrder?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
   showSpinner?: boolean;
@@ -1619,6 +1637,14 @@ export async function listCharacters(
   if (options.search) {
     params.set('search', options.search);
   }
+  for (const tag of new Set(options.tags ?? [])) params.append('tags', tag);
+  for (const category of options.categories ?? []) params.append('categories', category);
+  if (options.isAdult !== undefined) params.set('isAdult', String(options.isAdult));
+  if (options.isPro !== undefined) params.set('isPro', String(options.isPro));
+  if (options.isWebEnabled !== undefined) params.set('isWebEnabled', String(options.isWebEnabled));
+  for (const modelId of options.modelIds ?? []) params.append('modelId', modelId);
+  if (options.sortBy) params.set('sortBy', options.sortBy);
+  if (options.sortOrder) params.set('sortOrder', options.sortOrder);
 
   const response = await apiRequest<{ data: Character[] }>(`/characters?${params}`, {
     method: 'GET',
