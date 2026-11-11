@@ -55,6 +55,12 @@ export function assertTtsModels(value: unknown): void {
   }
 }
 
+export function assertModelNameMapping(value: unknown, label: string): void {
+  if (!isObject(value) || !isObject(value.data) || !Object.values(value.data).every(isString)) {
+    throw unexpectedResponse(`the ${label} is missing or malformed.`);
+  }
+}
+
 export function assertEmbeddings(value: unknown): void {
   const isEmbedding: Check = (item) =>
     isObject(item) && Number.isInteger(item.index) && isArrayOf(item.embedding, isNumber);

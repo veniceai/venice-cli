@@ -1566,6 +1566,30 @@ export async function listModels(
   return [...models];
 }
 
+export type ModelNameMapping = {
+  data: Record<string, string>;
+  object?: string;
+  type?: string;
+};
+
+function modelMappingEndpoint(path: string, type?: string): string {
+  return type ? `${path}?${new URLSearchParams({ type })}` : path;
+}
+
+// Trait names (such as "default" or "fastest") and the model each one selects
+export async function getModelTraits(type?: string): Promise<ModelNameMapping> {
+  return apiRequest<ModelNameMapping>(modelMappingEndpoint('/models/traits', type), {
+    spinnerText: 'Fetching model traits...',
+  });
+}
+
+// Compatible model names (such as OpenAI ids) and the Venice model each one maps to
+export async function getModelCompatibilityMapping(type?: string): Promise<ModelNameMapping> {
+  return apiRequest<ModelNameMapping>(modelMappingEndpoint('/models/compatibility_mapping', type), {
+    spinnerText: 'Fetching model compatibility mapping...',
+  });
+}
+
 // List TTS models and their model-specific voice catalogs
 export async function listTtsModels(): Promise<Model[]> {
   const response = await apiRequest<{ data: Model[] }>('/models?type=tts', {

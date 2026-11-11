@@ -3,18 +3,25 @@
  */
 
 import { Command } from 'commander';
-import { listModels } from '../lib/api.js';
+import {
+  getModelCompatibilityMapping,
+  getModelTraits,
+  listModels,
+  type ModelNameMapping,
+} from '../lib/api.js';
 import {
   formatError,
   formatJson,
+  formatTable,
   getChalk,
   detectOutputFormat,
   terminalSafe,
 } from '../lib/output.js';
+import { assertModelNameMapping } from '../lib/response-checks.js';
 import type { Model } from '../types/index.js';
 
 export function registerModelsCommand(program: Command): void {
-  program
+  const models = program
     .command('models')
     .description('List available models')
     .option('-t, --type <type>', 'Filter by type (all|text|image|tts|asr|music|embedding|video|upscale|inpaint)')
@@ -98,6 +105,184 @@ export function registerModelsCommand(program: Command): void {
         process.exit(1);
       }
     });
+
+  // `models` also defines -t and -f, so commander gives those flags to the parent
+  // command wherever they appear; subcommands read them with optsWithGlobals().
+  models
+    .command('show <id>')
+    .description("Show one model's full catalog entry: capabilities, constraints and pricing")
+    .option('-t, --type <type>', 'Model type to search (default: all types)')
+    .option('-f, --format <format>', 'Output format (pretty|json)')
+    .action(async (id: string, _options, command: Command) => {
+      const options = command.optsWithGlobals();
+      const format = detectOutputFormat(options.format);
+
+      try {
+        const type = normalizeType(options.type);
+        const wanted = id.trim().toLowerCase();
+        const catalog = await listModels(type ? { type } : {});
+        const model = catalog.find((m: Model) => typeof m.id === 'string' && m.id.toLowerCase() === wanted);
+        if (!model) {
+          const where = type ? `the "${type}" catalog` : 'the model catalog';
+          throw new Error(
+            `No model "${id}" in ${where}. List available ids with: venice models -t <type>`
+          );
+        }
+
+        if (format === 'json') {
+          console.log(formatJson(model));
+          return;
+        }
+        printModelDetails(model);
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
+    });
+
+  registerModelMappingCommand(models, {
+    name: 'traits',
+    description: 'Show which model each trait (such as default or fastest) selects',
+    label: 'model traits',
+    keyLabel: 'Trait',
+    fetch: getModelTraits,
+  });
+
+  registerModelMappingCommand(models, {
+    name: 'compat',
+    description: 'Show which Venice model each compatible model name (such as an OpenAI id) maps to',
+    label: 'model compatibility mapping',
+    keyLabel: 'Compatible name',
+    fetch: getModelCompatibilityMapping,
+  });
+}
+
+function registerModelMappingCommand(
+  models: Command,
+  spec: {
+    name: string;
+    description: string;
+    label: string;
+    keyLabel: string;
+    fetch: (type?: string) => Promise<ModelNameMapping>;
+  }
+): void {
+  models
+    .command(spec.name)
+    .description(spec.description)
+    .option('-t, --type <type>', 'Model type (default: text)')
+    .option('-f, --format <format>', 'Output format (pretty|json)')
+    .action(async (_options, command: Command) => {
+      const options = command.optsWithGlobals();
+      const format = detectOutputFormat(options.format);
+      const c = getChalk();
+
+      try {
+        const mapping = await spec.fetch(normalizeType(options.type));
+        assertModelNameMapping(mapping, spec.label);
+
+        if (format === 'json') {
+          console.log(formatJson(mapping));
+          return;
+        }
+
+        const entries = Object.entries(mapping.data).sort(([a], [b]) => a.localeCompare(b));
+        const type = typeof mapping.type === 'string' ? ` (${terminalSafe(mapping.type)})` : '';
+        console.log(c.bold(`\n${capitalizeFirst(spec.label)}${type}\n`));
+        if (entries.length === 0) {
+          console.log(c.yellow('No entries returned.'));
+          return;
+        }
+        console.log(formatTable(
+          entries.map(([name, model]) => ({ name, model })),
+          [
+            { key: 'name', label: spec.keyLabel },
+            { key: 'model', label: 'Model' },
+          ]
+        ));
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
+    });
+}
+
+function normalizeType(type: unknown): string | undefined {
+  if (type === undefined) return undefined;
+  const normalized = String(type).toLowerCase().trim();
+  return normalized === '' || normalized === 'all' ? undefined : normalized;
+}
+
+const SPEC_SECTIONS = ['capabilities', 'constraints', 'pricing'] as const;
+const SPEC_SUMMARY_FIELDS = new Set<string>(['name', 'description', 'privacy', 'traits', ...SPEC_SECTIONS]);
+
+function printModelDetails(model: Model): void {
+  const c = getChalk();
+  const spec = (model.model_spec ?? {}) as Record<string, unknown>;
+  const field = (label: string, value: unknown) => {
+    if (value === undefined || value === null || value === '') return;
+    console.log(`${c.dim(`${label}:`)} ${formatValue(value)}`);
+  };
+
+  console.log('');
+  const name = typeof spec.name === 'string' ? ` — ${c.bold(terminalSafe(spec.name))}` : '';
+  console.log(`${c.cyan(c.bold(terminalSafe(model.id)))}${name}`);
+  console.log('');
+
+  if (typeof spec.description === 'string' && spec.description) {
+    console.log(terminalSafe(spec.description));
+    console.log('');
+  }
+
+  const raw = model as unknown as Record<string, unknown>;
+  field('Type', model.type);
+  field('Owned by', raw.owned_by);
+  field('Privacy', spec.privacy);
+  field('Traits', spec.traits);
+
+  const details = Object.entries(spec).filter(([key]) => !SPEC_SUMMARY_FIELDS.has(key));
+  printSection('Specification', details);
+  for (const section of SPEC_SECTIONS) {
+    const value = spec[section];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      printSection(capitalizeFirst(section), Object.entries(value));
+    }
+  }
+  console.log('');
+  console.log(c.dim('Full entry: venice models show <id> -f json'));
+}
+
+function printSection(title: string, entries: Array<[string, unknown]>): void {
+  const lines = flattenEntries(entries);
+  if (lines.length === 0) return;
+  const c = getChalk();
+  console.log(`\n${c.bold(title)}`);
+  console.log(c.dim('─'.repeat(50)));
+  for (const [key, value] of lines) {
+    console.log(`  ${c.dim(`${terminalSafe(key)}:`)} ${formatValue(value)}`);
+  }
+}
+
+function flattenEntries(entries: Array<[string, unknown]>, prefix = ''): Array<[string, unknown]> {
+  return entries.flatMap(([key, value]): Array<[string, unknown]> => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value === undefined || value === null) return [];
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      return flattenEntries(Object.entries(value), path);
+    }
+    return [[path, value]];
+  });
+}
+
+function formatValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (item !== null && typeof item === 'object' ? JSON.stringify(item) : String(item)))
+      .map((item) => terminalSafe(item))
+      .join(', ');
+  }
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  return terminalSafe(value);
 }
 
 function groupModelsByType(models: Model[]): Record<string, Model[]> {
