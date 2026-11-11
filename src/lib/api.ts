@@ -1464,15 +1464,17 @@ export async function generateEmbeddings(
   input: string | string[],
   options: {
     model?: string;
+    encodingFormat?: 'float' | 'base64';
   } = {}
-): Promise<{ embedding: number[]; index: number }[]> {
+): Promise<{ embedding: number[] | string; index: number }[]> {
   const body = {
     model: options.model || 'text-embedding-ada-002',
     input: Array.isArray(input) ? input : [input],
+    ...(options.encodingFormat ? { encoding_format: options.encodingFormat } : {}),
   };
 
   const response = await apiRequest<{
-    data: Array<{ embedding: number[]; index: number }>;
+    data: Array<{ embedding: number[] | string; index: number }>;
   }>('/embeddings', {
     method: 'POST',
     body,

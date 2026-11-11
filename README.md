@@ -517,6 +517,9 @@ venice embeddings -o vectors.json "Text to embed"
 
 # From stdin
 echo "Text to embed" | venice embeddings
+
+# Ask for base64-encoded float32 vectors (smaller JSON)
+venice embeddings --encoding-format base64 -o vectors.json "Text to embed"
 ```
 
 ### Crypto RPC

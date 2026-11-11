@@ -24,9 +24,15 @@ export function registerEmbeddingsCommand(program: Command): void {
     .option('-o, --output <path>', 'Save embeddings to JSON file')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .option('--file <path>', 'Read text from file instead')
+    .option('--encoding-format <encoding>', 'Embedding encoding returned by the API (float|base64)')
     .action(async (textParts: string[], options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
+      const encodingFormat = options.encodingFormat as 'float' | 'base64' | undefined;
+      if (encodingFormat !== undefined && encodingFormat !== 'float' && encodingFormat !== 'base64') {
+        console.error(formatError('--encoding-format must be float or base64'));
+        process.exit(1);
+      }
 
       let input: string | string[];
 
@@ -52,13 +58,14 @@ export function registerEmbeddingsCommand(program: Command): void {
       try {
         const result = await generateEmbeddings(input, {
           model: options.model,
+          encodingFormat,
         });
-        assertEmbeddings(result);
+        assertEmbeddings(result, encodingFormat);
 
         if (options.output) {
           writeOutputFile(options.output, formatJson(result));
           console.log(formatSuccess(`Saved embeddings to ${options.output}`));
-          console.log(c.dim(`Dimension: ${result[0]?.embedding?.length || 0}`));
+          console.log(c.dim(`Dimension: ${result[0] ? vectorOf(result[0].embedding).length : 0}`));
           return;
         }
 
@@ -69,10 +76,11 @@ export function registerEmbeddingsCommand(program: Command): void {
 
         // Pretty format - show summary
         for (const item of result) {
+          const vector = vectorOf(item.embedding);
           console.log(c.bold(`Embedding ${item.index + 1}:`));
-          console.log(`  ${c.dim('Dimension:')} ${item.embedding.length}`);
-          console.log(`  ${c.dim('First 5 values:')} [${item.embedding.slice(0, 5).map(v => v.toFixed(4)).join(', ')}...]`);
-          console.log(`  ${c.dim('Magnitude:')} ${magnitude(item.embedding).toFixed(6)}`);
+          console.log(`  ${c.dim('Dimension:')} ${vector.length}`);
+          console.log(`  ${c.dim('First 5 values:')} [${vector.slice(0, 5).map(v => v.toFixed(4)).join(', ')}...]`);
+          console.log(`  ${c.dim('Magnitude:')} ${magnitude(vector).toFixed(6)}`);
         }
 
         console.log(c.dim('\nTip: Use --output file.json to save full embeddings'));
@@ -81,6 +89,13 @@ export function registerEmbeddingsCommand(program: Command): void {
         process.exit(1);
       }
     });
+}
+
+// base64 embeddings are little-endian float32 values.
+function vectorOf(embedding: number[] | string): number[] {
+  if (Array.isArray(embedding)) return embedding;
+  const bytes = Buffer.from(embedding, 'base64');
+  return Array.from({ length: bytes.length / 4 }, (_, index) => bytes.readFloatLE(index * 4));
 }
 
 function magnitude(vec: number[]): number {
