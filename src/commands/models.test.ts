@@ -105,6 +105,14 @@ test('models show prints capabilities, constraints and pricing readably', async 
   assert.match(result.stdout, /availableContextTokens: 131072/);
   assert.match(result.stdout, /supportsVision: yes/);
   assert.match(result.stdout, /input\.usd: 0\.5/);
+  assert.match(result.stdout, /Traits: default/);
+
+  const empty = await runCli(
+    ['models', 'show', 'alpha-chat', '-f', 'pretty'],
+    catalogApi({ '/models': { data: [{ ...textModels[1], model_spec: { ...textModels[1].model_spec, traits: [] } }] } })
+  );
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.doesNotMatch(empty.stdout, /Traits:/);
 
   const video = await runCli(['models', 'show', 'Wan-Video', '-f', 'pretty'], catalogApi());
   assert.equal(video.status, 0, video.stderr);

@@ -221,6 +221,7 @@ function printModelDetails(model: Model): void {
   const spec = (model.model_spec ?? {}) as Record<string, unknown>;
   const field = (label: string, value: unknown) => {
     if (value === undefined || value === null || value === '') return;
+    if (Array.isArray(value) && value.length === 0) return;
     console.log(`${c.dim(`${label}:`)} ${formatValue(value)}`);
   };
 
