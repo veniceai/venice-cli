@@ -55,29 +55,6 @@ export function assertTtsModels(value: unknown): void {
   }
 }
 
-export function assertModelNameMapping(value: unknown, label: string): void {
-  if (!isObject(value) || !isObject(value.data) || !Object.values(value.data).every(isString)) {
-    throw unexpectedResponse(`the ${label} is missing or malformed.`);
-  }
-}
-
-export function assertResponsesResult(value: unknown): void {
-  const isContentPart: Check = (part) =>
-    isObject(part) && isString(part.type) && isOptional(part.text, isString);
-  const isOutputItem: Check = (item) =>
-    isObject(item) &&
-    isString(item.type) &&
-    isOptional(item.content, (content) => isArrayOf(content, isContentPart));
-  if (
-    !isObject(value) ||
-    !isString(value.status) ||
-    !isArrayOf(value.output, isOutputItem) ||
-    !isOptional(value.output_text, isString)
-  ) {
-    throw unexpectedResponse('the response has no output.');
-  }
-}
-
 export function assertEmbeddings(value: unknown): void {
   const isEmbedding: Check = (item) =>
     isObject(item) && Number.isInteger(item.index) && isArrayOf(item.embedding, isNumber);
@@ -155,5 +132,28 @@ export function assertApiKeyRateLimits(value: unknown): void {
     !isArrayOf(value.rateLimits, isModelLimits)
   ) {
     throw unexpectedResponse('the rate limits are missing or malformed.');
+  }
+}
+
+export function assertModelNameMapping(value: unknown, label: string): void {
+  if (!isObject(value) || !isObject(value.data) || !Object.values(value.data).every(isString)) {
+    throw unexpectedResponse(`the ${label} is missing or malformed.`);
+  }
+}
+
+export function assertResponsesResult(value: unknown): void {
+  const isContentPart: Check = (part) =>
+    isObject(part) && isString(part.type) && isOptional(part.text, isString);
+  const isOutputItem: Check = (item) =>
+    isObject(item) &&
+    isString(item.type) &&
+    isOptional(item.content, (content) => isArrayOf(content, isContentPart));
+  if (
+    !isObject(value) ||
+    !isString(value.status) ||
+    !isArrayOf(value.output, isOutputItem) ||
+    !isOptional(value.output_text, isString)
+  ) {
+    throw unexpectedResponse('the response has no output.');
   }
 }
