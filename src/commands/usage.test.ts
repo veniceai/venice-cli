@@ -67,6 +67,34 @@ test('usage prints stored command and model names through the terminal sanitiser
   }
 });
 
+test('usage lists a Daily row for every day in the requested window', () => {
+  const home = mkdtempSync(join(tmpdir(), 'venice-usage-'));
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+  const entries = Array.from({ length: 9 }, (_, i) => ({
+    timestamp: new Date(now - i * DAY - 60_000).toISOString(),
+    command: 'chat',
+    model: 'kimi-k2-5',
+    total_tokens: 100 + i,
+  }));
+  const dailyRows = (stdout: string) => stdout.match(/^ {2}\d{4}-\d{2}-\d{2} /gm)?.length ?? 0;
+  try {
+    mkdirSync(join(home, '.venice'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.venice', 'usage.json'), JSON.stringify(entries));
+
+    const nine = runUsage(home, ['-d', '9']);
+    assert.equal(nine.status, 0, nine.stderr);
+    assert.match(nine.stdout, /Total Tokens: 936\n/);
+    assert.equal(dailyRows(nine.stdout), 9);
+
+    const week = runUsage(home, []);
+    assert.equal(week.status, 0, week.stderr);
+    assert.equal(dailyRows(week.stdout), 7);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('usage counts commands and models named after Object.prototype properties', () => {
   const home = mkdtempSync(join(tmpdir(), 'venice-usage-'));
   const timestamp = new Date().toISOString();

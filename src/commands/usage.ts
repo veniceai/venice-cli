@@ -81,8 +81,8 @@ export function registerUsageCommand(program: Command): void {
       // Daily breakdown
       console.log(c.bold('Daily:'));
       const daily = groupByDay(filtered);
-      const days = Object.keys(daily).sort().slice(-7);
-      
+      const days = Object.keys(daily).sort();
+
       for (const day of days) {
         const dayData = daily[day];
         const tokens = dayData.reduce((sum, u) => sum + tokenCount(u.total_tokens), 0);
