@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
 
 ### Prerequisites
 
-- Node.js 20 or later
+- Node.js 22 or later
 - npm or yarn
 - A Venice AI API key for testing
 
@@ -151,7 +151,7 @@ docs(readme): add shell completion instructions
 5. Submit a PR with a clear description
 
 CI runs `npm run build`, `npm run lint`, `npm test` and `npm run check:package`
-on Node.js 20, 22 and 24 for every pull request; make sure it passes.
+on Node.js 22 and 24 for every pull request; make sure it passes.
 
 #### PR Description Template
 

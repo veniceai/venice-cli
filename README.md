@@ -955,7 +955,7 @@ venice chat -m <tee-capable-model> "Hello from the command line"
 
 ## Requirements
 
-- Node.js 20 or later
+- Node.js 22 or later
 - A Venice AI API key
 
 ## Development
