@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { decryptChunk, deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 import type { Message, Model } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -44,19 +45,6 @@ interface Stub {
   models?: (type: string | null) => Model[];
   attestation?: (nonce: string) => Record<string, unknown>;
   reply?: (clientPublicKey: string) => string[];
-}
-
-function buildTdxQuote(options: { reportData?: string; teeType?: number; tdAttributes?: Buffer } = {}): string {
-  const signatureData = Buffer.alloc(64);
-  const quote = Buffer.alloc(636 + signatureData.length);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(options.teeType ?? 0x81, 4);
-  options.tdAttributes?.copy(quote, 168);
-  if (options.reportData) Buffer.from(options.reportData, 'hex').copy(quote, 568);
-  quote.writeUInt32LE(signatureData.length, 632);
-  signatureData.copy(quote, 636);
-  return quote.toString('hex');
 }
 
 const serverVerification = {

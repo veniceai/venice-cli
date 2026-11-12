@@ -19,6 +19,7 @@ import { getToolDefinitions } from '../lib/tools.js';
 import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
 import { buildUserMessageContent } from '../lib/chat-attachments.js';
 import { childEnv } from '../lib/test-env.js';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 import type { Message } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -555,15 +556,6 @@ test('chat rejects prompt caching and reasoning with E2EE before completion', as
   }
 });
 
-function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(48 + 584 + 4);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(0x81, 4);
-  Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
-  return quote.toString('hex');
-}
-
 async function runE2EEChat(args: string[], replyChunks: string[]) {
   const model = 'e2ee-test-model';
   const signingKey = generateEphemeralKeyPair().publicKeyHex;
@@ -594,7 +586,7 @@ async function runE2EEChat(args: string[], replyChunks: string[]) {
         verified: true,
         signing_key: signingKey,
         signing_address: signingAddress,
-        intel_quote: buildTdxQuote(signingAddress),
+        intel_quote: buildTdxQuote({ reportData: signingAddress }),
         server_verification: {
           tdx: { valid: true },
           nonceBinding: { bound: true },

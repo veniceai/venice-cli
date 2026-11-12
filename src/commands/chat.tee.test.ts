@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 import type { Message, Model } from '../types/index.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -32,18 +33,6 @@ interface ChatRun {
   attestationRequests: number;
   completions: CompletionRequest[];
   history?: string;
-}
-
-function buildTdxQuote(options: { teeType?: number; tdAttributes?: Buffer } = {}): string {
-  const signatureData = Buffer.alloc(64);
-  const quote = Buffer.alloc(636 + signatureData.length);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(options.teeType ?? 0x81, 4);
-  options.tdAttributes?.copy(quote, 168);
-  quote.writeUInt32LE(signatureData.length, 632);
-  signatureData.copy(quote, 636);
-  return quote.toString('hex');
 }
 
 const serverVerification = {

@@ -102,6 +102,9 @@ const TDX_TEE_TYPE = 0x81
 const TDX_QUOTE_HEADER_BYTES = 48
 const TDX_V5_BODY_DESCRIPTOR_BYTES = 6
 const TDX_SIGNATURE_LENGTH_BYTES = 4
+// Signature data: ECDSA signature (64), attestation key (64), then certification data type (u16) and size (u32).
+const TDX_CERTIFICATION_DATA_SIZE_OFFSET = 130
+const TDX_CERTIFICATION_DATA_OFFSET = 134
 const TD_REPORT_V10_BYTES = 584
 // Quote v5 body types: 2 is a TDX 1.0 TD report, 3 is a TDX 1.5 TD report that extends the 1.0 layout.
 const TDX_V5_BODY_BYTES = new Map([
@@ -121,7 +124,8 @@ export const isTdDebugMode = (tdAttributes: string): boolean => {
 
 /**
  * Parse an Intel TDX quote (version 4, or version 5 with a TDX 1.0 or 1.5 TD report) from a hex string.
- * Returns undefined unless the whole string is exactly one well-formed TDX quote.
+ * Returns undefined unless the string is exactly one well-formed TDX quote, optionally followed by zero bytes.
+ * Well-formed includes signature data whose certification data size accounts for the rest of it.
  */
 export const parseTdxQuote = (hexQuote: string): ParsedTdxQuote | undefined => {
   const quote = parseHex(hexQuote)
@@ -147,7 +151,13 @@ export const parseTdxQuote = (hexQuote: string): ParsedTdxQuote | undefined => {
   const signatureLengthOffset = bodyOffset + bodyLength
   if (quote.length < signatureLengthOffset + TDX_SIGNATURE_LENGTH_BYTES) return undefined
   const signatureLength = view.getUint32(signatureLengthOffset, true)
-  if (quote.length !== signatureLengthOffset + TDX_SIGNATURE_LENGTH_BYTES + signatureLength) return undefined
+  const signatureOffset = signatureLengthOffset + TDX_SIGNATURE_LENGTH_BYTES
+  const quoteEnd = signatureOffset + signatureLength
+  if (signatureLength < TDX_CERTIFICATION_DATA_OFFSET || quote.length < quoteEnd) return undefined
+  const certificationDataSize = view.getUint32(signatureOffset + TDX_CERTIFICATION_DATA_SIZE_OFFSET, true)
+  if (certificationDataSize !== signatureLength - TDX_CERTIFICATION_DATA_OFFSET) return undefined
+  // Some quote providers return the quote in a zero-padded buffer.
+  if (quote.subarray(quoteEnd).some((byte) => byte !== 0)) return undefined
 
   const readHex = (offset: number, length: number) =>
     bytesToHex(quote.subarray(bodyOffset + offset, bodyOffset + offset + length))

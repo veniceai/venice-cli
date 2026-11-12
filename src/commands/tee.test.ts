@@ -11,6 +11,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey } from '../lib/e2ee.js';
 import { childEnv } from '../lib/test-env.js';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const MODEL = 'test-model';
@@ -81,15 +82,6 @@ async function runTee(args: string[], handle: StubHandler): Promise<CliResult> {
   }
 }
 
-function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(48 + 584 + 4);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(0x81, 4);
-  Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
-  return quote.toString('hex');
-}
-
 function passingAttestation(): AttestationBuilder {
   const signingKey = Buffer.from(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), false)).toString('hex');
   const signingAddress = deriveSigningAddressFromKey(signingKey);
@@ -101,7 +93,7 @@ function passingAttestation(): AttestationBuilder {
     verified: true,
     signing_key: signingKey,
     signing_address: signingAddress,
-    intel_quote: buildTdxQuote(signingAddress),
+    intel_quote: buildTdxQuote({ reportData: signingAddress }),
     server_verification: {
       tdx: { valid: true },
       nonceBinding: { bound: true },

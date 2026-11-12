@@ -47,7 +47,7 @@ const BASE_URL =
   process.env.NODE_ENV === 'test' && process.env.VENICE_API_BASE_URL
     ? process.env.VENICE_API_BASE_URL
     : 'https://api.venice.ai/api/v1';
-const MODEL = 'e2ee-qwen3-5-122b-a10b'; // E2EE-capable model
+const MODEL = 'e2ee-qwen3-6-35b-a3b'; // E2EE-capable model
 const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption');
 
 // Encrypted message layout: ephemeral public key || nonce || ciphertext + tag
@@ -62,6 +62,7 @@ const TD_REPORT_10_BYTES = 584;
 const TD_REPORT_15_BYTES = 648;
 const TD_ATTRIBUTES_OFFSET = 120; // within the TD report
 const REPORT_DATA_OFFSET = 520; // within the TD report
+const CERTIFICATION_DATA_OFFSET = 134; // within the signature data
 
 if (!API_KEY) {
   console.error('Error: VENICE_API_KEY environment variable not set');
@@ -98,8 +99,9 @@ function generateNonce() {
 
 /**
  * Parse an Intel TDX quote and check that its layout is complete: version 4
- * or 5, TEE type 0x81, a TD report body, and signature data that ends exactly
- * where the quote ends. Only fields are read; the signature is not verified.
+ * or 5, TEE type 0x81, a TD report body, and signature data whose
+ * certification data fills it, followed by nothing but zero padding. Only
+ * fields are read; the signature is not verified.
  */
 function parseTdxQuote(quoteHex) {
   const quote = hexToBytes(quoteHex, 'TDX quote');
@@ -133,8 +135,22 @@ function parseTdxQuote(quoteHex) {
   const signatureLengthOffset = bodyOffset + bodyLength;
   if (quote.length < signatureLengthOffset + 4) throw new Error('TDX quote is truncated');
   const signatureLength = quote.readUInt32LE(signatureLengthOffset);
-  if (quote.length !== signatureLengthOffset + 4 + signatureLength) {
+  const signatureOffset = signatureLengthOffset + 4;
+  const quoteEnd = signatureOffset + signatureLength;
+  if (quote.length < quoteEnd) {
     throw new Error('TDX quote length does not match its signature data length');
+  }
+  // Signature data: ECDSA signature (64), attestation key (64), then
+  // certification data type (u16), size (u32) and the data itself.
+  if (
+    signatureLength < CERTIFICATION_DATA_OFFSET ||
+    quote.readUInt32LE(signatureOffset + CERTIFICATION_DATA_OFFSET - 4) !== signatureLength - CERTIFICATION_DATA_OFFSET
+  ) {
+    throw new Error('TDX quote has an unexpected signature data layout');
+  }
+  // Some quote providers return the quote in a zero-padded buffer.
+  if (quote.subarray(quoteEnd).some((byte) => byte !== 0)) {
+    throw new Error('TDX quote has non-zero bytes after its signature data');
   }
 
   const body = quote.subarray(bodyOffset, bodyOffset + bodyLength);

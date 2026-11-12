@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey, generateEphemeralKeyPair, recoverSignerAddress } from '../lib/e2ee.js';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const MODEL = 'e2ee-test-model';
@@ -85,18 +86,6 @@ async function runTee(
   }
 }
 
-function buildTdxQuote(reportData: string): string {
-  const signatureData = Buffer.alloc(64);
-  const quote = Buffer.alloc(636 + signatureData.length);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(0x81, 4);
-  Buffer.from(reportData, 'hex').copy(quote, 568);
-  quote.writeUInt32LE(signatureData.length, 632);
-  signatureData.copy(quote, 636);
-  return quote.toString('hex');
-}
-
 function attestationRoute(change: Record<string, unknown> = {}) {
   return (url: URL) => ({
     model: MODEL,
@@ -105,7 +94,7 @@ function attestationRoute(change: Record<string, unknown> = {}) {
     tee_provider: 'test',
     signing_key: enclave.publicKeyHex,
     signing_address: enclaveAddress,
-    intel_quote: buildTdxQuote(enclaveAddress),
+    intel_quote: buildTdxQuote({ reportData: enclaveAddress }),
     server_verification: {
       tdx: { valid: true },
       nonceBinding: { bound: true },

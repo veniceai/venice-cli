@@ -138,16 +138,16 @@ cat error.log | venice chat "find the root cause"
 venice chat --no-stream "Quick question"
 
 # E2EE chat (required for model IDs containing "e2ee"; the catalog must advertise E2EE)
-venice chat -m e2ee-qwen3-5-122b-a10b "This message is end-to-end encrypted"
+venice chat -m e2ee-qwen3-6-35b-a3b "This message is end-to-end encrypted"
 
 # TEE mode without E2EE (Venice's proxy can read the prompt; announced on stderr)
-venice chat -m e2ee-qwen3-5-122b-a10b --no-e2ee "This message is not end-to-end encrypted"
+venice chat -m e2ee-qwen3-6-35b-a3b --no-e2ee "This message is not end-to-end encrypted"
 
 # Show TEE attestation details
-venice chat -m e2ee-qwen3-5-122b-a10b --tee-verify "Show the attestation details"
+venice chat -m e2ee-qwen3-6-35b-a3b --tee-verify "Show the attestation details"
 
 # Quiet mode - E2EE without status messages (looks like normal chat)
-venice chat -m e2ee-qwen3-5-122b-a10b -q "This is encrypted but looks like normal chat"
+venice chat -m e2ee-qwen3-6-35b-a3b -q "This is encrypted but looks like normal chat"
 ```
 
 **Options:**
@@ -547,15 +547,15 @@ venice tee attestation --verbose tee-qwen3-5-122b-a10b
 venice tee verify tee-qwen3-5-122b-a10b
 
 # Show a response signature (requires the completion ID of a previous request)
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id>
+venice tee signature e2ee-qwen3-6-35b-a3b <completion-id>
 
 # Check the signature against an enclave signing address you trust, the exact
 # request that was sent and the exact reply text you received
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... \
+venice tee signature e2ee-qwen3-6-35b-a3b <completion-id> --verify-signer 0x123... \
   --expect-request request.json --expect-content reply.txt
 
 # Or compare with their SHA-256 digests
-venice tee signature e2ee-qwen3-5-122b-a10b <completion-id> --verify-signer 0x123... \
+venice tee signature e2ee-qwen3-6-35b-a3b <completion-id> --verify-signer 0x123... \
   --expect-request-sha256 <sha256> --expect-sha256 <sha256>
 ```
 
