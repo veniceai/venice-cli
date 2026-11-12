@@ -322,6 +322,13 @@ type ApiRequestOptions = {
       expectedContentType?: never;
     }
   | {
+      responseType: 'text';
+      stream?: false;
+      maxResponseBytes: number;
+      responseLabel: string;
+      expectedContentType?: never;
+    }
+  | {
       responseType: 'arrayBuffer';
       stream?: false;
       maxResponseBytes: number;
@@ -426,6 +433,9 @@ export async function apiRequest<T>(
         result = Uint8Array.from(bytes).buffer as T;
       } else if (options.responseType === 'jsonText') {
         result = await readJsonText(response, maxResponseBytes, options.responseLabel) as T;
+      } else if (options.responseType === 'text') {
+        const bytes = await readResponseBodyWithLimit(response, maxResponseBytes, options.responseLabel);
+        result = new TextDecoder().decode(bytes) as T;
       } else {
         result = await readJsonResponse<T>(response, maxResponseBytes, responseLabel);
       }
@@ -1408,6 +1418,15 @@ export async function cloneVoice(
   }
 }
 
+export type TranscriptionResult = {
+  text: string;
+  duration?: number;
+  timestamps?: {
+    word?: Array<{ word: string; start: number; end: number }>;
+    segment?: Array<{ text: string; start: number; end: number }>;
+  };
+};
+
 // Transcription (STT) -- requires multipart/form-data upload
 export async function transcribe(
   audioPath: string,
@@ -1415,15 +1434,9 @@ export async function transcribe(
     model?: string;
     language?: string;
     timestamps?: boolean;
+    responseFormat?: 'json' | 'text';
   } = {}
-): Promise<{
-  text: string;
-  duration?: number;
-  timestamps?: {
-    word?: Array<{ word: string; start: number; end: number }>;
-    segment?: Array<{ text: string; start: number; end: number }>;
-  };
-}> {
+): Promise<TranscriptionResult> {
   const fs = await import('fs');
   const path = await import('path');
   const crypto = await import('crypto');
@@ -1446,7 +1459,7 @@ export async function transcribe(
 
   const formFields: Array<[string, string]> = [
     ['model', options.model || 'nvidia/parakeet-tdt-0.6b-v3'],
-    ['response_format', 'json'],
+    ['response_format', options.responseFormat ?? 'json'],
   ];
   if (options.language) {
     formFields.push(['language', options.language]);
@@ -1508,14 +1521,28 @@ export async function transcribe(
       throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
     }
 
-    const response = await readJsonResponse<{
-      text: string;
-      duration?: number;
-      timestamps?: {
-        word?: Array<{ word: string; start: number; end: number }>;
-        segment?: Array<{ text: string; start: number; end: number }>;
-      };
-    }>(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+    let response: TranscriptionResult;
+    if (options.responseFormat === 'text') {
+      // A plain-text transcript may still arrive as a JSON string or object.
+      const bytes = await readResponseBodyWithLimit(res, MAX_JSON_RESPONSE_BYTES, 'Transcription response');
+      const body = new TextDecoder().decode(bytes);
+      const contentType = res.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      let value: unknown = body;
+      if (contentType === 'application/json') {
+        try {
+          value = JSON.parse(body);
+        } catch {
+          throw new ResponseValidationError('Transcription response was not valid JSON.');
+        }
+      }
+      response = typeof value === 'string' ? { text: value } : value as TranscriptionResult;
+    } else {
+      response = await readJsonResponse<TranscriptionResult>(
+        res,
+        MAX_JSON_RESPONSE_BYTES,
+        'Transcription response'
+      );
+    }
 
     if (spinner) stopSpinner(true);
 
@@ -1538,15 +1565,17 @@ export async function generateEmbeddings(
   input: string | string[],
   options: {
     model?: string;
+    encodingFormat?: 'float' | 'base64';
   } = {}
-): Promise<{ embedding: number[]; index: number }[]> {
+): Promise<{ embedding: number[] | string; index: number }[]> {
   const body = {
     model: options.model || 'text-embedding-ada-002',
     input: Array.isArray(input) ? input : [input],
+    ...(options.encodingFormat ? { encoding_format: options.encodingFormat } : {}),
   };
 
   const response = await apiRequest<{
-    data: Array<{ embedding: number[]; index: number }>;
+    data: Array<{ embedding: number[] | string; index: number }>;
   }>('/embeddings', {
     method: 'POST',
     body,
@@ -1690,8 +1719,26 @@ export async function listTtsModels(): Promise<Model[]> {
   }));
 }
 
+export const CHARACTER_SORT_FIELDS = [
+  'featured',
+  'highestRating',
+  'highlyRated',
+  'highlyRatedAndRecent',
+  'imports',
+  'mostRecent',
+  'ratingCount',
+] as const;
+
 export type ListCharactersOptions = {
   search?: string;
+  tags?: string[];
+  categories?: string[];
+  isAdult?: boolean;
+  isPro?: boolean;
+  isWebEnabled?: boolean;
+  modelIds?: string[];
+  sortBy?: (typeof CHARACTER_SORT_FIELDS)[number];
+  sortOrder?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
   showSpinner?: boolean;
@@ -1717,6 +1764,14 @@ export async function listCharacters(
   if (options.search) {
     params.set('search', options.search);
   }
+  for (const tag of new Set(options.tags ?? [])) params.append('tags', tag);
+  for (const category of options.categories ?? []) params.append('categories', category);
+  if (options.isAdult !== undefined) params.set('isAdult', String(options.isAdult));
+  if (options.isPro !== undefined) params.set('isPro', String(options.isPro));
+  if (options.isWebEnabled !== undefined) params.set('isWebEnabled', String(options.isWebEnabled));
+  for (const modelId of options.modelIds ?? []) params.append('modelId', modelId);
+  if (options.sortBy) params.set('sortBy', options.sortBy);
+  if (options.sortOrder) params.set('sortOrder', options.sortOrder);
 
   const response = await apiRequest<{ data: Character[] }>(`/characters?${params}`, {
     method: 'GET',
@@ -2538,8 +2593,12 @@ function sanitizeMultipartFilename(filename: string): string {
   return filename.replace(/[\u0000-\u001f\u007f"\\]/g, '_');
 }
 
-// Parse a document without model inference
-export async function parseDocument(filePath: string): Promise<DocumentParseResponse> {
+// Parse a document without model inference. `upload` replaces the filename and
+// media type that would otherwise come from filePath.
+export async function parseDocument(
+  filePath: string,
+  upload: { filename?: string; mimeType?: string } = {}
+): Promise<DocumentParseResponse> {
   const fs = await import('fs');
   const path = await import('path');
   const crypto = await import('crypto');
@@ -2553,8 +2612,8 @@ export async function parseDocument(filePath: string): Promise<DocumentParseResp
     MAX_DOCUMENT_PARSE_BYTES,
     'Document'
   );
-  const filename = path.basename(filePath);
-  const mimeType = mimeTypeFromPath(filePath);
+  const filename = upload.filename ?? path.basename(filePath);
+  const mimeType = upload.mimeType ?? mimeTypeFromPath(filePath);
   const boundary = `----venice-cli-${crypto.randomUUID()}`;
   const CRLF = '\r\n';
   const safeFilename = sanitizeMultipartFilename(filename);

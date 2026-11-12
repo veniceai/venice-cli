@@ -55,9 +55,18 @@ export function assertTtsModels(value: unknown): void {
   }
 }
 
-export function assertEmbeddings(value: unknown): void {
+// base64 embeddings are little-endian float32 values, so they decode to a multiple of 4 bytes.
+const isFloat32Base64: Check = (value) =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value.length % 4 === 0 &&
+  /^[A-Za-z0-9+/]*={0,2}$/.test(value) &&
+  Buffer.from(value, 'base64').length % 4 === 0;
+
+export function assertEmbeddings(value: unknown, encoding: 'float' | 'base64' = 'float'): void {
+  const isVector = encoding === 'base64' ? isFloat32Base64 : (embedding: unknown) => isArrayOf(embedding, isNumber);
   const isEmbedding: Check = (item) =>
-    isObject(item) && Number.isInteger(item.index) && isArrayOf(item.embedding, isNumber);
+    isObject(item) && Number.isInteger(item.index) && isVector(item.embedding);
   if (!Array.isArray(value) || value.length === 0 || !value.every(isEmbedding)) {
     throw unexpectedResponse('no embedding vectors were returned.');
   }

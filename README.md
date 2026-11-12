@@ -266,6 +266,9 @@ Extract text from PDF, DOCX, PPTX, XLSX, and plain text files (up to 25 MB):
 # Print extracted text
 venice parse report.pdf
 
+# Download a document over https, then parse it
+venice parse https://example.com/whitepaper.pdf
+
 # Save extracted text
 venice parse report.pdf -o report.txt
 
@@ -274,6 +277,11 @@ venice parse report.pdf -f json
 ```
 
 Parsing runs in memory on Venice infrastructure with zero data retention and does not invoke a model.
+
+A document URL is downloaded by the CLI, not by Venice, then uploaded like a
+local file. The CLI only downloads over https from public addresses (never
+`localhost`, private networks or cloud metadata addresses), follows at most 5
+redirects, and accepts PDF, Word, Office, EPUB and `text/*` responses.
 
 ### Web Scraping
 
@@ -421,6 +429,9 @@ venice transcribe -l es spanish_audio.mp3
 
 # JSON output
 venice transcribe -f json interview.wav
+
+# Ask the API for a plain-text transcript (no timestamps)
+venice transcribe --response-format text interview.wav
 ```
 
 **Available STT Models:**
@@ -603,6 +614,9 @@ venice embeddings -o vectors.json "Text to embed"
 
 # From stdin
 echo "Text to embed" | venice embeddings
+
+# Ask for base64-encoded float32 vectors (smaller JSON)
+venice embeddings --encoding-format base64 -o vectors.json "Text to embed"
 ```
 
 ### Crypto RPC
@@ -716,9 +730,22 @@ venice billing balance
 # Billed usage from the replacement usage-history endpoint
 venice billing usage --days 7
 
+# Billed usage for an exact UTC range (start inclusive, end exclusive)
+venice billing usage --start 2026-10-01T00:00:00Z --end 2026-11-01T00:00:00Z
+
+# The same usage as one CSV document
+venice billing usage --days 30 -f csv > usage.csv
+
 # Aggregated usage by date, model, and API key
 venice billing analytics --lookback 30d
+
+# Aggregated usage for a date range (YYYY-MM-DD)
+venice billing analytics --start 2026-10-01 --end 2026-10-31
 ```
+
+`--start`/`--end` replace `--days` or `--lookback`; they cannot be combined.
+`billing usage` fetches every page up to 100 pages, so use `--page-size 1000`
+or a shorter range for long histories.
 
 ### API Keys
 
@@ -777,8 +804,14 @@ venice characters
 # Search the catalog
 venice characters --search philosophy
 
-# Show details (and reviews when available)
+# Filter and sort (--tag, --category and --model are repeatable)
+venice characters --tag philosophy --no-adult --sort highestRating --order desc
+
+# Show details (and the first page of reviews when available)
 venice characters show alan-watts
+
+# Page through reviews
+venice characters reviews alan-watts --page 2 --page-size 20
 
 # Chat as a catalog character — sends character_slug, not a local system prompt
 venice chat -c alan-watts "What is the nature of reality?"

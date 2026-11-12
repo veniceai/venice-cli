@@ -246,7 +246,7 @@ test('bash completion completes option values and skips them when finding subcom
     'tee',
     'pretty json markdown raw',
     'json',
-    'show',
+    'show reviews',
     '--format',
     'bash zsh fish',
     '',
