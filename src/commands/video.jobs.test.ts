@@ -433,6 +433,37 @@ test('video generate and upscale --no-wait show the one-time download_url from t
   }
 }));
 
+test('video generate never writes terminal controls from download_url or suggests a command for an unsafe link', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const unsafe: Record<string, string> = {
+    'q-osc': 'https://media.example.com/a.mp4\u001b]52;c;ZWNobyBwd25lZA==\u0007',
+    'q-csi': 'https://media.example.com/a.mp4\r\u001b[2Kvenice video retrieve q-csi -m test-model --url https://evil.example',
+    'q-c1': 'https://media.example.com/a.mp4\u009b2K',
+    'q-http': 'http://media.example.com/a.mp4',
+    'q-junk': 'not a url',
+  };
+  const stub = await startStub({
+    'POST /api/v1/video/queue': async (request, response) => {
+      const queueId = String((await readJson(request)).prompt);
+      sendJson(response, { queue_id: queueId, model: 'test-model', download_url: unsafe[queueId] });
+    },
+  });
+  try {
+    for (const [queueId, downloadUrl] of Object.entries(unsafe)) {
+      const pretty = await runCli(['video', 'generate', queueId, '-m', 'test-model', '-f', 'pretty'], dir, stub.origin);
+      assert.equal(pretty.status, 0, pretty.stderr);
+      assert.doesNotMatch(pretty.stdout, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/, `${queueId}: raw control byte in output`);
+      assert.doesNotMatch(pretty.stdout, /Download with:/, `${queueId}: suggested a command for an unsafe link`);
+      assert.match(pretty.stdout, /not a valid https URL/, queueId);
+
+      const json = await runCli(['video', 'generate', queueId, '-m', 'test-model', '-f', 'json'], dir, stub.origin);
+      assert.equal(json.status, 0, json.stderr);
+      assert.equal(JSON.parse(json.stdout).download_url, downloadUrl, queueId);
+    }
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('video generate rejects a download_url that is not a string', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'POST /api/v1/video/queue': (_request, response) => {

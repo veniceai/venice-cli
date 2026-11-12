@@ -124,12 +124,27 @@ async function completeSavedVideo(queueId: string, model: string, outputPath: st
   }
 }
 
+// The URL parser silently drops tabs and newlines, so control characters are checked on the raw string.
+export function isPasteableHttpsUrl(value: string): boolean {
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function printQueuedDownloadUrl(queued: QueuedJob): void {
-  if (!queued.download_url) return;
+  const downloadUrl = queued.download_url;
+  if (downloadUrl === undefined) return;
   const c = getChalk();
-  console.log(`\n${c.dim('Download URL:')} ${c.cyan(terminalSafe(queued.download_url))}`);
+  console.log(`\n${c.dim('Download URL:')} ${c.cyan(terminalSafe(downloadUrl))}`);
+  if (!isPasteableHttpsUrl(downloadUrl)) {
+    console.log(c.yellow('Venice returned a download_url that is not a valid https URL, so no download command is suggested. Use -f json to see it exactly.'));
+    return;
+  }
   console.log(c.yellow('Venice returns this link only once and it expires within 24 hours, so save it now.'));
-  console.log(`${c.dim('Download with:')} ${shellCommand`venice video retrieve ${apiId(queued.queue_id)} -m ${apiId(queued.model)} --url ${queued.download_url}`}`);
+  console.log(`${c.dim('Download with:')} ${shellCommand`venice video retrieve ${apiId(queued.queue_id)} -m ${apiId(queued.model)} --url ${downloadUrl}`}`);
 }
 
 export function registerVideoCommands(program: Command): void {
