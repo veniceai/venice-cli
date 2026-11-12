@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { keccak_256 } from '@noble/hashes/sha3';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey, generateEphemeralKeyPair, recoverSignerAddress } from '../lib/e2ee.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));

@@ -1,9 +1,10 @@
-import { gcm } from '@noble/ciphers/aes'
-import { randomBytes } from '@noble/ciphers/webcrypto'
+import { randomBytes } from 'node:crypto'
+import { gcm } from '@noble/ciphers/aes.js'
 import { secp256k1 } from '@noble/curves/secp256k1'
-import { hkdf } from '@noble/hashes/hkdf'
-import { sha256 } from '@noble/hashes/sha2'
-import { keccak_256 } from '@noble/hashes/sha3'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { keccak_256 } from '@noble/hashes/sha3.js'
+import { utf8ToBytes } from '@noble/hashes/utils.js'
 
 const HKDF_INFO = 'ecdsa_encryption'
 const EPHEMERAL_PUB_LENGTH = 65
@@ -52,7 +53,7 @@ export const parseSecp256k1PublicKey = (publicKeyHex: string): Uint8Array | unde
  */
 const deriveAesKey = (privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array => {
   const sharedPoint = secp256k1.getSharedSecret(privateKey, publicKey)
-  const aesKey = hkdf(sha256, sharedPoint.subarray(1), undefined, HKDF_INFO, 32)
+  const aesKey = hkdf(sha256, sharedPoint.subarray(1), undefined, utf8ToBytes(HKDF_INFO), 32)
   zeroFill(sharedPoint)
   return aesKey
 }
