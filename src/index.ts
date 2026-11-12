@@ -11,6 +11,7 @@
 
 import { Command } from 'commander';
 import { registerChatCommand } from './commands/chat.js';
+import { registerResponsesCommand } from './commands/responses.js';
 import { registerSearchCommand } from './commands/search.js';
 import { registerImageCommand } from './commands/image.js';
 import { registerAudioCommands } from './commands/audio.js';
@@ -55,6 +56,7 @@ async function main() {
 
   // Register all commands
   registerChatCommand(program);
+  registerResponsesCommand(program);
   registerSearchCommand(program);
   registerImageCommand(program);
   registerAudioCommands(program);

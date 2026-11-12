@@ -65,6 +65,7 @@ To upgrade, run `npm install -g veniceai-cli@latest`.
 ## Features
 
 - 🤖 **Chat** with state-of-the-art AI models
+- 🧪 **Responses API** (alpha) for one-shot, stateless requests
 - 🔐 **End-to-End Encryption (E2EE)** for maximum privacy
 - 🛡️ **TEE Attestation** report checks before sending to TEE models
 - 🔍 **Web Search** with AI-powered synthesis
@@ -192,6 +193,46 @@ the selected model must be present in the model catalog and explicitly
 advertise the corresponding capability. They are unavailable when the catalog
 cannot be fetched. E2EE does not support structured output, reasoning effort,
 or prompt-cache key/retention options.
+
+### Responses API (alpha)
+
+`venice responses` sends one request to Venice's OpenAI-compatible Responses
+API. The endpoint is in alpha, stores nothing between requests, and does not
+support E2EE models, so model IDs containing `e2ee` are refused. Use
+`venice chat` for conversations, tools and E2EE.
+
+```bash
+# One-shot request with the default chat model
+venice responses "Explain the CAP theorem in two sentences"
+
+# Choose a model and control sampling and reasoning
+venice responses -m zai-org-glm-5-1 --reasoning-effort high --max-output-tokens 2000 "solve this"
+
+# Attach images (repeatable; local path or URL)
+venice responses --image photo.jpg "what is in this picture?"
+
+# Use piped context plus an instruction
+cat error.log | venice responses "find the root cause"
+
+# Full response object, including output items and usage
+venice responses -f json "List 3 colors"
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <model>` | Model to use (default: kimi-k2-5) |
+| `--max-output-tokens <n>` | Maximum number of tokens to generate |
+| `--temperature <n>` | Sampling temperature (0-2) |
+| `--top-p <n>` | Nucleus sampling (0-1) |
+| `--reasoning-effort <level>` | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
+| `--image <path>` | Attach an image file or URL (repeatable) |
+| `-f, --format <format>` | Output format (pretty\|json\|raw) |
+
+Pretty and raw output print only the response text. A response that stopped
+early (for example at `--max-output-tokens`) is printed with a warning on
+stderr.
 
 ### Web Search
 
@@ -504,6 +545,20 @@ venice models --e2ee
 
 # Search models
 venice models -s llama
+
+# Show one model's capabilities, constraints and pricing (any type, case-insensitive)
+venice models show zai-org-glm-5-1
+venice models show wan-2.6-text-to-video -t video
+
+# Full catalog entry as JSON
+venice models show zai-org-glm-5-1 -f json
+
+# Which model each trait (default, fastest, ...) selects; text unless -t is given
+venice models traits
+venice models traits -t image
+
+# Which Venice model each compatible name (such as an OpenAI model ID) maps to
+venice models compat
 ```
 
 ### Embeddings
@@ -643,11 +698,17 @@ Key management requires an admin API key. New keys default to the narrower
 # List key metadata (never includes key secrets)
 venice keys list
 
+# Show one key's metadata, limits and usage (never includes the key secret)
+venice keys show <key-id>
+
 # Create a bounded inference key
 venice keys create --name ci --usd-limit 25 --limit-period month --output ./ci.key
 
 # Show limits for the current key
 venice keys rate-limits
+
+# Show the last 50 rate limits the account exceeded (experimental)
+venice keys rate-limit-logs
 
 # Delete by key ID (interactive confirmation)
 venice keys delete <key-id>

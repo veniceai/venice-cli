@@ -44,6 +44,8 @@ export interface ApiKeyMetadata {
   id: string;
   last6Chars: string;
   lastUsedAt: string | null;
+  modelPrivacy?: 'ALL' | 'PRIVATE_TEXT' | 'PRIVATE_ONLY';
+  ipAllowlist?: string[];
   usage?: {
     trailingSevenDays: {
       usd: string;
@@ -75,6 +77,14 @@ export interface ApiKeyRateLimits {
       type: string;
     }>;
   }>;
+}
+
+export interface ApiKeyRateLimitLogEntry {
+  apiKeyId: string;
+  modelId: string;
+  rateLimitTier: string;
+  rateLimitType: string;
+  timestamp: string;
 }
 
 const API_KEY_ID_PATTERN =
@@ -235,4 +245,21 @@ export async function getApiKeyRateLimits(): Promise<ApiKeyRateLimits> {
     spinnerText: 'Fetching rate limits...',
   });
   return response.data;
+}
+
+export async function getApiKey(id: string): Promise<ApiKeyMetadata> {
+  assertApiKeyId(id);
+  const response = await apiRequest<{ data: ApiKeyMetadata }>(
+    `/api_keys/${encodeURIComponent(id)}`,
+    { spinnerText: 'Fetching API key...' }
+  );
+  return response?.data;
+}
+
+// Experimental endpoint: the last 50 rate limits the account exceeded.
+export async function getApiKeyRateLimitLogs(): Promise<ApiKeyRateLimitLogEntry[]> {
+  const response = await apiRequest<{ data: ApiKeyRateLimitLogEntry[] }>('/api_keys/rate_limits/log', {
+    spinnerText: 'Fetching rate limit logs...',
+  });
+  return response?.data;
 }

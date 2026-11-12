@@ -855,6 +855,57 @@ function streamErrorMessage(data: string): string {
     : 'the server reported an error.';
 }
 
+export type ResponsesInputPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string };
+
+export interface ResponsesRequest {
+  model: string;
+  input: string | Array<{ role: 'user'; content: ResponsesInputPart[] }>;
+  max_output_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  reasoning?: { effort: ReasoningEffort };
+}
+
+export interface ResponsesResult {
+  id: string;
+  model: string;
+  status: string;
+  output: Array<{
+    type: string;
+    content?: Array<{ type: string; text?: string }>;
+  }>;
+  output_text?: string;
+  incomplete_details?: { reason?: string };
+  error?: { code?: string; message?: string };
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+}
+
+// Responses API (alpha, stateless, non-streaming)
+export async function createResponse(request: ResponsesRequest): Promise<ResponsesResult> {
+  const response = await apiRequest<ResponsesResult>('/responses', {
+    method: 'POST',
+    body: request,
+    spinnerText: 'Thinking...',
+  });
+
+  const usage = response?.usage;
+  if (usage && typeof usage === 'object') {
+    trackUsage({
+      ...tokenCounts({
+        prompt_tokens: usage.input_tokens,
+        completion_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+      }),
+      command: 'responses',
+      model: request.model,
+    });
+  }
+
+  return response;
+}
+
 // Image generation (Venice-native endpoint)
 export function buildImageGenerationBody(
   prompt: string,
@@ -1564,6 +1615,30 @@ export async function listModels(
   const models = Array.from(merged.values());
   modelsCache = { models, fetchedAt: Date.now() };
   return [...models];
+}
+
+export type ModelNameMapping = {
+  data: Record<string, string>;
+  object?: string;
+  type?: string;
+};
+
+function modelMappingEndpoint(path: string, type?: string): string {
+  return type ? `${path}?${new URLSearchParams({ type })}` : path;
+}
+
+// Trait names (such as "default" or "fastest") and the model each one selects
+export async function getModelTraits(type?: string): Promise<ModelNameMapping> {
+  return apiRequest<ModelNameMapping>(modelMappingEndpoint('/models/traits', type), {
+    spinnerText: 'Fetching model traits...',
+  });
+}
+
+// Compatible model names (such as OpenAI ids) and the Venice model each one maps to
+export async function getModelCompatibilityMapping(type?: string): Promise<ModelNameMapping> {
+  return apiRequest<ModelNameMapping>(modelMappingEndpoint('/models/compatibility_mapping', type), {
+    spinnerText: 'Fetching model compatibility mapping...',
+  });
 }
 
 // List TTS models and their model-specific voice catalogs

@@ -63,18 +63,54 @@ export function assertEmbeddings(value: unknown): void {
   }
 }
 
+const isApiKey: Check = (key) =>
+  isObject(key) &&
+  isNonEmptyString(key.id) &&
+  isString(key.apiKeyType) &&
+  isString(key.last6Chars) &&
+  isOptional(key.description, isString) &&
+  isOptional(key.createdAt, isString) &&
+  isOptional(key.expiresAt, isString) &&
+  isOptional(key.lastUsedAt, isString);
+
 export function assertApiKeyList(value: unknown): void {
-  const isApiKey: Check = (key) =>
-    isObject(key) &&
-    isNonEmptyString(key.id) &&
-    isString(key.apiKeyType) &&
-    isString(key.last6Chars) &&
-    isOptional(key.description, isString) &&
-    isOptional(key.createdAt, isString) &&
-    isOptional(key.expiresAt, isString) &&
-    isOptional(key.lastUsedAt, isString);
   if (!isArrayOf(value, isApiKey)) {
     throw unexpectedResponse('the API key list is missing or malformed.');
+  }
+}
+
+export function assertApiKeyDetails(value: unknown): void {
+  const isUsage: Check = (usage) =>
+    isObject(usage) && isOptional(usage.usd, isString) && isOptional(usage.diem, isString);
+  if (
+    !isApiKey(value) ||
+    !isObject(value) ||
+    !isOptional(value.consumptionLimits, isObject) ||
+    (isObject(value.consumptionLimits) && (
+      !isOptional(value.consumptionLimits.usd, isNumber) ||
+      !isOptional(value.consumptionLimits.diem, isNumber)
+    )) ||
+    !isOptional(value.limitPeriod, isString) ||
+    !isOptional(value.modelPrivacy, isString) ||
+    !isOptional(value.ipAllowlist, (list) => isArrayOf(list, isString)) ||
+    !isOptional(value.usage, isObject) ||
+    (isObject(value.usage) && !isOptional(value.usage.trailingSevenDays, isUsage)) ||
+    !isOptional(value.currentPeriodUsage, isUsage)
+  ) {
+    throw unexpectedResponse('the API key details are missing or malformed.');
+  }
+}
+
+export function assertApiKeyRateLimitLogs(value: unknown): void {
+  const isEntry: Check = (entry) =>
+    isObject(entry) &&
+    isString(entry.apiKeyId) &&
+    isString(entry.modelId) &&
+    isString(entry.rateLimitTier) &&
+    isString(entry.rateLimitType) &&
+    isString(entry.timestamp);
+  if (!isArrayOf(value, isEntry)) {
+    throw unexpectedResponse('the rate limit logs are missing or malformed.');
   }
 }
 
@@ -96,5 +132,28 @@ export function assertApiKeyRateLimits(value: unknown): void {
     !isArrayOf(value.rateLimits, isModelLimits)
   ) {
     throw unexpectedResponse('the rate limits are missing or malformed.');
+  }
+}
+
+export function assertModelNameMapping(value: unknown, label: string): void {
+  if (!isObject(value) || !isObject(value.data) || !Object.values(value.data).every(isString)) {
+    throw unexpectedResponse(`the ${label} is missing or malformed.`);
+  }
+}
+
+export function assertResponsesResult(value: unknown): void {
+  const isContentPart: Check = (part) =>
+    isObject(part) && isString(part.type) && isOptional(part.text, isString);
+  const isOutputItem: Check = (item) =>
+    isObject(item) &&
+    isString(item.type) &&
+    isOptional(item.content, (content) => isArrayOf(content, isContentPart));
+  if (
+    !isObject(value) ||
+    !isString(value.status) ||
+    !isArrayOf(value.output, isOutputItem) ||
+    !isOptional(value.output_text, isString)
+  ) {
+    throw unexpectedResponse('the response has no output.');
   }
 }
