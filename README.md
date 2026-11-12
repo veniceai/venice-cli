@@ -476,6 +476,9 @@ venice video retrieve <queue_id> -m wan-2.6-text-to-video -o my_video.mp4
 venice video retrieve <queue_id> -m wan-2.6-text-to-video --complete
 venice video complete <queue_id> -m wan-2.6-text-to-video
 
+# Download from the download_url printed when the job was queued
+venice video retrieve <queue_id> -m <model> --url '<download_url>'
+
 # Estimate price before queueing
 venice video quote -m veo3-fast-text-to-video -d 5s -a 16:9 "sunset"
 
@@ -493,6 +496,8 @@ venice video models
 `venice video models` loads the live catalog from `GET /models?type=video`. If that request fails, the CLI prints a short fallback list and says so.
 
 `video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
+
+Some models return a `download_url` in the queue response and never return the file from `/video/retrieve`. `video generate` and `video upscale --no-wait` print that link, and `-f json` includes it. Venice returns it only once and it expires within 24 hours, so save it and download with `video retrieve --url`.
 
 Video transcription accepts a public HTTP(S) URL only. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
 

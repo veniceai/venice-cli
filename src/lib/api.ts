@@ -1893,12 +1893,14 @@ function jsonObject(value: unknown, endpoint: string, optionalFields: FieldTypes
   return record;
 }
 
-function parseQueueResponse(
-  value: unknown,
-  endpoint: string,
-  requestedModel: string
-): { queue_id: string; model: string; status?: string } {
-  const record = jsonObject(value, endpoint, { model: 'string', status: 'string' });
+/**
+ * A queued job. Some video models return a pre-signed download_url here, and only here:
+ * /video/retrieve reports COMPLETED for those jobs without ever returning the file.
+ */
+export type QueuedJob = { queue_id: string; model: string; status?: string; download_url?: string };
+
+function parseQueueResponse(value: unknown, endpoint: string, requestedModel: string): QueuedJob {
+  const record = jsonObject(value, endpoint, { model: 'string', status: 'string', download_url: 'string' });
   if (typeof record.queue_id !== 'string' || !record.queue_id) {
     throw unexpectedResponse(endpoint, 'missing queue_id');
   }
@@ -2146,7 +2148,7 @@ export async function queueVideoGeneration(
     aspectRatio?: string;
     imageUrl?: string;
   } = {}
-): Promise<{ queue_id: string; model: string }> {
+): Promise<QueuedJob> {
   const body: Record<string, unknown> = {
     model: options.model || 'wan-2.6-text-to-video',
     prompt,
@@ -2180,7 +2182,7 @@ export async function queueVideoUpscale(
     model?: string;
     upscaleFactor?: number;
   } = {}
-): Promise<{ queue_id: string; model: string }> {
+): Promise<QueuedJob> {
   const model = options.model || 'topaz-video-upscale';
   const response = await apiRequest<unknown>('/video/queue', {
     method: 'POST',

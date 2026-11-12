@@ -15,6 +15,7 @@ import {
   queueVideoUpscale,
   listModels,
   videoUrlFromStatus,
+  type QueuedJob,
   type VideoStatusResult,
 } from '../lib/api.js';
 import {
@@ -123,6 +124,14 @@ async function completeSavedVideo(queueId: string, model: string, outputPath: st
   }
 }
 
+function printQueuedDownloadUrl(queued: QueuedJob): void {
+  if (!queued.download_url) return;
+  const c = getChalk();
+  console.log(`\n${c.dim('Download URL:')} ${c.cyan(terminalSafe(queued.download_url))}`);
+  console.log(c.yellow('Venice returns this link only once and it expires within 24 hours, so save it now.'));
+  console.log(`${c.dim('Download with:')} ${shellCommand`venice video retrieve ${apiId(queued.queue_id)} -m ${apiId(queued.model)} --url ${queued.download_url}`}`);
+}
+
 export function registerVideoCommands(program: Command): void {
   const video = program
     .command('video')
@@ -178,6 +187,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(formatSuccess('Video generation queued!'));
           console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(result.queue_id))}`);
           console.log(`${c.dim('Model:')} ${terminalSafe(result.model)}`);
+          printQueuedDownloadUrl(result);
           console.log(`\n${c.dim('Check status with:')} ${shellCommand`venice video status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`);
         }
       } catch (error) {
@@ -274,6 +284,9 @@ export function registerVideoCommands(program: Command): void {
         }
         if (classifyVideoStatus(result.status) === 'completed') {
           console.log(`\n${c.dim('Download with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
+          if (!videoUrl) {
+            console.log(c.dim('If the job was queued with a download URL, add --url <download_url>.'));
+          }
         }
 
         if (result.error) {
@@ -325,6 +338,7 @@ export function registerVideoCommands(program: Command): void {
     .description('Download a completed video')
     .requiredOption('-m, --model <model>', 'Model used for generation')
     .option('-o, --output <path>', 'Output file path', 'output.mp4')
+    .option('--url <download_url>', 'Download from the download_url returned when the job was queued')
     .option('--complete', 'Delete media after a successful retrieval')
     .option('--delete', 'Alias for --complete')
     .option('-f, --format <format>', 'Output format (pretty|json)')
@@ -334,37 +348,54 @@ export function registerVideoCommands(program: Command): void {
 
       try {
         const shouldComplete = Boolean(options.complete || options.delete);
-        const result = await retrieveVideo(queueId, options.model, {
-          outputPath: options.output,
-          maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
-        });
+        let saved: { bytes: number; content_type: string } | undefined;
 
-        if (result.kind === 'status') {
-          const status = result.status;
-          const downloadUrl = videoUrlFromStatus(status);
-
-          if (!downloadUrl) {
-            const notReady = classifyVideoStatus(status.status) === 'processing';
-            const exitCode = notReady ? 2 : 1;
-
-            if (format === 'json') {
-              console.log(formatJson(status));
-            } else if (notReady) {
-              console.log(`${c.dim('Status:')} ${c.yellow(terminalSafe(status.status))} — video not ready yet.`);
-              console.log(`${c.dim('Try again with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
-            } else {
-              console.error(formatError(
-                `No video was returned (status: ${status.status})${status.error ? `: ${status.error}` : '.'}`
-              ));
-            }
-            process.exitCode = exitCode;
-            return;
-          }
-
+        if (options.url !== undefined) {
           if (format !== 'json') {
             console.log(`${c.dim('Downloading video...')}`);
           }
-          await downloadVideoFromUrl(downloadUrl, options.output);
+          await downloadVideoFromUrl(options.url, options.output);
+        } else {
+          const result = await retrieveVideo(queueId, options.model, {
+            outputPath: options.output,
+            maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+          });
+
+          if (result.kind === 'video') {
+            saved = { bytes: result.bytesWritten, content_type: result.contentType };
+          } else {
+            const status = result.status;
+            const downloadUrl = videoUrlFromStatus(status);
+
+            if (!downloadUrl) {
+              const phase = classifyVideoStatus(status.status);
+              const exitCode = phase === 'processing' ? 2 : 1;
+
+              if (format === 'json') {
+                console.log(formatJson(status));
+              } else if (phase === 'processing') {
+                console.log(`${c.dim('Status:')} ${c.yellow(terminalSafe(status.status))} — video not ready yet.`);
+                console.log(`${c.dim('Try again with:')} ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`}`);
+              } else if (phase === 'completed' && !status.error) {
+                console.error(formatError(
+                  `Venice reports the job as ${status.status} but returned no video. ` +
+                  'Some models deliver the video only through the download_url returned when the job was queued. ' +
+                  `Download it with: ${shellCommand`venice video retrieve ${queueId} -m ${options.model}`} --url <download_url>`
+                ));
+              } else {
+                console.error(formatError(
+                  `No video was returned (status: ${status.status})${status.error ? `: ${status.error}` : '.'}`
+                ));
+              }
+              process.exitCode = exitCode;
+              return;
+            }
+
+            if (format !== 'json') {
+              console.log(`${c.dim('Downloading video...')}`);
+            }
+            await downloadVideoFromUrl(downloadUrl, options.output);
+          }
         }
 
         let deleted = false;
@@ -378,9 +409,7 @@ export function registerVideoCommands(program: Command): void {
             status: 'completed',
             output: options.output,
             model: options.model,
-            ...(result.kind === 'video'
-              ? { bytes: result.bytesWritten, content_type: result.contentType }
-              : {}),
+            ...saved,
             ...(shouldComplete ? { deleted } : {}),
           }));
           return;
@@ -488,6 +517,7 @@ export function registerVideoCommands(program: Command): void {
             console.log(formatSuccess('Video upscale queued!'));
             console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(queued.queue_id))}`);
             console.log(`${c.dim('Model:')} ${terminalSafe(queued.model)}`);
+            printQueuedDownloadUrl(queued);
           }
           return;
         }
@@ -509,7 +539,7 @@ export function registerVideoCommands(program: Command): void {
           maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
         });
         if (result.kind === 'status') {
-          const downloadUrl = videoUrlFromStatus(result.status);
+          const downloadUrl = videoUrlFromStatus(result.status) ?? queued.download_url;
           if (!downloadUrl) {
             throw new Error(
               result.status.error || 'Video upscale completed but no video URL was returned.'
