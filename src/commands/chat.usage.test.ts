@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { nonStreamChat, streamChat } from './chat.js';
 import { deriveSigningAddressFromKey, encryptMessage, generateEphemeralKeyPair } from '../lib/e2ee.js';
 import type { ChatCompletionRequestOptions } from '../lib/api.js';
+import { buildTdxQuote } from '../lib/test-tdx-quote.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const E2EE_MODEL = 'e2ee-usage-model';
@@ -43,15 +44,6 @@ test('streamChat and nonStreamChat ask the client not to record usage when told 
 
   assert.deepEqual(seen.map((options) => options.recordUsage), [false, false, undefined]);
 });
-
-function buildTdxQuote(signingAddress: string): string {
-  const quote = Buffer.alloc(48 + 584 + 4);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(0x81, 4);
-  Buffer.from(signingAddress, 'hex').copy(quote, 48 + 520);
-  return quote.toString('hex');
-}
 
 async function runChat(
   args: string[],
@@ -88,7 +80,7 @@ async function runChat(
         verified: true,
         signing_key: signingKey,
         signing_address: signingAddress,
-        intel_quote: buildTdxQuote(signingAddress),
+        intel_quote: buildTdxQuote({ reportData: signingAddress }),
         server_verification: {
           tdx: { valid: true },
           nonceBinding: { bound: true },

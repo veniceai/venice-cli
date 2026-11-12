@@ -7,6 +7,7 @@ import {
   evaluateE2EEAttestationPolicy,
   evaluateTEEAttestationPolicy,
 } from './tee.js';
+import { buildTdxQuote } from './test-tdx-quote.js';
 
 const MODEL = 'e2ee-test-model';
 const CLIENT_NONCE = 'ab'.repeat(32);
@@ -16,21 +17,6 @@ const NVIDIA_PAYLOAD = JSON.stringify({ nonce: CLIENT_NONCE, arch: 'HOPPER', evi
 const enclave = generateEphemeralKeyPair();
 const signingAddress = deriveSigningAddressFromKey(enclave.publicKeyHex) ?? '';
 const otherAddress = deriveSigningAddressFromKey(generateEphemeralKeyPair().publicKeyHex) ?? '';
-
-function buildTdxQuote(
-  options: { reportData?: string; teeType?: number; tdAttributes?: Buffer } = {}
-): string {
-  const signatureData = Buffer.alloc(64);
-  const quote = Buffer.alloc(636 + signatureData.length);
-  quote.writeUInt16LE(4, 0);
-  quote.writeUInt16LE(2, 2);
-  quote.writeUInt32LE(options.teeType ?? 0x81, 4);
-  options.tdAttributes?.copy(quote, 168);
-  if (options.reportData) Buffer.from(options.reportData, 'hex').copy(quote, 568);
-  quote.writeUInt32LE(signatureData.length, 632);
-  signatureData.copy(quote, 636);
-  return quote.toString('hex');
-}
 
 const serverVerification = {
   tdx: { valid: true },

@@ -54,7 +54,7 @@ if os.environ.get('NODE_ENV') == 'test' and os.environ.get('VENICE_API_BASE_URL'
     BASE_URL = os.environ['VENICE_API_BASE_URL']
 else:
     BASE_URL = 'https://api.venice.ai/api/v1'
-MODEL = 'e2ee-qwen3-5-122b-a10b'  # E2EE-capable model
+MODEL = 'e2ee-qwen3-6-35b-a3b'  # E2EE-capable model
 HKDF_INFO = b'ecdsa_encryption'
 
 # Encrypted message layout: ephemeral public key || nonce || ciphertext + tag
@@ -68,6 +68,7 @@ QUOTE_HEADER_BYTES = 48
 TD_REPORT_BODY_BYTES = {2: 584, 3: 648}  # v5 body type -> TD report 1.0 / 1.5
 TD_ATTRIBUTES_OFFSET = 120  # within the TD report
 REPORT_DATA_OFFSET = 520  # within the TD report
+CERTIFICATION_DATA_OFFSET = 134  # within the signature data
 
 if not API_KEY:
     print('Error: VENICE_API_KEY environment variable not set', file=sys.stderr)
@@ -156,8 +157,8 @@ def parse_tdx_quote(quote_hex: str) -> dict:
     """Parse an Intel TDX quote and check that its layout is complete.
 
     Accepts version 4 or 5, TEE type 0x81, a TD report body, and signature data
-    that ends exactly where the quote ends. Only fields are read; the signature
-    is not verified.
+    whose certification data fills it, followed by nothing but zero padding.
+    Only fields are read; the signature is not verified.
     """
     quote = hex_to_bytes(quote_hex, 'TDX quote')
     if len(quote) < QUOTE_HEADER_BYTES:
@@ -186,8 +187,19 @@ def parse_tdx_quote(quote_hex: str) -> dict:
     if len(quote) < signature_length_offset + 4:
         raise ValueError('TDX quote is truncated')
     (signature_length,) = struct.unpack_from('<I', quote, signature_length_offset)
-    if len(quote) != signature_length_offset + 4 + signature_length:
+    signature_offset = signature_length_offset + 4
+    quote_end = signature_offset + signature_length
+    if len(quote) < quote_end:
         raise ValueError('TDX quote length does not match its signature data length')
+    # Signature data: ECDSA signature (64), attestation key (64), then
+    # certification data type (u16), size (u32) and the data itself.
+    if signature_length < CERTIFICATION_DATA_OFFSET or struct.unpack_from(
+        '<I', quote, signature_offset + CERTIFICATION_DATA_OFFSET - 4
+    )[0] != signature_length - CERTIFICATION_DATA_OFFSET:
+        raise ValueError('TDX quote has an unexpected signature data layout')
+    # Some quote providers return the quote in a zero-padded buffer.
+    if any(quote[quote_end:]):
+        raise ValueError('TDX quote has non-zero bytes after its signature data')
 
     body = quote[body_offset:body_offset + body_length]
     return {

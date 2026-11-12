@@ -13,9 +13,10 @@ import {
   encryptMessage,
   generateEphemeralKeyPair,
 } from './lib/e2ee.js';
+import { buildTdxQuote, type TdxQuoteOptions } from './lib/test-tdx-quote.js';
 
 const examplesDir = fileURLToPath(new URL('../examples/', import.meta.url));
-const MODEL = 'e2ee-qwen3-5-122b-a10b';
+const MODEL = 'e2ee-qwen3-6-35b-a3b';
 const PROMPT = 'Summarise my private notes';
 const ATTESTATION_PASSED = /✅ Attestation report passed/;
 const BANNER = /🔐 Response decrypted/;
@@ -121,40 +122,8 @@ function makeEnclaveWithAmbiguousPrefix(): Enclave {
   throw new Error('no key with an X coordinate starting with 04 was found');
 }
 
-interface QuoteOptions {
-  reportDataAddress: string;
-  version?: number;
-  teeType?: number;
-  bodyType?: number;
-  debug?: boolean;
-  signatureBytes?: number;
-  declaredSignatureLength?: number;
-  trailingBytes?: number;
-}
-
-function buildTdxQuote(options: QuoteOptions): string {
-  const { version = 4, teeType = 0x81, bodyType = 2, debug = false, signatureBytes = 64, trailingBytes = 0 } = options;
-  const header = Buffer.alloc(48);
-  header.writeUInt16LE(version, 0);
-  header.writeUInt16LE(2, 2);
-  header.writeUInt32LE(teeType, 4);
-  const body = Buffer.alloc(bodyType === 3 ? 648 : 584);
-  if (debug) body[120] = 0x01;
-  Buffer.from(options.reportDataAddress, 'hex').copy(body, 520);
-  const descriptor = Buffer.alloc(6);
-  descriptor.writeUInt16LE(bodyType, 0);
-  descriptor.writeUInt32LE(body.length, 2);
-  const signatureLength = Buffer.alloc(4);
-  signatureLength.writeUInt32LE(options.declaredSignatureLength ?? signatureBytes, 0);
-  return Buffer.concat([
-    header,
-    version === 5 ? descriptor : Buffer.alloc(0),
-    body,
-    signatureLength,
-    Buffer.alloc(signatureBytes, 0xab),
-    Buffer.alloc(trailingBytes),
-  ]).toString('hex');
-}
+const DEBUG_TD_ATTRIBUTES = Buffer.from([0x01, 0, 0, 0, 0, 0, 0, 0]);
+const CERTIFICATION_DATA = Buffer.alloc(64, 0xab);
 
 function passingAttestation(enclave: Enclave, nonce: string): Json {
   return {
@@ -164,7 +133,7 @@ function passingAttestation(enclave: Enclave, nonce: string): Json {
     tee_provider: 'test-provider',
     signing_key: enclave.signingKey,
     signing_address: enclave.signingAddress,
-    intel_quote: buildTdxQuote({ reportDataAddress: enclave.signingAddress }),
+    intel_quote: buildTdxQuote({ reportData: enclave.signingAddress, certificationData: CERTIFICATION_DATA }),
     server_verification: {
       tdx: { valid: true },
       nonceBinding: { bound: true },
@@ -174,9 +143,9 @@ function passingAttestation(enclave: Enclave, nonce: string): Json {
   };
 }
 
-const withQuote = (options: Omit<QuoteOptions, 'reportDataAddress'>) => (attestation: Json, enclave: Enclave) => ({
+const withQuote = (options: Omit<TdxQuoteOptions, 'reportData'>) => (attestation: Json, enclave: Enclave) => ({
   ...attestation,
-  intel_quote: buildTdxQuote({ reportDataAddress: enclave.signingAddress, ...options }),
+  intel_quote: buildTdxQuote({ reportData: enclave.signingAddress, certificationData: CERTIFICATION_DATA, ...options }),
 });
 
 const withServerVerification = (overrides: Json) => (attestation: Json) => ({
@@ -339,6 +308,10 @@ const acceptedAttestations: Array<{ name: string; scenario: () => Scenario }> = 
     scenario: () => ({ attestation: withQuote({ version: 5, bodyType: 3 }) }),
   },
   {
+    name: 'a quote followed by zero padding',
+    scenario: () => ({ attestation: withQuote({ trailing: Buffer.alloc(70) }) }),
+  },
+  {
     name: 'a 64-byte signing key that itself starts with 04',
     scenario: () => {
       const enclave = makeEnclaveWithAmbiguousPrefix();
@@ -367,7 +340,7 @@ const rejectedAttestations: Array<{ name: string; attestation: Scenario['attesta
   {
     name: 'another model is attested',
     attestation: (attestation) => ({ ...attestation, model: 'e2ee-other-model' }),
-    failure: /attested model "e2ee-other-model" is not e2ee-qwen3-5-122b-a10b/,
+    failure: /attested model "e2ee-other-model" is not e2ee-qwen3-6-35b-a3b/,
   },
   {
     name: 'there is no Intel quote',
@@ -383,7 +356,7 @@ const rejectedAttestations: Array<{ name: string; attestation: Scenario['attesta
     name: 'the quote is only a header',
     attestation: (attestation, enclave) => ({
       ...attestation,
-      intel_quote: buildTdxQuote({ reportDataAddress: enclave.signingAddress }).slice(0, 96),
+      intel_quote: buildTdxQuote({ reportData: enclave.signingAddress }).slice(0, 96),
     }),
     failure: /TDX quote is truncated/,
   },
@@ -404,17 +377,27 @@ const rejectedAttestations: Array<{ name: string; attestation: Scenario['attesta
   },
   {
     name: 'the signature data is cut short',
-    attestation: withQuote({ declaredSignatureLength: 65 }),
+    attestation: withQuote({ signatureLength: 64 + 64 + 6 + 65 }),
     failure: /does not match its signature data length/,
   },
   {
-    name: 'bytes follow the signature data',
-    attestation: withQuote({ trailingBytes: 1 }),
-    failure: /does not match its signature data length/,
+    name: 'the signature data is shorter than its fixed fields',
+    attestation: withQuote({ signatureLength: 133 }),
+    failure: /unexpected signature data layout/,
+  },
+  {
+    name: 'the certification data size does not fill the signature data',
+    attestation: withQuote({ certificationDataSize: 63 }),
+    failure: /unexpected signature data layout/,
+  },
+  {
+    name: 'non-zero bytes follow the signature data',
+    attestation: withQuote({ trailing: Buffer.from([0, 1]) }),
+    failure: /non-zero bytes after its signature data/,
   },
   {
     name: 'the TD debug bit is set',
-    attestation: withQuote({ debug: true }),
+    attestation: withQuote({ tdAttributes: DEBUG_TD_ATTRIBUTES }),
     failure: /TD debug bit/,
   },
   {
@@ -446,7 +429,7 @@ const rejectedAttestations: Array<{ name: string; attestation: Scenario['attesta
     name: 'REPORTDATA binds a different key',
     attestation: (attestation) => ({
       ...attestation,
-      intel_quote: buildTdxQuote({ reportDataAddress: makeEnclave().signingAddress }),
+      intel_quote: buildTdxQuote({ reportData: makeEnclave().signingAddress, certificationData: CERTIFICATION_DATA }),
     }),
     failure: /does not match the address in the TDX REPORTDATA/,
   },

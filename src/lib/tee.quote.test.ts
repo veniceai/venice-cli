@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { verifyKeyBinding } from './e2ee.js';
 import { isTdDebugMode, parseTdxQuote, type ParsedTdxQuote } from './tee.js';
+import { buildTdxQuoteBytes as buildQuote } from './test-tdx-quote.js';
 
 const SIGNING_KEY =
   '044e3b81af9c2234cad09d679ce6035ed1392347ce64ce405f5dcd36228a25de6e47fd35c4215d1edf53e6f83de344615ce719bdb0fd878f6ed76f06dd277956de';
@@ -32,15 +33,6 @@ interface ReportOptions {
   reportData?: Buffer;
 }
 
-interface QuoteOptions {
-  version?: number;
-  teeType?: number;
-  bodyType?: number;
-  body?: Buffer;
-  bodyLength?: number;
-  signatureData?: Buffer;
-}
-
 function tdReport({ length = 584, tdAttributes = Buffer.alloc(8), reportData = Buffer.alloc(64) }: ReportOptions = {}): Buffer {
   const report = Buffer.alloc(length);
   tdAttributes.copy(report, 120);
@@ -56,29 +48,6 @@ function patternedReport(length: number): Buffer {
     offset += size;
   });
   return report;
-}
-
-function buildQuote({
-  version = 4,
-  teeType = 0x81,
-  bodyType = 2,
-  body = tdReport(),
-  bodyLength = body.length,
-  signatureData = Buffer.alloc(0),
-}: QuoteOptions = {}): Buffer {
-  const header = Buffer.alloc(48);
-  header.writeUInt16LE(version, 0);
-  header.writeUInt16LE(2, 2);
-  header.writeUInt32LE(teeType, 4);
-  const signatureLength = Buffer.alloc(4);
-  signatureLength.writeUInt32LE(signatureData.length);
-  if (version !== 5) {
-    return Buffer.concat([header, body, signatureLength, signatureData]);
-  }
-  const descriptor = Buffer.alloc(6);
-  descriptor.writeUInt16LE(bodyType, 0);
-  descriptor.writeUInt32LE(bodyLength, 2);
-  return Buffer.concat([header, descriptor, body, signatureLength, signatureData]);
 }
 
 function withVersion(quote: Buffer, version: number): Buffer {
@@ -130,11 +99,22 @@ test('the signing address in a v5 REPORTDATA binds the signing key', () => {
 });
 
 test('parseTdxQuote accepts signature data of the declared length, upper-case hex and a 0x prefix', () => {
-  const quote = buildQuote({ signatureData: Buffer.alloc(64, 0xab) }).toString('hex');
+  const quote = buildQuote({ certificationData: Buffer.alloc(64, 0xab) }).toString('hex');
 
   assert.ok(parseTdxQuote(quote));
   assert.ok(parseTdxQuote(`0x${quote}`));
   assert.deepEqual(parseTdxQuote(quote.toUpperCase()), parseTdxQuote(quote));
+});
+
+test('parseTdxQuote reads a quote followed by zero padding as if it had none', () => {
+  for (const quote of [buildQuote({ body: patternedReport(584) }), buildQuote({ version: 5, bodyType: 3, body: patternedReport(648) })]) {
+    const unpadded = parseTdxQuote(quote.toString('hex'));
+    assert.ok(unpadded);
+    for (const padding of [1, 70]) {
+      const padded = Buffer.concat([quote, Buffer.alloc(padding)]);
+      assert.deepEqual(parseTdxQuote(padded.toString('hex')), unpadded, `${padding} bytes`);
+    }
+  }
 });
 
 test('parseTdxQuote rejects anything but exactly one well-formed TDX quote', () => {
@@ -150,15 +130,22 @@ test('parseTdxQuote rejects anything but exactly one well-formed TDX quote', () 
     'v5 SGX report body': buildQuote({ version: 5, bodyType: 1, body: Buffer.alloc(384) }),
     'v5 unknown body type': buildQuote({ version: 5, bodyType: 4 }),
     'v5 TDX 1.0 body type with the TDX 1.5 size': buildQuote({ version: 5, bodyType: 2, body: tdReport({ length: 648 }) }),
-    'v5 TDX 1.5 body type with the TDX 1.0 size': buildQuote({ version: 5, bodyType: 3 }),
+    'v5 TDX 1.5 body type with the TDX 1.0 size': buildQuote({ version: 5, bodyType: 3, body: tdReport() }),
     'v5 descriptor size larger than the body': buildQuote({ version: 5, bodyLength: 648 }),
     'v5 truncated descriptor': v5.subarray(0, 52),
     'v4 layout labelled version 5': withVersion(v4, 5),
     'v5 layout labelled version 4': withVersion(v5, 4),
     'missing signature length': v4.subarray(0, 632),
-    'truncated signature data': buildQuote({ signatureData: Buffer.alloc(64, 0xab) }).subarray(0, -1),
-    'v4 trailing bytes': Buffer.concat([v4, Buffer.alloc(1)]),
-    'v5 trailing bytes': Buffer.concat([v5, Buffer.alloc(1)]),
+    'truncated signature data': buildQuote({ certificationData: Buffer.alloc(64, 0xab) }).subarray(0, -1),
+    'signature data shorter than its fixed fields': buildQuote({ signatureLength: 133 }),
+    'certification data size larger than the signature data': buildQuote({ certificationDataSize: 1 }),
+    'certification data size smaller than the signature data': buildQuote({
+      certificationData: Buffer.alloc(8),
+      certificationDataSize: 7,
+    }),
+    'v4 trailing non-zero byte': Buffer.concat([v4, Buffer.from([1])]),
+    'v5 trailing non-zero byte': Buffer.concat([v5, Buffer.from([1])]),
+    'non-zero byte after zero padding': Buffer.concat([v4, Buffer.alloc(69), Buffer.from([1])]),
   };
 
   for (const [name, quote] of Object.entries(cases)) {
