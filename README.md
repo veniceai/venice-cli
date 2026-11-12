@@ -157,7 +157,7 @@ venice chat -m e2ee-qwen3-6-35b-a3b -q "This is encrypted but looks like normal 
 | `-m, --model <model>` | Model to use (default: kimi-k2-5) |
 | `-s, --system <prompt>` | System prompt |
 | `-c, --character <slug>` | Character slug from the Venice API catalog |
-| `-t, --tools <tools>` | Comma-separated list of tools |
+| `-t, --tools <tools>` | Comma-separated list of built-in tools; an unknown name is an error |
 | `--interactive-tools` | Approve each tool call |
 | `--continue` | Continue last conversation (local history only; not covered by TEE/E2EE guarantees) |
 | `--no-stream` | Disable streaming output |
