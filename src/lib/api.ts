@@ -585,6 +585,10 @@ export interface ChatCompletionRequestOptions {
   reasoning_effort?: ReasoningEffort;
   prompt_cache_key?: string;
   prompt_cache_retention?: PromptCacheRetention;
+  temperature?: number;
+  top_p?: number;
+  max_completion_tokens?: number;
+  stop?: string[];
   recordUsage?: boolean;
 }
 
@@ -649,6 +653,22 @@ export function buildChatCompletionBody(
 
   if (options.prompt_cache_retention) {
     body.prompt_cache_retention = options.prompt_cache_retention;
+  }
+
+  if (options.temperature !== undefined) {
+    body.temperature = options.temperature;
+  }
+
+  if (options.top_p !== undefined) {
+    body.top_p = options.top_p;
+  }
+
+  if (options.max_completion_tokens !== undefined) {
+    body.max_completion_tokens = options.max_completion_tokens;
+  }
+
+  if (options.stop?.length) {
+    body.stop = options.stop;
   }
 
   return body;
@@ -933,6 +953,9 @@ export function buildImageGenerationBody(
     ['hideWatermark', 'hide_watermark'],
     ['safeMode', 'safe_mode'],
     ['embedExifMetadata', 'embed_exif_metadata'],
+    ['enhancePrompt', 'enhance_prompt'],
+    ['enableWebSearch', 'enable_web_search'],
+    ['disablePromptOptimizationThinking', 'disable_prompt_optimization_thinking'],
   ];
 
   for (const [optionName, fieldName] of optionalFields) {
@@ -983,6 +1006,9 @@ export async function generateImage(
 type ImageEditOptions = {
   model?: string;
   aspectRatio?: string;
+  resolution?: ImageGenerationOptions['resolution'];
+  quality?: ImageGenerationOptions['quality'];
+  outputFormat?: ImageGenerationOptions['format'];
   enhancePrompt?: boolean;
   safeMode?: boolean;
 };
@@ -1009,6 +1035,8 @@ export async function editImage(
   };
   if (options.model) body.model = options.model;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.outputFormat) body.output_format = options.outputFormat;
   if (options.enhancePrompt) body.enhance_prompt = true;
   if (options.safeMode === false) body.safe_mode = false;
 
@@ -1042,6 +1070,9 @@ export async function multiEditImage(
   };
   if (options.model) body.modelId = options.model;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.quality) body.quality = options.quality;
+  if (options.outputFormat) body.output_format = options.outputFormat;
   if (options.enhancePrompt) body.enhance_prompt = true;
   if (options.safeMode === false) body.safe_mode = false;
 
@@ -1157,6 +1188,7 @@ export async function upscaleImage(
   options: {
     model?: string;
     scale?: number;
+    creativity?: number;
   } = {}
 ): Promise<UpscaleImageResult> {
   const fs = await import('fs');
@@ -1172,6 +1204,7 @@ export async function upscaleImage(
     image: imageData.toString('base64'),
     scale: options.scale || 2,
     ...(options.model ? { model: options.model } : {}),
+    ...(options.creativity !== undefined ? { creativity: options.creativity } : {}),
   };
 
   const spinner = startSpinner('Upscaling image...');

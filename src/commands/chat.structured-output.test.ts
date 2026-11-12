@@ -15,12 +15,18 @@ interface CliResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+  completionBodies: Array<Record<string, unknown>>;
 }
 
 async function runStructuredChat(reply: string, args: string[], schema?: unknown): Promise<CliResult> {
+  const completionBodies: Array<Record<string, unknown>> = [];
   const server = createServer((request, response) => {
-    request.resume();
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
+      if (request.method === 'POST' && request.url === '/api/v1/chat/completions') {
+        completionBodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+      }
       response.setHeader('Content-Type', 'application/json');
       if (request.method === 'GET' && request.url?.startsWith('/api/v1/models')) {
         response.end(JSON.stringify({
@@ -79,6 +85,7 @@ async function runStructuredChat(reply: string, args: string[], schema?: unknown
         stdout,
         stderr,
         durationMs: performance.now() - started,
+        completionBodies,
       }));
     });
   } finally {
@@ -86,6 +93,20 @@ async function runStructuredChat(reply: string, args: string[], schema?: unknown
     rmSync(homeDir, { recursive: true, force: true });
   }
 }
+
+test('chat --json sends sampling controls with the response format', { timeout: 30_000 }, async () => {
+  const result = await runStructuredChat('{"ok":true}', [
+    '--json', '--temperature', '0.1', '--top-p', '1', '--max-tokens', '200', '--stop', '}',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { ok: true });
+  const [body] = result.completionBodies;
+  assert.deepEqual(body.response_format, { type: 'json_object' });
+  assert.equal(body.temperature, 0.1);
+  assert.equal(body.top_p, 1);
+  assert.equal(body.max_completion_tokens, 200);
+  assert.deepEqual(body.stop, ['}']);
+});
 
 test('chat --json fails promptly on a reply with an unclosed code fence', { timeout: 30_000 }, async () => {
   const result = await runStructuredChat(`\`\`\`json${' '.repeat(300 * 1024)}{}`, ['--json']);

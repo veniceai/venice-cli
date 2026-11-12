@@ -56,6 +56,25 @@ test('buildChatCompletionBody includes json_object response_format', () => {
   assert.deepEqual(body.response_format, { type: 'json_object' });
 });
 
+test('buildChatCompletionBody sends sampling controls only when set', () => {
+  const body = buildChatCompletionBody(
+    messages,
+    { model: 'kimi-k2-5', temperature: 0, top_p: 0.9, max_completion_tokens: 256, stop: ['END', '\n\n'] },
+    true
+  );
+
+  assert.equal(body.temperature, 0);
+  assert.equal(body.top_p, 0.9);
+  assert.equal(body.max_completion_tokens, 256);
+  assert.equal(body.max_tokens, undefined);
+  assert.deepEqual(body.stop, ['END', '\n\n']);
+
+  const plain = buildChatCompletionBody(messages, { model: 'kimi-k2-5', stop: [] }, false);
+  for (const field of ['temperature', 'top_p', 'max_completion_tokens', 'max_tokens', 'stop']) {
+    assert.equal(field in plain, false, field);
+  }
+});
+
 test('buildChatCompletionBody preserves multimodal message content', () => {
   const body = buildChatCompletionBody(
     [{

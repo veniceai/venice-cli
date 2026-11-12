@@ -100,6 +100,56 @@ test('image APIs send the endpoint-specific payloads', async () => {
   }
 });
 
+test('image edit APIs send resolution, quality and output format when set', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-image-edit-options-test-'));
+  const imagePath = join(tempDir, 'input.png');
+  writeFileSync(imagePath, 'input image');
+
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const bodies = new Map<string, Record<string, unknown>>();
+  process.env.VENICE_API_KEY = 'test-key';
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    bodies.set(url.slice(url.lastIndexOf('/') + 1), JSON.parse(String(init?.body)));
+    if (url.endsWith('/image/generate')) {
+      return Response.json({ id: 'generated', images: ['generated-image'] });
+    }
+    return new Response(PNG_BYTES, { headers: { 'Content-Type': 'image/png' } });
+  };
+
+  try {
+    await editImage(imagePath, 'Brighten', { resolution: '2K', outputFormat: 'webp' });
+    await multiEditImage([imagePath], 'Combine', { resolution: '4K', quality: 'high', outputFormat: 'jpeg' });
+    await generateImage('A canal', {
+      format: 'webp',
+      enhancePrompt: false,
+      enableWebSearch: true,
+      disablePromptOptimizationThinking: true,
+    });
+
+    assert.equal(bodies.get('edit')?.resolution, '2K');
+    assert.equal(bodies.get('edit')?.output_format, 'webp');
+    assert.equal('quality' in (bodies.get('edit') ?? {}), false);
+    assert.equal(bodies.get('multi-edit')?.resolution, '4K');
+    assert.equal(bodies.get('multi-edit')?.quality, 'high');
+    assert.equal(bodies.get('multi-edit')?.output_format, 'jpeg');
+    const generated = bodies.get('generate') ?? {};
+    assert.equal(generated.format, 'webp');
+    assert.equal(generated.enhance_prompt, false);
+    assert.equal(generated.enable_web_search, true);
+    assert.equal(generated.disable_prompt_optimization_thinking, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('multi-edit rejects more than three images before requesting', async () => {
   await assert.rejects(
     multiEditImage(['one', 'two', 'three', 'four'], 'Prompt'),

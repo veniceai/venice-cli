@@ -14,7 +14,12 @@ import {
   removeImageBackground,
   upscaleImage,
 } from '../lib/api.js';
-import { formatBytes, writeBufferToFile, MAX_IMAGE_DOWNLOAD_BYTES } from '../lib/media.js';
+import {
+  assertFileSizeWithinLimit,
+  formatBytes,
+  writeBufferToFile,
+  MAX_IMAGE_DOWNLOAD_BYTES,
+} from '../lib/media.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { getDefaultImageModel } from '../lib/config.js';
 import type {
@@ -51,16 +56,45 @@ interface ImageCommandOptions {
   hideWatermark?: boolean;
   safeMode?: boolean;
   embedExifMetadata?: boolean;
+  enhancePrompt?: boolean;
+  webSearch?: boolean;
+  promptThinking?: boolean;
+  imageFormat?: string;
 }
+
+export const MAX_STYLE_REFERENCE_BYTES = 8 * 1024 * 1024;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+const IMAGE_FILE_FORMATS = ['png', 'jpeg', 'webp'] as const;
+export type ImageFileFormat = typeof IMAGE_FILE_FORMATS[number];
+const IMAGE_FILE_EXTENSIONS: Record<ImageFileFormat, readonly string[]> = {
+  png: ['.png'],
+  jpeg: ['.jpg', '.jpeg'],
+  webp: ['.webp'],
+};
 
 function collect(value: string, previous: string[]): string[] {
   return previous.concat(value);
 }
 
+function resolveStyleReferenceImage(image: string): string {
+  if (/^(?:https?:|data:)/i.test(image)) {
+    return image;
+  }
+  if (fs.existsSync(image)) {
+    assertFileSizeWithinLimit(image, MAX_STYLE_REFERENCE_BYTES, 'Style reference image');
+    return fs.readFileSync(image).toString('base64');
+  }
+  if (BASE64_PATTERN.test(image)) {
+    return image;
+  }
+  throw new Error(`Style reference file not found: ${image}`);
+}
+
 function parseStyleReference(value: string): ImageStyleReference {
   const strengthSuffix = value.match(/^(.*)::(\d*\.?\d+)$/);
   if (!strengthSuffix) {
-    return { image: value };
+    return { image: resolveStyleReferenceImage(value) };
   }
 
   const image = strengthSuffix[1];
@@ -68,12 +102,58 @@ function parseStyleReference(value: string): ImageStyleReference {
   if (!image) {
     throw new Error('Style reference must use IMAGE or IMAGE::STRENGTH');
   }
-  return { image, strength };
+  return { image: resolveStyleReferenceImage(image), strength };
+}
+
+export function parseImageResolution(value: string | undefined): ImageGenerationOptions['resolution'] {
+  const resolution = value?.trim().toUpperCase();
+  if (value !== undefined && !resolution) {
+    throw new Error('Resolution must not be blank');
+  }
+  if (resolution && !/^\d+(\.\d+)?K$/.test(resolution)) {
+    throw new Error('Resolution must be a tier such as 1K, 1.5K, 2K or 4K');
+  }
+  return resolution;
+}
+
+export function parseImageQuality(value: string | undefined): ImageGenerationOptions['quality'] {
+  const quality = value?.trim().toLowerCase();
+  if (value !== undefined && !quality) {
+    throw new Error('Quality must not be blank');
+  }
+  if (quality && !['low', 'medium', 'high'].includes(quality)) {
+    throw new Error('Quality must be one of: low, medium, high');
+  }
+  return quality as ImageGenerationOptions['quality'];
+}
+
+export function parseImageFileFormat(value: string | undefined): ImageFileFormat | undefined {
+  if (value === undefined) return undefined;
+  const format = value.trim().toLowerCase();
+  const normalized = format === 'jpg' ? 'jpeg' : format;
+  if (!(IMAGE_FILE_FORMATS as readonly string[]).includes(normalized)) {
+    throw new Error('Image format must be one of: png, jpeg, webp');
+  }
+  return normalized as ImageFileFormat;
+}
+
+export function imageOutputPath(
+  output: string | undefined,
+  defaultStem: string,
+  format: ImageFileFormat | undefined
+): string {
+  const extension = IMAGE_FILE_EXTENSIONS[format ?? 'png'][0];
+  if (!output) return `${defaultStem}_${Date.now()}${extension}`;
+  if (!format) return output;
+
+  const current = path.extname(output);
+  if (IMAGE_FILE_EXTENSIONS[format].includes(current.toLowerCase())) return output;
+  return current ? `${output.slice(0, -current.length)}${extension}` : `${output}${extension}`;
 }
 
 export function parseImageGenerationOptions(
   options: ImageCommandOptions
-): Omit<ImageGenerationOptions, 'output' | 'format'> {
+): Omit<ImageGenerationOptions, 'output'> {
   const width = parseIntegerOption(options.width, '--width', { min: 1, max: 1280 });
   const height = parseIntegerOption(options.height, '--height', { min: 1, max: 1280 });
   const count = parseIntegerOption(options.count, '--count', { min: 1, max: 4 });
@@ -93,24 +173,12 @@ export function parseImageGenerationOptions(
     throw new Error('Choose either width/height or aspect ratio; these sizing modes cannot be combined');
   }
 
-  const resolution = options.resolution?.trim().toUpperCase();
-  if (options.resolution !== undefined && !resolution) {
-    throw new Error('Resolution must not be blank');
-  }
-  if (resolution && !['1K', '2K', '4K'].includes(resolution)) {
-    throw new Error('Resolution must be one of: 1K, 2K, 4K');
-  }
+  const resolution = parseImageResolution(options.resolution);
   if (resolution && !aspectRatio) {
     throw new Error('Resolution requires --aspect-ratio; do not combine it with width/height');
   }
 
-  const quality = options.quality?.trim().toLowerCase();
-  if (options.quality !== undefined && !quality) {
-    throw new Error('Quality must not be blank');
-  }
-  if (quality && !['low', 'medium', 'high'].includes(quality)) {
-    throw new Error('Quality must be one of: low, medium, high');
-  }
+  const quality = parseImageQuality(options.quality);
 
   if (options.negative && options.negative.length > 7500) {
     throw new Error('Negative prompt must not exceed 7500 characters');
@@ -121,9 +189,10 @@ export function parseImageGenerationOptions(
     width,
     height,
     count,
+    format: parseImageFileFormat(options.imageFormat),
     aspectRatio,
-    resolution: resolution as ImageGenerationOptions['resolution'],
-    quality: quality as ImageGenerationOptions['quality'],
+    resolution,
+    quality,
     stylePreset: options.style,
     styleReferences: options.styleReference?.length
       ? options.styleReference.map(parseStyleReference)
@@ -136,6 +205,9 @@ export function parseImageGenerationOptions(
     hideWatermark: options.hideWatermark,
     safeMode: options.safeMode,
     embedExifMetadata: options.embedExifMetadata,
+    enhancePrompt: options.enhancePrompt,
+    enableWebSearch: options.webSearch,
+    disablePromptOptimizationThinking: options.promptThinking === false ? true : undefined,
   };
 }
 
@@ -149,15 +221,20 @@ export function registerImageCommand(program: Command): void {
     .option('-w, --width <pixels>', 'Image width (pixel-based models)')
     .option('-h, --height <pixels>', 'Image height (pixel-based models)')
     .option('-a, --aspect-ratio <ratio>', 'Aspect ratio, for example 16:9')
-    .option('--resolution <tier>', 'Resolution tier (1K|2K|4K)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
     .option('--quality <quality>', 'Output quality (low|medium|high)')
     .option('--style <preset>', 'Style preset')
     .option(
       '--style-reference <image>',
-      'Style reference URL/base64, optionally IMAGE::STRENGTH (repeatable)',
+      'Style reference file, URL or base64, optionally IMAGE::STRENGTH (repeatable)',
       collect,
       []
     )
+    .option('--enhance-prompt', 'Rewrite the prompt before generation (may add time and cost)')
+    .option('--no-enhance-prompt', 'Do not rewrite the prompt before generation')
+    .option('--web-search', 'Let supported models use web search (additional credits may apply)')
+    .option('--no-prompt-thinking', 'Skip prompt-optimization thinking on supported models')
+    .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--negative <prompt>', 'Negative prompt')
     .option('--seed <integer>', 'Random seed')
     .option('--cfg-scale <number>', 'CFG scale (greater than 0, up to 20)')
@@ -187,7 +264,7 @@ export function registerImageCommand(program: Command): void {
         for (let i = 0; i < images.length; i++) {
           const imageData = decodeGeneratedImage(images[i]);
 
-          let outputPath = options.output || `image_${Date.now()}.png`;
+          let outputPath = imageOutputPath(options.output, 'image', generationOptions.format);
           if (images.length > 1) {
             const ext = path.extname(outputPath);
             const base = path.basename(outputPath, ext);
@@ -213,19 +290,25 @@ export function registerImageCommand(program: Command): void {
     .option('-m, --model <model>', 'Edit model to use')
     .option('-o, --output <path>', 'Save result to file')
     .option('-a, --aspect-ratio <ratio>', 'Output aspect ratio (for example, 16:9 or auto)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
+    .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input image')
     .option('--no-safe-mode', 'Disable adult-content blurring')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, promptParts: string[], options) => {
       const format = detectOutputFormat(options.format);
       try {
+        const resolution = parseImageResolution(options.resolution);
+        const imageFormat = parseImageFileFormat(options.imageFormat);
         const result = await editImage(path.resolve(imagePath), promptParts.join(' '), {
           model: options.model,
           aspectRatio: options.aspectRatio,
+          resolution,
+          outputFormat: imageFormat,
           enhancePrompt: options.enhancePrompt,
           safeMode: options.safeMode,
         });
-        writeImageResult(result, options.output || `edited_${Date.now()}.png`, format, 'edited image');
+        writeImageResult(result, imageOutputPath(options.output, 'edited', imageFormat), format, 'edited image');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -239,23 +322,32 @@ export function registerImageCommand(program: Command): void {
     .option('-m, --model <model>', 'Edit model to use')
     .option('-o, --output <path>', 'Save result to file')
     .option('-a, --aspect-ratio <ratio>', 'Output aspect ratio (for example, 16:9 or auto)')
+    .option('--resolution <tier>', 'Resolution tier, e.g. 1K, 1.5K, 2K or 4K (supported tiers vary by model)')
+    .option('--quality <quality>', 'Output quality (low|medium|high)')
+    .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input images')
     .option('--no-safe-mode', 'Disable adult-content blurring')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePaths: string[], options) => {
       const format = detectOutputFormat(options.format);
       try {
+        const resolution = parseImageResolution(options.resolution);
+        const quality = parseImageQuality(options.quality);
+        const imageFormat = parseImageFileFormat(options.imageFormat);
         const result = await multiEditImage(
           imagePaths.map(imagePath => path.resolve(imagePath)),
           options.prompt,
           {
             model: options.model,
             aspectRatio: options.aspectRatio,
+            resolution,
+            quality,
+            outputFormat: imageFormat,
             enhancePrompt: options.enhancePrompt,
             safeMode: options.safeMode,
           }
         );
-        writeImageResult(result, options.output || `multi_edited_${Date.now()}.png`, format, 'edited image');
+        writeImageResult(result, imageOutputPath(options.output, 'multi_edited', imageFormat), format, 'edited image');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -303,6 +395,7 @@ export function registerImageCommand(program: Command): void {
     .description('Upscale an image')
     .option('-m, --model <model>', 'Model to use')
     .option('-s, --scale <factor>', 'Scale factor (2 or 4)', '2')
+    .option('--creativity <number>', 'How much detail the upscaler invents (0-0.02)')
     .option('-o, --output <path>', 'Save result to file')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, options) => {
@@ -310,8 +403,10 @@ export function registerImageCommand(program: Command): void {
       const c = getChalk();
 
       let scale: number;
+      let creativity: number | undefined;
       try {
         scale = parseIntegerOption(options.scale, '--scale', { allowed: [2, 4] });
+        creativity = parseDecimalOption(options.creativity, '--creativity', { min: 0, max: 0.02 });
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -328,6 +423,7 @@ export function registerImageCommand(program: Command): void {
         const result = await upscaleImage(resolvedPath, {
           model: options.model,
           scale,
+          creativity,
         });
 
         if (format === 'json') {

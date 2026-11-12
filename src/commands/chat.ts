@@ -78,6 +78,7 @@ import {
   hasChatAttachments,
   parseChatAttachments,
 } from '../lib/chat-attachments.js';
+import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 
 interface E2EEContext {
   privateKey: Uint8Array;
@@ -90,6 +91,7 @@ interface E2EEContext {
 export const MAX_TOOL_ROUNDS = 10;
 export const MAX_CHAT_STDIN_BYTES = 1024 * 1024;
 export const MAX_CONTEXT_REPLY_CHARS = 1024 * 1024;
+export const MAX_STOP_SEQUENCES = 4;
 type ChatCompletionFn = typeof chatCompletion;
 type ChatCompletionStreamFn = typeof chatCompletionStream;
 
@@ -255,6 +257,15 @@ export function registerChatCommand(program: Command): void {
     .option('--reasoning-effort <level>', `Reasoning effort (${REASONING_EFFORTS.join('|')})`)
     .option('--prompt-cache-key <key>', 'Route requests for better prompt-cache affinity')
     .option('--prompt-cache-retention <mode>', `Prompt cache retention (${PROMPT_CACHE_RETENTIONS.join('|')})`)
+    .option('--temperature <number>', 'Sampling temperature (0-2)')
+    .option('--top-p <number>', 'Nucleus sampling probability mass (0-1)')
+    .option('--max-tokens <integer>', 'Maximum completion tokens, including reasoning tokens')
+    .option(
+      '--stop <sequence>',
+      `Stop generating at this sequence (repeatable, up to ${MAX_STOP_SEQUENCES})`,
+      collectOptionValue,
+      []
+    )
     .option('--no-thinking', 'Disable reasoning/thinking on reasoning models')
     .option('--strip-thinking', 'Strip thinking blocks from response')
     .option('--no-venice-prompt', 'Disable Venice system prompts')
@@ -316,6 +327,14 @@ export function registerChatCommand(program: Command): void {
           process.exit(1);
         }
         promptCacheRetention = retention as PromptCacheRetention;
+      }
+
+      let sampling: ChatSamplingOptions;
+      try {
+        sampling = parseChatSamplingOptions(options);
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
       }
 
       // Get prompt from args and optionally stdin
@@ -502,6 +521,13 @@ export function registerChatCommand(program: Command): void {
         ));
         process.exit(1);
       }
+      if (useE2EE && sampling.stop) {
+        console.error(formatError(
+          '--stop is not supported with E2EE: stop sequences would be sent unencrypted. ' +
+          'Remove --stop, or use --no-e2ee.'
+        ));
+        process.exit(1);
+      }
 
       // E2EE mode: full attestation + encryption setup
       if (useE2EE) {
@@ -593,6 +619,7 @@ export function registerChatCommand(program: Command): void {
         reasoningEffort,
         promptCacheKey: options.promptCacheKey,
         promptCacheRetention,
+        sampling,
         recordUsage: !useE2EE && !useTEE,
       };
 
@@ -743,9 +770,38 @@ export interface ChatRunExtras {
   reasoningEffort?: ReasoningEffort;
   promptCacheKey?: string;
   promptCacheRetention?: PromptCacheRetention;
+  sampling?: ChatSamplingOptions;
   recordUsage?: boolean;
   completion?: ChatCompletionFn;
   completionStream?: ChatCompletionStreamFn;
+}
+
+export interface ChatSamplingOptions {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  stop?: string[];
+}
+
+export function parseChatSamplingOptions(options: {
+  temperature?: string;
+  topP?: string;
+  maxTokens?: string;
+  stop?: string[];
+}): ChatSamplingOptions {
+  const stop = options.stop ?? [];
+  if (stop.length > MAX_STOP_SEQUENCES) {
+    throw new Error(`--stop accepts at most ${MAX_STOP_SEQUENCES} sequences (got ${stop.length}).`);
+  }
+  if (stop.some((sequence) => sequence.length === 0)) {
+    throw new Error('--stop sequences must not be empty.');
+  }
+  return {
+    temperature: parseDecimalOption(options.temperature, '--temperature', { min: 0, max: 2 }),
+    topP: parseDecimalOption(options.topP, '--top-p', { min: 0, max: 1 }),
+    maxTokens: parseIntegerOption(options.maxTokens, '--max-tokens', { min: 1 }),
+    stop: stop.length > 0 ? stop : undefined,
+  };
 }
 
 function buildRequestOptions(
@@ -776,6 +832,19 @@ function buildRequestOptions(
   }
   if (extras.promptCacheRetention) {
     request.prompt_cache_retention = extras.promptCacheRetention;
+  }
+  const sampling = extras.sampling;
+  if (sampling?.temperature !== undefined) {
+    request.temperature = sampling.temperature;
+  }
+  if (sampling?.topP !== undefined) {
+    request.top_p = sampling.topP;
+  }
+  if (sampling?.maxTokens !== undefined) {
+    request.max_completion_tokens = sampling.maxTokens;
+  }
+  if (sampling?.stop?.length) {
+    request.stop = sampling.stop;
   }
   if (extras.recordUsage === false) {
     request.recordUsage = false;
@@ -840,6 +909,7 @@ export async function streamChat(
         reasoningEffort: undefined,
         promptCacheKey: undefined,
         promptCacheRetention: undefined,
+        sampling: extras.sampling && { ...extras.sampling, stop: undefined },
       }
     : extras;
   const allowedTools = new Set((effectiveTools || []).map((tool) => tool.function.name));

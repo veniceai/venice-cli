@@ -69,6 +69,7 @@ test('malformed numeric options are rejected before any request is sent', async 
     [['image', '--cfg-scale', '0x10', 'p'], /--cfg-scale must be a number greater than 0 and at most 20/],
     [['image', '-n', ' 2 ', 'p'], /--count must be/],
     [['upscale', 'in.png', '-s', '2.9'], /--scale must be 2 or 4/],
+    [['upscale', 'in.png', '--creativity', '1e-2'], /--creativity must be a number between 0 and 0.02/],
     [['tts', '--temperature', '', 'hello'], /--temperature must be a number between 0 and 2 \(got ""\)/],
     [['tts', '-s', ' 3 ', 'hello'], /--speed must be/],
     [['music', 'generate', '-d', '0x10', 'p'], /--duration must be a positive integer/],
@@ -84,6 +85,12 @@ test('malformed numeric options are rejected before any request is sent', async 
     [['billing', 'usage', '--days', '7d'], /--days must be/],
     [['history', 'list', '-n', '0'], /--limit must be a positive integer/],
     [['usage', '-d', 'abc'], /--days must be/],
+    [['chat', '--temperature', '2.1', 'hi'], /--temperature must be a number between 0 and 2 \(got "2.1"\)/],
+    [['chat', '--top-p', '-0.1', 'hi'], /--top-p must be a number between 0 and 1/],
+    [['chat', '--max-tokens', '0', 'hi'], /--max-tokens must be a positive integer/],
+    [['chat', '--max-tokens', '1.5', 'hi'], /--max-tokens must be/],
+    [['chat', '--stop', 'a', '--stop', 'b', '--stop', 'c', '--stop', 'd', '--stop', 'e', 'hi'], /--stop accepts at most 4 sequences/],
+    [['chat', '--stop', '', 'hi'], /--stop sequences must not be empty/],
   ];
 
   for (let i = 0; i < cases.length; i += 5) {
@@ -113,4 +120,14 @@ test('valid numeric options are sent as typed', async () => {
   const speechBody = JSON.parse(speechRequest.body) as Record<string, unknown>;
   assert.equal(speechBody.speed, 0.5);
   assert.equal(speechBody.temperature, 0);
+
+  const chat = await runAgainstStub([
+    'chat', '-m', 'test-model', '--temperature', '0', '--top-p', '.95', '--max-tokens', '64', 'hi',
+  ]);
+  const chatRequest = chat.requests.find((request) => request.url === '/api/v1/chat/completions');
+  assert.ok(chatRequest, chat.stderr);
+  const chatBody = JSON.parse(chatRequest.body) as Record<string, unknown>;
+  assert.equal(chatBody.temperature, 0);
+  assert.equal(chatBody.top_p, 0.95);
+  assert.equal(chatBody.max_completion_tokens, 64);
 });
