@@ -2,8 +2,8 @@
  * Search Command - Web search with AI synthesis
  */
 
-import { Command } from 'commander';
-import { dedicatedWebSearch, webSearch } from '../lib/api.js';
+import { Command, Option } from 'commander';
+import { dedicatedWebSearch, webSearch, SEARCH_PROVIDERS, type SearchProvider } from '../lib/api.js';
 import { getDefaultModel } from '../lib/config.js';
 import { parseIntegerOption } from '../lib/options.js';
 import {
@@ -14,6 +14,38 @@ import {
   detectOutputFormat,
   terminalSafe,
 } from '../lib/output.js';
+import type { OutputFormat } from '../types/index.js';
+
+interface SearchFlags {
+  model?: string;
+  results: string;
+  citations?: true;
+  scrape?: true;
+  raw?: true;
+  provider?: SearchProvider;
+  format?: OutputFormat;
+}
+
+type SearchRequest =
+  | { mode: 'raw'; limit: number; provider: SearchProvider }
+  | { mode: 'synthesis'; model: string; maxResults: number; citations: boolean; scrape: boolean };
+
+function toSearchRequest(flags: SearchFlags): SearchRequest {
+  const results = parseIntegerOption(flags.results, '--results', { min: 1, max: 20 });
+  if (flags.raw) {
+    return { mode: 'raw', limit: results, provider: flags.provider ?? 'brave' };
+  }
+  if (flags.provider !== undefined) {
+    throw new Error('--provider can only be used with --raw');
+  }
+  return {
+    mode: 'synthesis',
+    model: flags.model ?? getDefaultModel(),
+    maxResults: results,
+    citations: flags.citations ?? false,
+    scrape: flags.scrape ?? false,
+  };
+}
 
 export function registerSearchCommand(program: Command): void {
   program
@@ -23,33 +55,29 @@ export function registerSearchCommand(program: Command): void {
     .option('-n, --results <number>', 'Number of search results', '5')
     .option('--citations', 'Include source citations in response')
     .option('--scrape', 'Enable web scraping for deeper content')
-    .option('--raw', 'Use the dedicated search API without AI synthesis')
-    .option('--provider <provider>', 'Raw search provider (brave|google)')
+    .addOption(
+      new Option('--raw', 'Use the dedicated search API without AI synthesis').conflicts([
+        'model',
+        'citations',
+        'scrape',
+      ])
+    )
+    .addOption(
+      new Option('--provider <provider>', 'Raw search provider (default: brave)').choices(SEARCH_PROVIDERS)
+    )
     .option('-f, --format <format>', 'Output format (pretty|json|markdown|raw)')
-    .action(async (queryParts: string[], options) => {
+    .action(async (queryParts: string[], flags: SearchFlags) => {
       const query = queryParts.join(' ');
-      const model = options.model || getDefaultModel();
-      const format = detectOutputFormat(options.format);
       const c = getChalk();
 
       try {
-        const maxResults = parseIntegerOption(options.results, '--results', { min: 1, max: 20 });
-        if (!options.raw && options.provider) {
-          throw new Error('--provider can only be used with --raw');
-        }
+        const format = detectOutputFormat(flags.format);
+        const request = toSearchRequest(flags);
 
-        if (options.raw) {
-          if (
-            options.provider !== undefined &&
-            options.provider !== 'brave' &&
-            options.provider !== 'google'
-          ) {
-            throw new Error('--provider must be either "brave" or "google"');
-          }
-
+        if (request.mode === 'raw') {
           const result = await dedicatedWebSearch(query, {
-            limit: maxResults,
-            provider: options.provider ?? 'brave',
+            limit: request.limit,
+            provider: request.provider,
           });
 
           if (format === 'json') {
@@ -69,24 +97,16 @@ export function registerSearchCommand(program: Command): void {
         }
 
         const result = await webSearch(query, {
-          model,
-          maxResults,
-          enableCitations: options.citations,
-          enableScraping: options.scrape,
+          model: request.model,
+          maxResults: request.maxResults,
+          enableCitations: request.citations,
+          enableScraping: request.scrape,
         });
 
         if (format === 'json') {
           console.log(formatJson(result));
         } else {
           console.log(terminalSafe(result.content));
-
-          if (result.citations?.length && format === 'pretty') {
-            console.log('\n' + c.bold('📚 Sources:'));
-            for (const citation of result.citations.slice(0, 5)) {
-              console.log(`  ${c.dim('•')} ${c.cyan(terminalSafe(citation.title))}`);
-              console.log(`    ${c.dim(terminalSafe(citation.url))}`);
-            }
-          }
 
           if (result.usage && format === 'pretty') {
             console.log(formatUsage(result.usage));

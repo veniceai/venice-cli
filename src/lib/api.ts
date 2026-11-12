@@ -2500,23 +2500,20 @@ export async function completeAudioGeneration(
 export async function webSearch(
   query: string,
   options: {
-    model?: string;
-    maxResults?: number;
-    enableCitations?: boolean;
-    enableScraping?: boolean;
-  } = {}
+    model: string;
+    maxResults: number;
+    enableCitations: boolean;
+    enableScraping: boolean;
+  }
 ): Promise<{
   content: string;
-  citations?: Array<{ title: string; url: string }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
   const veniceParams: Record<string, unknown> = {
     enable_web_search: 'on',
+    web_search_max_results: options.maxResults,
   };
 
-  if (options.maxResults) {
-    veniceParams.web_search_max_results = options.maxResults;
-  }
   if (options.enableCitations) {
     veniceParams.enable_web_citations = true;
   }
@@ -2550,20 +2547,23 @@ export type DedicatedWebSearchResponse = {
   results: WebSearchResult[];
 };
 
+export const SEARCH_PROVIDERS = ['brave', 'google', 'exa'] as const;
+export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
+
 // Web search without model inference
 export async function dedicatedWebSearch(
   query: string,
   options: {
-    limit?: number;
-    provider?: 'brave' | 'google';
-  } = {}
+    limit: number;
+    provider: SearchProvider;
+  }
 ): Promise<DedicatedWebSearchResponse> {
   return apiRequest<DedicatedWebSearchResponse>('/augment/search', {
     method: 'POST',
     body: {
       query,
-      limit: options.limit ?? 10,
-      search_provider: options.provider ?? 'brave',
+      limit: options.limit,
+      search_provider: options.provider,
     },
     spinnerText: 'Searching the web...',
   });
