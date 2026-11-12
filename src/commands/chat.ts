@@ -17,6 +17,7 @@ import {
 } from '../lib/config.js';
 import {
   getToolDefinitions,
+  parseToolNames,
   executeTool,
   formatToolsHelp,
   MAX_TOOL_ARGUMENTS_BYTES,
@@ -312,6 +313,14 @@ export function registerChatCommand(program: Command): void {
         reasoningEffort = level as ReasoningEffort;
       }
 
+      let toolNames: string[] = [];
+      try {
+        toolNames = parseToolNames(options.tools);
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
+
       if (options.thinking === false && reasoningEffort && reasoningEffort !== 'none') {
         console.error(formatError('Cannot combine --no-thinking with --reasoning-effort (except "none").'));
         process.exit(1);
@@ -575,8 +584,6 @@ export function registerChatCommand(program: Command): void {
       }
       messages.push({ role: 'user', content: userContent });
 
-      // Get tool definitions
-      const toolNames = options.tools?.split(',').map((t: string) => t.trim()) || [];
       const tools = getToolDefinitions(toolNames);
 
       // Build venice_parameters

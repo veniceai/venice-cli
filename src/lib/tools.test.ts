@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { executeTool } from './tools.js';
+import { executeTool, parseToolNames } from './tools.js';
+
+test('parseToolNames trims, drops empty entries and duplicates, and keeps order', () => {
+  assert.deepEqual(parseToolNames(undefined), []);
+  assert.deepEqual(parseToolNames(' calculator , datetime,,calculator,'), ['calculator', 'datetime']);
+});
+
+test('parseToolNames rejects names that are not built-in tools, including prototype keys', () => {
+  assert.throws(() => parseToolNames('calculater'), /Unknown tool in --tools: calculater\. Available tools: calculator,/);
+  assert.throws(() => parseToolNames('calculator,bogus,nope'), /Unknown tools in --tools: bogus, nope\./);
+  for (const name of ['constructor', '__proto__', 'toString']) {
+    assert.throws(() => parseToolNames(name), /Unknown tool/, name);
+  }
+});
 
 test('executeTool refuses a built-in tool outside the allowlist', async () => {
   const result = await executeTool(

@@ -518,6 +518,23 @@ const toolExecutors: Record<string, (args: Record<string, unknown>) => Promise<s
   },
 };
 
+/**
+ * Split a --tools value into built-in tool names, without duplicates.
+ * Throws if any name is not a built-in tool, so a typo cannot silently drop a tool.
+ */
+export function parseToolNames(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  const names = value.split(',').map((name) => name.trim()).filter((name) => name !== '');
+  const unknown = names.filter((name) => !Object.hasOwn(BUILTIN_TOOLS, name));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown ${unknown.length === 1 ? 'tool' : 'tools'} in --tools: ${unknown.join(', ')}. ` +
+      `Available tools: ${listAvailableTools().join(', ')}`
+    );
+  }
+  return [...new Set(names)];
+}
+
 export function getToolDefinitions(toolNames: string[]): ToolDefinition[] {
   return toolNames
     .filter(name => Object.hasOwn(BUILTIN_TOOLS, name))
