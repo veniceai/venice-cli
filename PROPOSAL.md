@@ -121,7 +121,7 @@ Configuration stored in `~/.venice/config.json`:
 
 ### Technology Stack
 
-- **Runtime**: Node.js 20+
+- **Runtime**: Node.js 22+
 - **Language**: TypeScript with strict mode
 - **CLI Framework**: Commander.js
 - **Styling**: Chalk for colors, Ora for spinners
