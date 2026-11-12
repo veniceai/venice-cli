@@ -204,7 +204,7 @@ test('video retrieve exits 2 while the job is processing and 1 when no video wil
   const cases: Array<[string, number, RegExp]> = [
     ['q-processing', 2, /video not ready yet/],
     ['q-failed', 1, /No video was returned \(status: FAILED\): render failed/],
-    ['q-no-url', 1, /No video was returned \(status: COMPLETED\)\./],
+    ['q-no-url', 1, /reports the job as COMPLETED but returned no video[\s\S]*venice video retrieve q-no-url -m test-model --url <download_url>/],
   ];
   try {
     for (const [queueId, exitCode, prettyMessage] of cases) {
@@ -397,6 +397,157 @@ test('video retrieve refuses a downloaded body that is not an MP4 and keeps the 
     assert.equal(stub.count('POST /api/v1/video/complete'), 0);
     assert.equal(readFileSync(output, 'utf8'), 'existing video');
     assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.part')), []);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate and upscale --no-wait show the one-time download_url from the queue response', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const downloadUrl = 'https://media.example.com/clip.mp4?sig=abc&exp=1';
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => {
+      sendJson(response, { queue_id: 'q1', model: 'test-model', download_url: downloadUrl });
+    },
+  });
+  try {
+    const commands = [
+      ['video', 'generate', 'a cat', '-m', 'test-model'],
+      ['video', 'upscale', 'https://example.com/input.mp4', '-m', 'test-model', '--no-wait'],
+    ];
+    for (const args of commands) {
+      const pretty = await runCli([...args, '-f', 'pretty'], dir, stub.origin);
+      assert.equal(pretty.status, 0, pretty.stderr);
+      assert.ok(pretty.stdout.includes(`Download URL: ${downloadUrl}`), pretty.stdout);
+      assert.match(pretty.stdout, /only once and it expires within 24 hours/);
+      assert.ok(
+        pretty.stdout.includes(`venice video retrieve q1 -m test-model --url '${downloadUrl}'`),
+        pretty.stdout
+      );
+
+      const json = await runCli([...args, '-f', 'json'], dir, stub.origin);
+      assert.equal(json.status, 0, json.stderr);
+      assert.equal(JSON.parse(json.stdout).download_url, downloadUrl);
+    }
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate never writes terminal controls from download_url or suggests a command for an unsafe link', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const unsafe: Record<string, string> = {
+    'q-osc': 'https://media.example.com/a.mp4\u001b]52;c;ZWNobyBwd25lZA==\u0007',
+    'q-csi': 'https://media.example.com/a.mp4\r\u001b[2Kvenice video retrieve q-csi -m test-model --url https://evil.example',
+    'q-c1': 'https://media.example.com/a.mp4\u009b2K',
+    'q-http': 'http://media.example.com/a.mp4',
+    'q-junk': 'not a url',
+  };
+  const stub = await startStub({
+    'POST /api/v1/video/queue': async (request, response) => {
+      const queueId = String((await readJson(request)).prompt);
+      sendJson(response, { queue_id: queueId, model: 'test-model', download_url: unsafe[queueId] });
+    },
+  });
+  try {
+    for (const [queueId, downloadUrl] of Object.entries(unsafe)) {
+      const pretty = await runCli(['video', 'generate', queueId, '-m', 'test-model', '-f', 'pretty'], dir, stub.origin);
+      assert.equal(pretty.status, 0, pretty.stderr);
+      assert.doesNotMatch(pretty.stdout, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/, `${queueId}: raw control byte in output`);
+      assert.doesNotMatch(pretty.stdout, /Download with:/, `${queueId}: suggested a command for an unsafe link`);
+      assert.match(pretty.stdout, /not a valid https URL/, queueId);
+
+      const json = await runCli(['video', 'generate', queueId, '-m', 'test-model', '-f', 'json'], dir, stub.origin);
+      assert.equal(json.status, 0, json.stderr);
+      assert.equal(JSON.parse(json.stdout).download_url, downloadUrl, queueId);
+    }
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate rejects a download_url that is not a string', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => {
+      sendJson(response, { queue_id: 'q1', model: 'test-model', download_url: 42 });
+    },
+  });
+  try {
+    const result = await runCli(['video', 'generate', 'a cat'], dir, stub.origin);
+
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /Unexpected response from Venice \(\/video\/queue\)/);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video retrieve --url downloads the queued link and completes only after it is saved', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const video = mp4Bytes('-queued');
+  const stub = await startStub({
+    'GET /media/ok.mp4': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(video);
+    },
+    'GET /media/expired.mp4': (_request, response) => {
+      response.writeHead(410, { 'Content-Type': 'text/plain' });
+      response.end('gone');
+    },
+    'POST /api/v1/video/complete': (_request, response) => {
+      assert.equal(readFileSync(join(dir, 'ok.mp4')).equals(video), true);
+      sendJson(response, { success: true });
+    },
+  });
+  try {
+    const saved = await runCli(
+      ['video', 'retrieve', 'q1', '-m', 'test-model', '-o', join(dir, 'ok.mp4'), '--url', `${stub.origin}/media/ok.mp4`, '--complete', '-f', 'json'],
+      dir,
+      stub.origin
+    );
+    assert.equal(saved.status, 0, saved.stderr);
+    assert.deepEqual(JSON.parse(saved.stdout), {
+      status: 'completed',
+      output: join(dir, 'ok.mp4'),
+      model: 'test-model',
+      deleted: true,
+    });
+    assert.equal(stub.count('POST /api/v1/video/complete'), 1);
+
+    const expired = await runCli(
+      ['video', 'retrieve', 'q2', '-m', 'test-model', '-o', join(dir, 'expired.mp4'), '--url', `${stub.origin}/media/expired.mp4`, '--complete'],
+      dir,
+      stub.origin
+    );
+    assert.equal(expired.status, 1, expired.stdout);
+    assert.equal(existsSync(join(dir, 'expired.mp4')), false);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 1);
+    assert.equal(stub.count('POST /api/v1/video/retrieve'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video upscale falls back to the queued download_url when retrieve returns no video', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const video = mp4Bytes('-upscaled');
+  const output = join(dir, 'upscaled.mp4');
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response, self) => {
+      sendJson(response, { queue_id: 'q1', model: 'topaz-video-upscale', download_url: `${self.origin}/media/up.mp4` });
+    },
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, { status: 'COMPLETED' }),
+    'GET /media/up.mp4': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(video);
+    },
+  });
+  try {
+    const result = await runCli(
+      ['video', 'upscale', 'https://example.com/input.mp4', '-o', output, '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output).equals(video), true);
+    assert.equal(stub.count('GET /media/up.mp4'), 1);
   } finally {
     await stub.close();
   }
