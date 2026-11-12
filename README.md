@@ -256,7 +256,12 @@ venice search --scrape "Company research on Anthropic"
 
 # Return structured results directly (no model inference)
 venice search --raw --provider brave -f json "Latest Venice API models"
+
+# Pick the raw search provider: brave (default), google or exa
+venice search --raw --provider exa "Latest Venice API models"
 ```
+
+`--provider` needs `--raw`. `--model`, `--citations` and `--scrape` configure AI synthesis, so they cannot be combined with `--raw`.
 
 ### Document Parsing
 
