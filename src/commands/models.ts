@@ -19,6 +19,7 @@ import {
 } from '../lib/output.js';
 import { assertModelNameMapping } from '../lib/response-checks.js';
 import type { Model } from '../types/index.js';
+import { isE2EEModel, isTEEModel } from '../types/index.js';
 
 export function registerModelsCommand(program: Command): void {
   const models = program
@@ -27,38 +28,15 @@ export function registerModelsCommand(program: Command): void {
     .option('-t, --type <type>', 'Filter by type (all|text|image|tts|asr|music|embedding|video|upscale|inpaint)')
     .option('-s, --search <query>', 'Search models by name')
     .option('--privacy', 'Show only privacy-preserving models')
+    .option('--tee', 'Show only TEE-attestable models')
+    .option('--e2ee', 'Show only E2EE-capable models')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
       try {
-        let models = await listModels();
-
-        // Filter by type (API-aligned)
-        if (options.type) {
-          const requestedType = String(options.type).toLowerCase().trim();
-
-          if (requestedType !== 'all') {
-            models = models.filter((m: Model) =>
-              m.type?.toLowerCase() === requestedType
-            );
-          }
-        }
-
-        // Filter by search query
-        if (options.search) {
-          const query = options.search.toLowerCase();
-          models = models.filter((m: Model) =>
-            m.id?.toLowerCase().includes(query) ||
-            m.model_spec?.description?.toLowerCase().includes(query)
-          );
-        }
-
-        // Filter by privacy
-        if (options.privacy) {
-          models = models.filter((m: Model) => isPrivacyPreserving(m));
-        }
+        const models = applyModelFilters(await listModels(), options);
 
         // Sort by id
         models.sort((a: Model, b: Model) => (a.id || '').localeCompare(b.id || ''));
@@ -83,8 +61,20 @@ export function registerModelsCommand(program: Command): void {
           console.log(c.dim('─'.repeat(50)));
 
           for (const model of typeModels) {
-            const privacy = isPrivacyPreserving(model) ? c.green('🔒') : c.dim('📊');
-            console.log(`  ${privacy} ${c.cyan(terminalSafe(model.id))}`);
+            const badges: string[] = [];
+            if (isPrivacyPreserving(model)) {
+              badges.push(c.green('🔒'));
+            }
+            if (isE2EEModel(model)) {
+              badges.push(c.magenta('🔐'));
+            } else if (isTEEModel(model)) {
+              badges.push(c.blue('🛡️'));
+            }
+            if (badges.length === 0) {
+              badges.push(c.dim('📊'));
+            }
+
+            console.log(`  ${badges.join(' ')} ${c.cyan(terminalSafe(model.id))}`);
             
             if (model.model_spec?.description) {
               const desc = terminalSafe(model.model_spec.description);
@@ -98,7 +88,7 @@ export function registerModelsCommand(program: Command): void {
           }
         }
 
-        console.log(`\n${c.dim('🔒 = Privacy-preserving (no data retention)')}`);
+        console.log(`\n${c.dim('🔒 = Privacy-preserving    🛡️ = TEE attestation    🔐 = E2EE encrypted')}`);
         console.log(c.dim('📊 = Standard model'));
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -284,6 +274,48 @@ function formatValue(value: unknown): string {
   }
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   return terminalSafe(value);
+}
+
+export function applyModelFilters(
+  models: Model[],
+  options: {
+    type?: string;
+    search?: string;
+    privacy?: boolean;
+    tee?: boolean;
+    e2ee?: boolean;
+  }
+): Model[] {
+  let filtered = models;
+
+  if (options.type) {
+    const requestedType = String(options.type).toLowerCase().trim();
+    if (requestedType !== 'all') {
+      filtered = filtered.filter((m) => m.type?.toLowerCase() === requestedType);
+    }
+  }
+
+  if (options.search) {
+    const query = options.search.toLowerCase();
+    filtered = filtered.filter((m) =>
+      m.id?.toLowerCase().includes(query) ||
+      m.model_spec?.description?.toLowerCase().includes(query)
+    );
+  }
+
+  if (options.privacy) {
+    filtered = filtered.filter((m) => isPrivacyPreserving(m));
+  }
+
+  if (options.tee) {
+    filtered = filtered.filter((m) => isTEEModel(m));
+  }
+
+  if (options.e2ee) {
+    filtered = filtered.filter((m) => isE2EEModel(m));
+  }
+
+  return filtered;
 }
 
 function groupModelsByType(models: Model[]): Record<string, Model[]> {
