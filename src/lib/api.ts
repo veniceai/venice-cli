@@ -684,6 +684,12 @@ export function buildChatCompletionBody(
   return body;
 }
 
+type ChatCompletionToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
+
 // Chat completion (non-streaming)
 export async function chatCompletion(
   messages: Message[],
@@ -691,40 +697,60 @@ export async function chatCompletion(
 ): Promise<{
   content: string;
   reasoning_content?: string;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
-  }>;
+  tool_calls?: ChatCompletionToolCall[];
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   finish_reason: string;
 }> {
   const body = buildChatCompletionBody(messages, options, false);
 
-  const response = await apiRequest<{
-    choices: Array<{
-      message: { content: string; reasoning_content?: string; tool_calls?: any[] };
-      finish_reason: string;
-    }>;
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-  }>('/chat/completions', {
+  const response = await apiRequest<unknown>('/chat/completions', {
     method: 'POST',
     body,
     spinnerText: 'Thinking...',
   });
 
-  const choice = response.choices?.[0];
-  const usage = response.usage;
-
+  const record = jsonObject(response, '/chat/completions');
+  const usage = record.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
   recordChatUsage(usage, options);
 
+  return { ...parseChatCompletionChoice(record), usage };
+}
+
+/**
+ * Read the first choice of a non-streaming completion. A reply needs string content,
+ * which may be empty; content may be missing or null only when the message calls tools.
+ */
+function parseChatCompletionChoice(record: Record<string, unknown>) {
+  const endpoint = '/chat/completions';
+  const choice: unknown = Array.isArray(record.choices) ? record.choices[0] : undefined;
+  if (choice === undefined) throw unexpectedResponse(endpoint, 'no choices');
+  if (!isJsonRecord(choice) || !isJsonRecord(choice.message)) {
+    throw unexpectedResponse(endpoint, 'choices[0].message is not an object');
+  }
+  const { message, finish_reason } = choice;
+  if (typeof finish_reason !== 'string') {
+    throw unexpectedResponse(endpoint, 'choices[0].finish_reason is not a string');
+  }
+
+  const toolCalls = message.tool_calls ?? undefined;
+  if (toolCalls !== undefined && !Array.isArray(toolCalls)) {
+    throw unexpectedResponse(endpoint, 'choices[0].message.tool_calls is not an array');
+  }
+  const content = message.content ?? (toolCalls?.length ? '' : undefined);
+  if (typeof content !== 'string') {
+    throw unexpectedResponse(endpoint, 'choices[0].message.content is not a string');
+  }
+
   return {
-    content: choice?.message?.content || '',
-    reasoning_content: choice?.message?.reasoning_content,
-    tool_calls: choice?.message?.tool_calls,
-    usage,
-    finish_reason: choice?.finish_reason || 'stop',
+    content,
+    reasoning_content: typeof message.reasoning_content === 'string' ? message.reasoning_content : undefined,
+    tool_calls: toolCalls as ChatCompletionToolCall[] | undefined,
+    finish_reason,
   };
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // Chat completion (streaming)
