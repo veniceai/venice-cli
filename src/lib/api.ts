@@ -482,9 +482,11 @@ export async function apiRequest<T>(
       if (error instanceof VeniceApiError) {
         if (error.isAuthError()) {
           if (spinner) stopSpinner(false, 'Authentication failed');
-          throw new Error(
+          throw new VeniceApiError(
             'Authentication failed. Please check your API key.\n' +
-            'Update with: venice config set api_key'
+            'Update with: venice config set api_key',
+            401,
+            error.code
           );
         }
 

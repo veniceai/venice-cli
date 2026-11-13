@@ -29,6 +29,26 @@ test("JSON mode prints an API error as one line of JSON on stderr, with Venice's
   });
 });
 
+test("JSON mode covers errors a command doesn't catch itself, and a 401 keeps its status", { timeout: 20_000 }, async () => {
+  const refused: FakeApi = () => reply(401, { error: { message: 'bad key' } });
+
+  for (const args of [['keys', 'list'], ['billing', 'balance']]) {
+    const json = await runCli([...args, '-f', 'json'], refused);
+    assert.equal(json.status, 1, args.join(' '));
+    assert.equal(json.stdout, '', args.join(' '));
+    assert.deepEqual(JSON.parse(json.stderr), {
+      error: {
+        message: 'Authentication failed. Please check your API key.\nUpdate with: venice config set api_key',
+        status: 401,
+      },
+    }, args.join(' '));
+  }
+
+  const pretty = await runCli(['keys', 'list'], refused);
+  assert.equal(pretty.status, 1);
+  assert.match(pretty.stderr, /^Error: Authentication failed\. Please check your API key\./);
+});
+
 test('JSON mode prints a local validation error as JSON too, and other modes keep plain text', { timeout: 20_000 }, async () => {
   const json = await runCli(['video', 'generate', 'a cat', '-o', 'clip.mp4', '-f', 'json'], rejected);
   assert.equal(json.status, 1);
