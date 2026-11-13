@@ -463,6 +463,25 @@ venice video generate -m wan-2.6-image-to-video -i photo.jpg "The scene comes al
 # Set duration and aspect ratio
 venice video generate -d 10s -a 16:9 "A peaceful forest scene"
 
+# Transitions take a start and an end frame, as files or URLs
+venice video generate -m pixverse-v5.6-transition -i https://example.com/first.png --end-image last.png "Morph between them"
+
+# Video-to-video, edit and motion-control models take a source video
+venice video generate -m wan-2-7-video-to-video --video clip.mp4 "Make it a watercolor painting"
+
+# Reference images, videos and audio (each repeatable)
+venice video generate -m seedance-2-0-reference-to-video-basic \
+  --reference-image hero.png --reference-video moves.mp4 --reference-audio voice.wav "The hero dances"
+
+# Typed references and elements take JSON, inline or from a file
+venice video generate -m wan-2-7-reference-to-video \
+  --image-reference '{"image": "alice.png", "name": "Alice", "audio": "alice.mp3"}' "Alice says hello"
+venice video generate -m kling-o3-pro-reference-to-video \
+  --element '{"frontal_image": "front.png", "reference_images": ["side.png"]}' "@Element1 walks into the room"
+
+# Camera moves from one photo
+venice video generate -m minimax-h3-max-multi-angle -i statue.jpg --camera-trajectory orbit.json "Orbit the statue"
+
 # Check status of a video job
 venice video status <queue_id> -m wan-2.6-text-to-video
 
@@ -499,6 +518,8 @@ venice video models
 `venice video models` loads the live catalog from `GET /models?type=video`. If that request fails, the CLI prints a short fallback list and says so.
 
 Without `-d`, `video generate` and `video quote` use the first duration the model lists in `GET /models?type=video`. Without `-a`, they use `16:9` when the model lists it, unless the model lists `auto` or `adaptive` first, which fit the ratio to your inputs. Otherwise they use the model's first listed ratio. Values the model doesn't list are rejected before anything is queued. If the catalog can't be read, the CLI sends only the options you set.
+
+Every media flag takes a local file, which is sent inline, or a public http(s) URL. Local images must be PNG, JPEG or WebP (up to 20 MB), source videos MP4, MOV or WebM (200 MB), reference videos MP4 or MOV (50 MB), and audio WAV or MP3 (15 MB). `--image-reference`, `--video-reference`, `--element` and `--camera-trajectory` take JSON, inline or as the path of a JSON file, and the files or URLs inside follow the same rules. Before anything is queued, the CLI refuses combinations Venice rejects: reference audio needs a reference image or video, a camera trajectory needs `-i`, and it says when the model can't take a source video, an audio input, a voice per reference, or a change to its audio. With `--wait` the quote includes the length of local reference videos, and `video quote --reference-video` does the same.
 
 `video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o`. Without `-o` it saves to `output.mp4`, or to `output-1.mp4` and so on when that file exists, so it never replaces an earlier video. With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved.
 

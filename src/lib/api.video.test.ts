@@ -9,6 +9,7 @@ import {
   queueVideoGeneration,
   retrieveVideo,
 } from './api.js';
+import { NO_VIDEO_INPUTS } from './video-inputs.js';
 import { readWithInactivityTimeout, streamResponseToFile } from './media.js';
 
 function mp4Bytes(tail = ''): Buffer {
@@ -123,7 +124,7 @@ test('queueVideoGeneration sends aspect_ratio and duration only when they are se
     await queueVideoGeneration('a man stands up', {
       model: 'wan-2.6-image-to-video',
       duration: '5s',
-      imageUrl: 'data:image/jpeg;base64,abc',
+      inputs: { ...NO_VIDEO_INPUTS, start: { image: { kind: 'url', url: 'data:image/jpeg;base64,abc' } } },
     });
     await queueVideoGeneration('sunset', {
       model: 'wan-2.6-text-to-video',

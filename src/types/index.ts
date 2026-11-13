@@ -14,6 +14,8 @@ export interface VeniceConfig {
 
 export type OutputFormat = 'pretty' | 'json' | 'markdown' | 'raw';
 
+export type NonEmpty<T> = readonly [T, ...T[]];
+
 export interface TextContentPart {
   type: 'text';
   text: string;

@@ -40,6 +40,7 @@ import {
   streamResponseToFile,
 } from './media.js';
 import { checkMp4Header } from './mp4.js';
+import { videoInputsBody, type TaskType, type VideoInputs } from './video-inputs.js';
 
 // Never allow production environment variables to redirect bearer credentials.
 const VENICE_API =
@@ -2172,22 +2173,24 @@ export async function queueVideoGeneration(
     model?: string;
     duration?: string;
     aspectRatio?: string;
-    imageUrl?: string;
+    resolution?: string;
+    audio?: boolean;
+    negativePrompt?: string;
+    taskType?: TaskType;
+    inputs?: VideoInputs;
   } = {}
 ): Promise<QueuedJob> {
   const body: Record<string, unknown> = {
     model: options.model || 'wan-2.6-text-to-video',
     prompt,
+    ...(options.inputs ? videoInputsBody(options.inputs) : {}),
   };
-  if (options.duration) {
-    body.duration = options.duration;
-  }
-  if (options.aspectRatio) {
-    body.aspect_ratio = options.aspectRatio;
-  }
-  if (options.imageUrl) {
-    body.image_url = options.imageUrl;
-  }
+  if (options.duration) body.duration = options.duration;
+  if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.audio !== undefined) body.audio = options.audio;
+  if (options.negativePrompt) body.negative_prompt = options.negativePrompt;
+  if (options.taskType) body.omni_reference_task_type = options.taskType;
 
   const response = await apiRequest<unknown>('/video/queue', {
     method: 'POST',
@@ -2235,6 +2238,8 @@ export async function quoteVideoGeneration(options: {
   upscaleFactor?: number;
   audio?: boolean;
   videoUrl?: string;
+  imageUrl?: string;
+  referenceVideoSeconds?: number;
 }): Promise<{ quote: number }> {
   const body: Record<string, unknown> = {
     model: options.model,
@@ -2245,6 +2250,8 @@ export async function quoteVideoGeneration(options: {
   if (options.upscaleFactor !== undefined) body.upscale_factor = options.upscaleFactor;
   if (options.audio !== undefined) body.audio = options.audio;
   if (options.videoUrl) body.video_url = options.videoUrl;
+  if (options.imageUrl) body.image_url = options.imageUrl;
+  if (options.referenceVideoSeconds !== undefined) body.reference_video_total_duration = options.referenceVideoSeconds;
 
   const response = await apiRequest<unknown>('/video/quote', {
     method: 'POST',

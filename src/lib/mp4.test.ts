@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { MAX_MP4_HEADER_BYTES, checkMp4Header, fileHasMp4Header } from './mp4.js';
+import { MAX_MP4_HEADER_BYTES, checkMp4Header, fileHasMp4Header, mp4DurationSeconds } from './mp4.js';
 
 function box(type: string, payload = '', size?: number): Buffer {
   const header = Buffer.alloc(8);
@@ -75,6 +75,42 @@ test('fileHasMp4Header checks the bytes saved on disk', () => {
       writeFileSync(filePath, bytes);
       assert.equal(fileHasMp4Header(filePath), expected, name);
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function movieHeader(version: 0 | 1, timescale: number, duration: number): Buffer {
+  const content = Buffer.alloc(version === 1 ? 108 : 96);
+  content[0] = version;
+  if (version === 1) {
+    content.writeUInt32BE(timescale, 20);
+    content.writeBigUInt64BE(BigInt(duration), 24);
+  } else {
+    content.writeUInt32BE(timescale, 12);
+    content.writeUInt32BE(duration, 16);
+  }
+  return Buffer.concat([box('mvhd', '', content.length + 8), content]);
+}
+
+function moov(...children: Buffer[]): Buffer {
+  const content = Buffer.concat(children);
+  return Buffer.concat([box('moov', '', content.length + 8), content]);
+}
+
+test('mp4DurationSeconds reads the movie header wherever the moov box sits', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-mp4-duration-'));
+  const write = (name: string, bytes: Buffer) => {
+    const filePath = join(dir, name);
+    writeFileSync(filePath, bytes);
+    return filePath;
+  };
+  try {
+    assert.equal(mp4DurationSeconds(write('start.mp4', Buffer.concat([ftyp, moov(movieHeader(0, 1000, 5000)), box('mdat', 'frames')]))), 5);
+    assert.equal(mp4DurationSeconds(write('end.mov', Buffer.concat([ftyp, box('mdat', 'frames'), moov(box('trak'), movieHeader(1, 600, 1500))]))), 2.5);
+    assert.equal(mp4DurationSeconds(write('no-moov.mp4', Buffer.concat([ftyp, box('mdat', 'frames')]))), undefined);
+    assert.equal(mp4DurationSeconds(write('cut.mp4', Buffer.concat([ftyp, moov(movieHeader(0, 1000, 5000)).subarray(0, 30)]))), undefined);
+    assert.equal(mp4DurationSeconds(write('no-timescale.mp4', Buffer.concat([ftyp, moov(movieHeader(0, 0, 5000))]))), undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
