@@ -350,6 +350,30 @@ test('music generate --wait quotes, saves the track, deletes the remote copy and
   }
 }));
 
+test('music generate --wait without -o saves to generated-audio.mp3, then generated-audio-1.mp3, never replacing an earlier track', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const tracks = [Buffer.from('ID3-first'), Buffer.from('ID3-second')];
+  let queued = 0;
+  const stub = await startStub({
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: `mq${++queued}`, model: 'test-music' }),
+    [RETRIEVE]: (_request, response) => sendAudio(response, tracks[queued - 1]),
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  try {
+    const args = ['music', 'generate', 'a song', '-m', 'test-music', '--wait', '-f', 'json'];
+    const first = await runCli(args, dir, stub.origin);
+    const second = await runCli(args, dir, stub.origin);
+
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(first.stdout).output, 'generated-audio.mp3');
+    assert.equal(JSON.parse(second.stdout).output, 'generated-audio-1.mp3');
+    assert.equal(readFileSync(join(dir, 'generated-audio.mp3')).equals(tracks[0]), true);
+    assert.equal(readFileSync(join(dir, 'generated-audio-1.mp3')).equals(tracks[1]), true);
+  } finally {
+    await stub.close();
+  }
+}));
+
 test("music generate --wait exits 1 with Venice's error when the job fails, and saves nothing", { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: 'mq1', model: 'test-music' }),

@@ -573,11 +573,12 @@ instrumental mode. `music status --wait` and `music retrieve` use the same exit
 codes as their video counterparts.
 
 `music generate --wait` quotes the job, queues it, waits for it and saves the
-track to `-o` (by default `generated-audio` with the extension for its format).
-Like `retrieve`, it removes the remote copy once the file is saved unless you
-pass `--keep`. With `-f json` it prints one object with the file path, size,
-model, queue ID and quoted price, and it fails the same way `video generate
---wait` does. `--max-usd` refuses the job before anything is charged when the
+track to `-o`. Without `-o` it saves to `generated-audio` with the extension for
+its format, or to `generated-audio-1` and so on when that file exists, so it
+never replaces an earlier track. Like `retrieve`, it removes the remote copy
+once the file is saved unless you pass `--keep`. With `-f json` it prints one
+object with the file path, size, model, queue ID and quoted price, and it fails
+the same way `video generate --wait` does. `--max-usd` refuses the job before anything is charged when the
 quote is higher or can't be fetched. For models priced per character, the quote
 counts the prompt's characters.
 

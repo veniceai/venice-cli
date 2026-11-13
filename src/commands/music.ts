@@ -24,6 +24,7 @@ import {
   type Cleanup,
 } from '../lib/job-status.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, formatBytes, writeResponseToFile } from '../lib/media.js';
+import { outputTarget, saveToTarget } from '../lib/safe-write.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { parseSpendCap, quoteWithinCap } from '../lib/spend-cap.js';
 import {
@@ -147,13 +148,15 @@ async function generateAndSaveTrack(
     return;
   }
 
-  const outputPath = mode.output ?? `generated-audio${extensionForContentType(finished.audio.contentType)}`;
+  const { audio } = finished;
+  const target = outputTarget(mode.output, `generated-audio${extensionForContentType(audio.contentType)}`);
+  let outputPath: string;
   let saved: { bytesWritten: number; contentType: string };
   try {
-    saved = await writeResponseToFile(finished.audio.response, outputPath, {
+    ({ outputPath, saved } = await saveToTarget(target, (filePath) => writeResponseToFile(audio.response, filePath, {
       maxBytes: MAX_AUDIO_DOWNLOAD_BYTES,
       expectedContentTypePrefixes: ['audio/'],
-    });
+    })));
   } catch (error) {
     throw new Error(
       `${message(error)}\nThe track is still on Venice. Download it with: ` +
@@ -224,7 +227,7 @@ export function registerMusicCommands(program: Command): void {
     .option('-i, --instrumental', 'Force instrumental output (supported models only)')
     .option('--max-usd <amount>', 'Quote the job first, and refuse it before anything is charged if it costs more than this many US dollars')
     .option('-w, --wait', 'Wait for the track and save it')
-    .option('-o, --output <path>', 'With --wait, file to save the track to (default: generated-audio with the extension for its format)')
+    .option('-o, --output <path>', 'With --wait, file to save the track to (default: generated-audio with the extension for its format, numbered if it exists)')
     .option(
       '-t, --timeout <seconds>',
       `With --wait, maximum time to wait in seconds (default: ${DEFAULT_JOB_WAIT_TIMEOUT_SECONDS}, at most 86400)`
