@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ export interface RecordedRequest {
   method: string;
   path: string;
   body: string;
+  headers: IncomingHttpHeaders;
 }
 
 export interface CliRun {
@@ -50,6 +51,7 @@ export async function runCli(
         method: request.method ?? '',
         path: (request.url ?? '').replace(/^\/api\/v1/, ''),
         body: Buffer.concat(chunks).toString('utf8'),
+        headers: request.headers,
       };
       requests.push(recorded);
       const answer = api(recorded);

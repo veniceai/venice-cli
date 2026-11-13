@@ -32,7 +32,7 @@ import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
 import { formatError, getChalk } from './lib/output.js';
 import { runInterruptCleanups } from './lib/interrupt.js';
-import { getVersion } from './lib/version.js';
+import { getVersion, parseSkillName } from './lib/version.js';
 
 async function main() {
   const program = new Command();
@@ -47,10 +47,15 @@ async function main() {
       `All with Venice's privacy-preserving infrastructure.`
     )
     .option('--no-color', 'Disable colored output')
+    .option('--skill <name>', 'Name the agent skill running this command, sent to Venice as skill/<name> in the User-Agent')
     .hook('preAction', (thisCommand) => {
       // Handle global --no-color flag
       if (thisCommand.opts().color === false) {
         process.env.NO_COLOR = '1';
+      }
+      const skill = thisCommand.opts().skill as string | undefined;
+      if (skill !== undefined) {
+        process.env.VENICE_SKILL = parseSkillName(skill, '--skill');
       }
     });
 
