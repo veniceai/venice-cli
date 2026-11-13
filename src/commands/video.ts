@@ -2,9 +2,21 @@
  * Video Commands - AI video generation
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
+import { collectOptionValue } from '../lib/chat-attachments.js';
+import {
+  TASK_TYPES,
+  hasPerReferenceAudio,
+  isPublicHttpUrl,
+  mediaUrl,
+  parseVideoInputs,
+  referenceVideoSeconds,
+  type TaskType,
+  type VideoInputFlags,
+  type VideoInputs,
+} from '../lib/video-inputs.js';
 import {
   queueVideoGeneration,
   getVideoStatus,
@@ -20,15 +32,12 @@ import {
 } from '../lib/api.js';
 import {
   downloadToFile,
-  assertFileSizeWithinLimit,
   fileToDataUrl,
   formatBytes,
-  mimeTypeFromPath,
   MAX_VIDEO_DOWNLOAD_BYTES,
-  MAX_VIDEO_REFERENCE_IMAGE_BYTES,
   MAX_VIDEO_UPSCALE_BYTES,
 } from '../lib/media.js';
-import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
+import { checkMp4Header, fileHasMp4Header, mp4DurationSeconds } from '../lib/mp4.js';
 import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
   MAX_JOB_WAIT_TIMEOUT_SECONDS,
@@ -48,7 +57,9 @@ import {
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { outputTarget, saveToTarget, type OutputTarget } from '../lib/safe-write.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
-import type { Model, OutputFormat } from '../types/index.js';
+import type { Model, NonEmpty, OutputFormat } from '../types/index.js';
+
+export { isPublicHttpUrl };
 
 export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: string }> = [
   { id: 'wan-2.6-text-to-video', name: 'Wan 2.6 T2V', type: 'text-to-video' },
@@ -60,15 +71,6 @@ export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: stri
 ];
 
 const DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS = DEFAULT_JOB_WAIT_TIMEOUT_SECONDS;
-
-export function isPublicHttpUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 export function requirePublicVideoUrl(value: string): string {
   if (isPublicHttpUrl(value)) return value;
@@ -89,13 +91,17 @@ export function videoModelKind(id: string): string {
   return 'video';
 }
 
-type NonEmpty<T> = readonly [T, ...T[]];
-
 export type VideoConstraints = {
   aspectRatios?: NonEmpty<string>;
   durations?: NonEmpty<string>;
   resolutions?: NonEmpty<string>;
+  audio?: { kind: 'fixed'; on: boolean } | { kind: 'configurable' };
+  acceptsVideoInput?: boolean;
+  acceptsAudioInput?: boolean;
+  perReferenceAudio?: boolean;
 };
+
+const flag = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : undefined);
 
 function listedValues(value: unknown): NonEmpty<string> | undefined {
   if (!Array.isArray(value) || !value.every((item): item is string => typeof item === 'string')) return undefined;
@@ -114,11 +120,52 @@ export async function fetchVideoConstraints(model: string): Promise<VideoConstra
   const spec = models.find((entry) => entry.id === model)?.model_spec as { constraints?: unknown } | undefined;
   if (!spec?.constraints || typeof spec.constraints !== 'object') return undefined;
   const constraints = spec.constraints as Record<string, unknown>;
+  const audioOn = flag(constraints.audio);
   return {
     aspectRatios: listedValues(constraints.aspect_ratios),
     durations: listedValues(constraints.durations),
     resolutions: listedValues(constraints.resolutions),
+    audio: flag(constraints.audio_configurable)
+      ? { kind: 'configurable' }
+      : audioOn === undefined ? undefined : { kind: 'fixed', on: audioOn },
+    acceptsVideoInput: flag(constraints.video_input),
+    acceptsAudioInput: flag(constraints.audio_input),
+    perReferenceAudio: flag(constraints.per_reference_audio),
   };
+}
+
+/** Rejects inputs the catalog says the model can't take, before anything is quoted or queued. */
+export function checkVideoInputs(
+  model: string,
+  request: { audio?: boolean; inputs: VideoInputs },
+  constraints: VideoConstraints | undefined
+): void {
+  if (!constraints) return;
+  const { audio, acceptsVideoInput, acceptsAudioInput, perReferenceAudio } = constraints;
+  if (request.audio !== undefined && audio?.kind === 'fixed' && audio.on !== request.audio) {
+    throw new Error(`${model} always generates ${audio.on ? 'with' : 'without'} audio, so ${request.audio ? '--audio' : '--no-audio'} can't apply.`);
+  }
+  if (request.inputs.video && acceptsVideoInput === false) {
+    throw new Error(`${model} doesn't take a source video (--video).`);
+  }
+  if (request.inputs.audio && acceptsAudioInput === false) {
+    throw new Error(`${model} doesn't take an audio input (--audio-input).`);
+  }
+  if (perReferenceAudio === false && hasPerReferenceAudio(request.inputs)) {
+    throw new Error(`${model} doesn't take a voice per reference (the "audio" field of --image-reference or --video-reference).`);
+  }
+}
+
+/** Total seconds of local reference videos for `video quote`, which has no file to upload and so can't take URLs. */
+function measureReferenceVideos(values: string[]): number | undefined {
+  if (values.length === 0) return undefined;
+  return values.reduce((total, value) => {
+    if (isPublicHttpUrl(value)) throw new Error('--reference-video: video quote measures reference videos locally, so give a file, not a URL.');
+    if (!fs.existsSync(value)) throw new Error(`--reference-video: file not found: ${value}`);
+    const seconds = mp4DurationSeconds(value);
+    if (seconds === undefined) throw new Error(`--reference-video: can't read the length of ${value}. Use an MP4 or MOV file.`);
+    return total + seconds;
+  }, 0);
 }
 
 /**
@@ -245,6 +292,17 @@ function retrieveCommand(queued: QueuedJob): string {
     : shellCommand`venice video retrieve ${apiId(queueId)} -m ${apiId(model)}`;
 }
 
+type VideoRequest = {
+  model: string;
+  duration?: string;
+  aspectRatio?: string;
+  resolution?: string;
+  audio?: boolean;
+  negativePrompt?: string;
+  taskType?: TaskType;
+  inputs: VideoInputs;
+};
+
 type GenerateMode =
   | { kind: 'queue' }
   | { kind: 'wait'; output: OutputTarget; timeoutSeconds: number; afterSave: 'keep' | 'delete' };
@@ -278,7 +336,7 @@ function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?:
 
 async function generateAndSaveVideo(
   prompt: string,
-  request: { model: string; duration?: string; aspectRatio?: string; imageUrl?: string },
+  request: VideoRequest,
   mode: Extract<GenerateMode, { kind: 'wait' }>,
   format: OutputFormat
 ): Promise<void> {
@@ -290,6 +348,11 @@ async function generateAndSaveVideo(
     model: request.model,
     duration: request.duration,
     aspectRatio: request.aspectRatio,
+    resolution: request.resolution,
+    audio: request.audio,
+    // Billing reads the start image only to size an auto aspect ratio, so the quote does the same.
+    imageUrl: request.aspectRatio === 'auto' && request.inputs.start ? mediaUrl(request.inputs.start.image) : undefined,
+    referenceVideoSeconds: referenceVideoSeconds(request.inputs),
   }).then((result) => result.quote, () => undefined);
 
   const queued = await queueVideoGeneration(prompt, request);
@@ -353,6 +416,7 @@ async function generateAndSaveVideo(
       content_type: saved.contentType,
       ...(request.duration ? { duration: request.duration } : {}),
       ...(request.aspectRatio ? { aspect_ratio: request.aspectRatio } : {}),
+      ...(request.resolution ? { resolution: request.resolution } : {}),
       quote_usd: quote ?? null,
       ...(cleanup.kind === 'kept' ? {} : { deleted: cleanup.kind === 'deleted' }),
       ...(cleanup.kind === 'failed' ? { cleanup_error: cleanup.error } : {}),
@@ -383,7 +447,43 @@ export function registerVideoCommands(program: Command): void {
     .option('-m, --model <model>', 'Model to use', 'wan-2.6-text-to-video')
     .option('-d, --duration <duration>', "Video duration (e.g., 5s, 10s; default: the model's first listed duration)")
     .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: 16:9 where the model lists it, unless it lists auto or adaptive first)")
-    .option('-i, --image <path>', 'Reference image for image-to-video models')
+    .option('-r, --resolution <resolution>', 'Resolution (e.g., 720p), one the model lists')
+    .option('--audio', 'Generate audio, for models where it can be turned on or off')
+    .option('--no-audio', 'Generate without audio, for models where it can be turned on or off')
+    .option('--negative-prompt <text>', 'What the video should avoid')
+    .option('-i, --image <file|url>', 'Start frame for image-to-video models')
+    .option('--end-image <file|url>', 'End frame, for models with end frames or transitions')
+    .option('--video <file|url>', 'Source video for video-to-video, edit and motion-control models (MP4, MOV or WebM)')
+    .option('--audio-input <file|url>', 'Audio input, for models that take one (WAV or MP3, at most 15 MB)')
+    .option('--reference-image <file|url>', 'Reference image (repeatable, up to 30)', collectOptionValue, [])
+    .option('--reference-video <file|url>', 'Reference video, MP4 or MOV up to 50 MB (repeatable, up to 10)', collectOptionValue, [])
+    .option(
+      '--reference-audio <file|url>',
+      'Reference audio, WAV or MP3, used with a reference image or video (repeatable, up to 10)',
+      collectOptionValue,
+      []
+    )
+    .option(
+      '--image-reference <json>',
+      'Typed reference image as JSON or a JSON file: {"image", "type", "name", "audio"} (repeatable, up to 30)',
+      collectOptionValue,
+      []
+    )
+    .option(
+      '--video-reference <json>',
+      'Typed reference clip as JSON or a JSON file: {"video", "name", "audio"} (repeatable, up to 5)',
+      collectOptionValue,
+      []
+    )
+    .option(
+      '--element <json>',
+      'Element as JSON or a JSON file: {"frontal_image", "reference_images", "video"} (repeatable, up to 4)',
+      collectOptionValue,
+      []
+    )
+    .option('--scene-image <file|url>', 'Scene image for element models (repeatable, up to 4)', collectOptionValue, [])
+    .option('--camera-trajectory <json>', 'Camera keyframes as a JSON array or a JSON file; needs -i')
+    .addOption(new Option('--task-type <type>', 'Omni-reference task').choices(TASK_TYPES))
     .option('-w, --wait', 'Wait for the video and save it')
     .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4, or output-1.mp4 and so on if it exists)')
     .option(
@@ -397,35 +497,24 @@ export function registerVideoCommands(program: Command): void {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
 
-      let imageUrl: string | undefined;
-
-      // Handle image input for I2V models
-      if (options.image) {
-        const imagePath = path.resolve(options.image);
-        if (!fs.existsSync(imagePath)) {
-          console.error(formatError(`Image file not found: ${options.image}`));
-          process.exit(1);
-        }
-
-        assertFileSizeWithinLimit(
-          imagePath,
-          MAX_VIDEO_REFERENCE_IMAGE_BYTES,
-          'Reference image for video generation'
-        );
-
-        const imageData = await fs.promises.readFile(imagePath);
-        const mimeType = mimeTypeFromPath(imagePath, 'image/png');
-        imageUrl = `data:${mimeType};base64,${imageData.toString('base64')}`;
-      }
-
       try {
         const mode = parseGenerateMode(options);
-        const { aspectRatio, duration } = applyVideoConstraints(
+        const inputs = await parseVideoInputs(options as VideoInputFlags);
+        const constraints = await fetchVideoConstraints(options.model);
+        const listed = applyVideoConstraints(
           options.model,
-          { aspectRatio: options.aspectRatio, duration: options.duration },
-          await fetchVideoConstraints(options.model)
+          { aspectRatio: options.aspectRatio, duration: options.duration, resolution: options.resolution },
+          constraints
         );
-        const request = { model: options.model, duration, aspectRatio, imageUrl };
+        const request: VideoRequest = {
+          model: options.model,
+          ...listed,
+          audio: options.audio as boolean | undefined,
+          negativePrompt: options.negativePrompt as string | undefined,
+          taskType: options.taskType as TaskType | undefined,
+          inputs,
+        };
+        checkVideoInputs(options.model, request, constraints);
 
         if (mode.kind === 'wait') {
           await generateAndSaveVideo(prompt, request, mode, format);
@@ -460,6 +549,12 @@ export function registerVideoCommands(program: Command): void {
     .option('--audio', 'Include audio in the quote')
     .option('--no-audio', 'Exclude audio from the quote')
     .option('--video-url <url>', 'Source video URL for upscale quotes')
+    .option(
+      '--reference-video <file>',
+      'Local reference video (MP4 or MOV) whose length the quote should include (repeatable)',
+      collectOptionValue,
+      []
+    )
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (promptParts: string[], options) => {
       const format = detectOutputFormat(options.format);
@@ -468,6 +563,7 @@ export function registerVideoCommands(program: Command): void {
 
       try {
         const upscaleFactor = options.factor !== undefined ? parseUpscaleFactor(options.factor) : undefined;
+        const referenceSeconds = measureReferenceVideos(options.referenceVideo as string[]);
         const listed = applyVideoConstraints(
           options.model,
           { aspectRatio: options.aspectRatio, duration: options.duration, resolution: options.resolution },
@@ -481,6 +577,7 @@ export function registerVideoCommands(program: Command): void {
           upscaleFactor,
           audio: options.audio,
           videoUrl: options.videoUrl,
+          referenceVideoSeconds: referenceSeconds,
         });
 
         if (format === 'json') {
