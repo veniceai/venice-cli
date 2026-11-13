@@ -615,6 +615,49 @@ test("video generate --wait uses the model's first listed ratio and duration, sa
   }
 }));
 
+test('video generate --wait without -o saves to output.mp4, then output-1.mp4, never replacing an earlier video', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const videos: Record<string, Buffer> = { q1: mp4Bytes('-first'), q2: mp4Bytes('-second') };
+  let queued = 0;
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: `q${++queued}`, model: 'test-model' }),
+    'POST /api/v1/video/retrieve': async (request, response) => {
+      const { queue_id: queueId } = await readJson(request);
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(videos[queueId as string]);
+    },
+  });
+  try {
+    const args = ['video', 'generate', 'a cat', '-m', 'test-model', '--wait', '-f', 'json'];
+    const first = await runCli(args, dir, stub.origin);
+    const second = await runCli(args, dir, stub.origin);
+
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(first.stdout).output, 'output.mp4');
+    assert.equal(JSON.parse(second.stdout).output, 'output-1.mp4');
+    assert.equal(readFileSync(join(dir, 'output.mp4')).equals(videos.q1), true);
+    assert.equal(readFileSync(join(dir, 'output-1.mp4')).equals(videos.q2), true);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate --wait leaves no empty output.mp4 behind when the video cannot be saved', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1', model: 'test-model' }),
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, { status: 'COMPLETED' }),
+  });
+  try {
+    const result = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '--wait'], dir, stub.origin);
+
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /returned no video\.\nThe video is still on Venice\. Download it with: venice video retrieve q1 -m test-model/);
+    assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.mp4')), []);
+  } finally {
+    await stub.close();
+  }
+}));
+
 test('video generate rejects a ratio or duration the model does not list before quoting or queueing', { timeout: 20_000 }, () => withScratch(async (dir) => {
   const stub = await startStub({
     'GET /api/v1/models?type=video': (_request, response) => sendJson(response, catalog),

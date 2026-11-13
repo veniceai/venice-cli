@@ -46,6 +46,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
+import { outputTarget, saveToTarget, type OutputTarget } from '../lib/safe-write.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Model, OutputFormat } from '../types/index.js';
 
@@ -231,7 +232,7 @@ function retrieveCommand(queued: QueuedJob): string {
 
 type GenerateMode =
   | { kind: 'queue' }
-  | { kind: 'wait'; output: string; timeoutSeconds: number; afterSave: 'keep' | 'delete' };
+  | { kind: 'wait'; output: OutputTarget; timeoutSeconds: number; afterSave: 'keep' | 'delete' };
 
 type Cleanup = { kind: 'kept' } | { kind: 'deleted' } | { kind: 'failed'; error: string };
 
@@ -240,7 +241,7 @@ function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?:
   if (options.wait) {
     return {
       kind: 'wait',
-      output: options.output ?? 'output.mp4',
+      output: outputTarget(options.output, 'output.mp4'),
       timeoutSeconds: parseDecimalOption(
         options.timeout ?? String(DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS),
         '--timeout',
@@ -311,9 +312,10 @@ async function generateAndSaveVideo(
     return;
   }
 
+  let outputPath: string;
   let saved: { bytesWritten: number; contentType: string };
   try {
-    saved = await saveCompletedVideo(queued, mode.output);
+    ({ outputPath, saved } = await saveToTarget(mode.output, (filePath) => saveCompletedVideo(queued, filePath)));
   } catch (error) {
     throw new Error(`${message(error)}\nThe video is still on Venice. Download it with: ${retrieveCommand(queued)}`);
   }
@@ -321,7 +323,7 @@ async function generateAndSaveVideo(
   // The video is saved, so a failed cleanup is reported rather than raised as an error that invites a paid retry.
   const cleanup: Cleanup = mode.afterSave === 'keep'
     ? { kind: 'kept' }
-    : await completeSavedVideo(queued.queue_id, queued.model, mode.output).then(
+    : await completeSavedVideo(queued.queue_id, queued.model, outputPath).then(
       (): Cleanup => ({ kind: 'deleted' }),
       (error: unknown): Cleanup => ({ kind: 'failed', error: message(error) })
     );
@@ -331,7 +333,7 @@ async function generateAndSaveVideo(
       status: 'completed',
       queue_id: queued.queue_id,
       model: queued.model,
-      output: mode.output,
+      output: outputPath,
       size_bytes: saved.bytesWritten,
       content_type: saved.contentType,
       ...(request.duration ? { duration: request.duration } : {}),
@@ -343,7 +345,7 @@ async function generateAndSaveVideo(
     return;
   }
 
-  console.log(formatSuccess(`Video saved to ${mode.output}`));
+  console.log(formatSuccess(`Video saved to ${outputPath}`));
   console.log(`${c.dim('Size:')} ${formatBytes(saved.bytesWritten)}`);
   if (cleanup.kind === 'deleted') {
     console.log(`${c.dim('Cleanup:')} media deleted after download`);
@@ -368,7 +370,7 @@ export function registerVideoCommands(program: Command): void {
     .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: the model's first listed ratio)")
     .option('-i, --image <path>', 'Reference image for image-to-video models')
     .option('-w, --wait', 'Wait for the video and save it')
-    .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4)')
+    .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4, or output-1.mp4 and so on if it exists)')
     .option(
       '-t, --timeout <seconds>',
       `With --wait, maximum time to wait in seconds (default: ${DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS}, at most 86400)`

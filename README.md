@@ -500,7 +500,7 @@ venice video models
 
 Without `-a` or `-d`, `video generate` and `video quote` use the first aspect ratio and duration the model lists in `GET /models?type=video`, and they reject values the model doesn't list before anything is queued. If the catalog can't be read, the CLI sends only the options you set.
 
-`video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o` (default `output.mp4`). With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved.
+`video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o`. Without `-o` it saves to `output.mp4`, or to `output-1.mp4` and so on when that file exists, so it never replaces an earlier video. With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved.
 
 `video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
 
