@@ -30,6 +30,7 @@ import {
   MAX_VIDEO_UPSCALE_BYTES,
 } from '../lib/media.js';
 import { checkMp4Header, fileHasMp4Header } from '../lib/mp4.js';
+import { onInterrupt } from '../lib/interrupt.js';
 import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
   MAX_JOB_WAIT_TIMEOUT_SECONDS,
@@ -87,7 +88,7 @@ const TRANSCRIBABLE_CONTENT_TYPES: Record<string, string> = {
   'audio/webm': '.webm',
 };
 
-type TranscriptionSource = { kind: 'file'; path: string } | { kind: 'download'; path: string; dir: string };
+type TranscriptionSource = { kind: 'file'; path: string } | { kind: 'download'; path: string; remove: () => void };
 
 /** A local file Venice can transcribe, or a public URL downloaded to a temporary one. */
 async function transcriptionSource(source: string): Promise<TranscriptionSource> {
@@ -103,6 +104,12 @@ async function transcriptionSource(source: string): Promise<TranscriptionSource>
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'venice-transcribe-'));
+  const removeDir = () => fs.rmSync(dir, { recursive: true, force: true });
+  const stopInterruptCleanup = onInterrupt(removeDir);
+  const remove = () => {
+    stopInterruptCleanup();
+    removeDir();
+  };
   try {
     const downloaded = path.join(dir, 'media');
     const { contentType } = await downloadToFile(source, downloaded, {
@@ -114,9 +121,9 @@ async function transcriptionSource(source: string): Promise<TranscriptionSource>
       throw new Error(`Venice can't transcribe ${contentType}. Use an MP4 or WebM video, or a supported audio file.`);
     }
     fs.renameSync(downloaded, `${downloaded}${extension}`);
-    return { kind: 'download', path: `${downloaded}${extension}`, dir };
+    return { kind: 'download', path: `${downloaded}${extension}`, remove };
   } catch (error) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    remove();
     throw error;
   }
 }
@@ -532,7 +539,7 @@ export function registerVideoCommands(program: Command): void {
         // Not process.exit, so the finally block still removes a downloaded copy.
         process.exitCode = 1;
       } finally {
-        if (source?.kind === 'download') fs.rmSync(source.dir, { recursive: true, force: true });
+        if (source?.kind === 'download') source.remove();
       }
     });
 
