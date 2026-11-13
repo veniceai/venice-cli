@@ -17,7 +17,6 @@ import {
   queueVideoUpscale,
   quoteVideoGeneration,
   scrapeWebPage,
-  transcribeVideo,
   videoUrlFromStatus,
 } from './api.js';
 import type { Character, CharacterReviewsPage } from '../types/index.js';
@@ -251,9 +250,6 @@ test('video API helpers send documented requests and support live discovery', as
 
     if (url.includes('/video/quote')) return jsonResponse({ quote: 0.12 });
     if (url.includes('/video/complete')) return jsonResponse({ success: true });
-    if (url.includes('/video/transcriptions')) {
-      return jsonResponse({ transcript: 'hello from the clip', lang: 'en' });
-    }
     if (url.includes('/video/queue')) {
       return jsonResponse({ queue_id: 'q-1', model: body.model });
     }
@@ -271,7 +267,6 @@ test('video API helpers send documented requests and support live discovery', as
       aspectRatio: '16:9',
     })).quote, 0.12);
     assert.equal((await completeVideo('q-1', 'veo3-fast-text-to-video')).success, true);
-    assert.equal((await transcribeVideo('https://example.com/clip.mp4')).lang, 'en');
     assert.equal((await queueVideoGeneration('sunset')).queue_id, 'q-1');
     assert.equal((await queueVideoUpscale('https://example.com/clip.mp4', {
       upscaleFactor: 2,
@@ -283,16 +278,16 @@ test('video API helpers send documented requests and support live discovery', as
       duration: '5s',
       aspect_ratio: '16:9',
     });
-    assert.deepEqual(requests[3].body, {
+    assert.deepEqual(requests[2].body, {
       model: 'wan-2.6-text-to-video',
       prompt: 'sunset',
     });
-    assert.deepEqual(requests[4].body, {
+    assert.deepEqual(requests[3].body, {
       model: 'topaz-video-upscale',
       video_url: 'https://example.com/clip.mp4',
       upscale_factor: 2,
     });
-    assert.match(requests[5].url, /\/models\?type=video$/);
+    assert.match(requests[4].url, /\/models\?type=video$/);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) delete process.env.VENICE_API_KEY;

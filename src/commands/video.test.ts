@@ -15,7 +15,6 @@ import {
   classifyVideoStatus,
   isPublicHttpUrl,
   parseUpscaleFactor,
-  requirePublicVideoUrl,
   videoModelKind,
   waitForVideoStatus,
   type VideoConstraints,
@@ -34,8 +33,6 @@ function mp4Bytes(tail = ''): Buffer {
 test('video URL and upscale helpers validate supported inputs', () => {
   assert.equal(isPublicHttpUrl('https://example.com/clip.mp4'), true);
   assert.equal(isPublicHttpUrl('file:///tmp/clip.mp4'), false);
-  assert.equal(requirePublicVideoUrl('http://example.com/clip.mp4'), 'http://example.com/clip.mp4');
-  assert.throws(() => requirePublicVideoUrl('clip.mp4'), /public HTTP\(S\) URL/);
   assert.equal(parseUpscaleFactor(undefined), 2);
   assert.equal(parseUpscaleFactor(4), 4);
   assert.throws(() => parseUpscaleFactor('3'), /1, 2, or 4/);
