@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -282,6 +282,133 @@ test('music status without --wait reports a failed job and exits 0', { timeout: 
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).status, 'FAILED');
+  } finally {
+    await stub.close();
+  }
+}));
+
+function musicCatalog(pricing: Record<string, unknown>): { data: unknown[] } {
+  return { data: [{ id: 'test-music', type: 'music', model_spec: { pricing } }] };
+}
+
+test('music generate --wait quotes, saves the track, deletes the remote copy and prints one JSON object', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const track = Buffer.from('ID3-track-bytes');
+  const quotes: Array<Record<string, unknown>> = [];
+  let retrieves = 0;
+  let pricing: Record<string, unknown> = { per_second: { usd: 0.01 } };
+  const stub = await startStub({
+    'GET /api/v1/models?type=music': (_request, response) => sendJson(response, musicCatalog(pricing)),
+    'POST /api/v1/audio/quote': async (request, response) => {
+      quotes.push(await readJson(request));
+      sendJson(response, { quote: 0.69 });
+    },
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: 'mq1', model: 'test-music' }),
+    [RETRIEVE]: (_request, response) => {
+      if (retrieves++ % 2 === 0) {
+        sendJson(response, { status: 'PROCESSING' });
+        return;
+      }
+      sendAudio(response, track);
+    },
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const output = join(dir, 'song.mp3');
+  try {
+    const result = await runCli(
+      ['music', 'generate', 'a calm song', '-m', 'test-music', '-d', '60', '--wait', '-o', output, '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output).equals(track), true);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      status: 'completed',
+      queue_id: 'mq1',
+      model: 'test-music',
+      output,
+      size_bytes: track.length,
+      content_type: 'audio/mpeg',
+      duration_seconds: 60,
+      quote_usd: 0.69,
+      deleted: true,
+    });
+    assert.deepEqual(quotes[0], { model: 'test-music', duration_seconds: 60 });
+
+    pricing = { per_thousand_characters: { usd: 0.3 } };
+    const kept = await runCli(
+      ['music', 'generate', 'a calm song', '-m', 'test-music', '--wait', '--keep', '-o', join(dir, 'kept.mp3'), '-f', 'json'],
+      dir,
+      stub.origin
+    );
+    assert.equal(kept.status, 0, kept.stderr);
+    assert.equal('deleted' in JSON.parse(kept.stdout), false);
+    assert.deepEqual(quotes[1], { model: 'test-music', character_count: 'a calm song'.length });
+    assert.equal(stub.count('POST /api/v1/audio/complete'), 1);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('music generate --wait without -o saves to generated-audio.mp3, then generated-audio-1.mp3, never replacing an earlier track', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const tracks = [Buffer.from('ID3-first'), Buffer.from('ID3-second')];
+  let queued = 0;
+  const stub = await startStub({
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: `mq${++queued}`, model: 'test-music' }),
+    [RETRIEVE]: (_request, response) => sendAudio(response, tracks[queued - 1]),
+    'POST /api/v1/audio/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  try {
+    const args = ['music', 'generate', 'a song', '-m', 'test-music', '--wait', '-f', 'json'];
+    const first = await runCli(args, dir, stub.origin);
+    const second = await runCli(args, dir, stub.origin);
+
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(first.stdout).output, 'generated-audio.mp3');
+    assert.equal(JSON.parse(second.stdout).output, 'generated-audio-1.mp3');
+    assert.equal(readFileSync(join(dir, 'generated-audio.mp3')).equals(tracks[0]), true);
+    assert.equal(readFileSync(join(dir, 'generated-audio-1.mp3')).equals(tracks[1]), true);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test("music generate --wait exits 1 with Venice's error when the job fails, and saves nothing", { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: 'mq1', model: 'test-music' }),
+    [RETRIEVE]: (_request, response) => sendJson(response, { status: 'FAILED', error: 'content policy' }),
+  });
+  const output = join(dir, 'failed.mp3');
+  try {
+    const json = await runCli(['music', 'generate', 'a song', '-m', 'test-music', '--wait', '-o', output, '-f', 'json'], dir, stub.origin);
+    assert.equal(json.status, 1, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), { status: 'FAILED', error: 'content policy', queue_id: 'mq1', model: 'test-music' });
+
+    const pretty = await runCli(['music', 'generate', 'a song', '-m', 'test-music', '--wait', '-o', output], dir, stub.origin);
+    assert.equal(pretty.status, 1);
+    assert.match(pretty.stderr, /content policy/);
+    assert.equal(existsSync(output), false);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('music generate refuses wait-only flags without --wait, and jobs above --max-usd, before queueing', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/audio/quote': (_request, response) => sendJson(response, { quote: 4 }),
+    'POST /api/v1/audio/queue': (_request, response) => sendJson(response, { queue_id: 'mq1', model: 'test-music' }),
+  });
+  try {
+    const keep = await runCli(['music', 'generate', 'a song', '--keep'], dir, stub.origin);
+    assert.equal(keep.status, 1, keep.stdout);
+    assert.match(keep.stderr, /--keep needs --wait\./);
+
+    const over = await runCli(['music', 'generate', 'a song', '--max-usd', '2'], dir, stub.origin);
+    assert.equal(over.status, 1, over.stdout);
+    assert.match(over.stderr, /quoted at \$4, above --max-usd 2, so nothing was queued/);
+
+    assert.equal(stub.count('POST /api/v1/audio/queue'), 0);
   } finally {
     await stub.close();
   }

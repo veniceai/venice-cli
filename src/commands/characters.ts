@@ -10,7 +10,8 @@ import {
   listCharacters,
   type ListCharactersOptions,
 } from '../lib/api.js';
-import { formatError, formatJson, getChalk, detectOutputFormat, terminalSafe } from '../lib/output.js';
+import {
+  reportError, formatJson, getChalk, detectOutputFormat, terminalSafe } from '../lib/output.js';
 import { parseIntegerOption } from '../lib/options.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
 import type { Character, CharacterReview, CharacterReviewsPage } from '../types/index.js';
@@ -69,7 +70,7 @@ export function registerCharactersCommand(program: Command): void {
           printCharacterSummary(character);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -103,7 +104,7 @@ export function registerCharactersCommand(program: Command): void {
 
         console.log(c.dim(`Usage: ${shellCommand`venice chat -c ${apiId(character.slug)} "Your message"`}`));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -157,7 +158,7 @@ export function registerCharactersCommand(program: Command): void {
           console.log(c.dim(`Next page: ${nextCommand}`));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

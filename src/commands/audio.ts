@@ -15,12 +15,14 @@ import { getDefaultVoice } from '../lib/config.js';
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { warningsField } from '../lib/warnings.js';
 import { parseDecimalOption } from '../lib/options.js';
 import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
@@ -93,6 +95,7 @@ export function registerAudioCommands(program: Command): void {
     .option('-s, --speed <speed>', 'Speech speed (0.25-4.0)', '1.0')
     .option('--temperature <temperature>', 'Sampling temperature (0-2)')
     .option('--streaming', 'Request sentence-by-sentence audio streaming')
+    .option('--json', "Print the saved file's path, size and type as JSON (--format is the audio format)")
     .action(async (textParts: string[], options) => {
       let text = textParts.join(' ');
       
@@ -132,9 +135,20 @@ export function registerAudioCommands(program: Command): void {
         } else {
           outputPath = writeBufferToNewFile(audio, defaultSpeechFileName(audioFormat), limits).outputPath;
         }
-        console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        if (options.json) {
+          console.log(formatJson({
+            output: outputPath,
+            size_bytes: audio.length,
+            content_type: result.contentType,
+            model: options.model,
+            voice,
+            ...warningsField(),
+          }));
+        } else {
+          console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.json ? 'json' : undefined);
         process.exit(1);
       }
     });
@@ -163,7 +177,7 @@ export function registerAudioCommands(program: Command): void {
         console.log(`Model: ${terminalSafe(result.model)}`);
         console.log(`Use: ${shellCommand`venice tts -m ${apiId(result.model)} -v ${apiId(result.id)} "Hello"`}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -198,7 +212,7 @@ export function registerAudioCommands(program: Command): void {
       try {
         await transcribeAndPrint(resolvedPath, transcribeOptions, format);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -258,7 +272,7 @@ export function registerAudioCommands(program: Command): void {
 
         console.log(`\n${c.dim('Usage: venice tts -m <model> -v <voice> "Hello world"')}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

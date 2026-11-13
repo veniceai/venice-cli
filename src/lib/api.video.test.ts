@@ -9,6 +9,7 @@ import {
   queueVideoGeneration,
   retrieveVideo,
 } from './api.js';
+import { NO_VIDEO_INPUTS } from './video-inputs.js';
 import { readWithInactivityTimeout, streamResponseToFile } from './media.js';
 
 function mp4Bytes(tail = ''): Buffer {
@@ -108,7 +109,7 @@ test('stream inactivity timeout cancels a stalled body and cleans its temporary 
   }
 });
 
-test('queueVideoGeneration omits aspect_ratio unless the user set it', async () => {
+test('queueVideoGeneration sends aspect_ratio and duration only when they are set', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const bodies: unknown[] = [];
@@ -123,7 +124,7 @@ test('queueVideoGeneration omits aspect_ratio unless the user set it', async () 
     await queueVideoGeneration('a man stands up', {
       model: 'wan-2.6-image-to-video',
       duration: '5s',
-      imageUrl: 'data:image/jpeg;base64,abc',
+      inputs: { ...NO_VIDEO_INPUTS, start: { image: { kind: 'url', url: 'data:image/jpeg;base64,abc' } } },
     });
     await queueVideoGeneration('sunset', {
       model: 'wan-2.6-text-to-video',
@@ -140,7 +141,6 @@ test('queueVideoGeneration omits aspect_ratio unless the user set it', async () 
     assert.deepEqual(bodies[1], {
       model: 'wan-2.6-text-to-video',
       prompt: 'sunset',
-      duration: '5s',
       aspect_ratio: '16:9',
     });
   } finally {

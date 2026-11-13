@@ -10,7 +10,7 @@ import {
   type ModelNameMapping,
 } from '../lib/api.js';
 import {
-  formatError,
+  reportError,
   formatJson,
   formatTable,
   getChalk,
@@ -101,7 +101,7 @@ export function registerModelsCommand(program: Command): void {
         console.log(`\n${c.dim('🔒 = Privacy-preserving (no data retention)')}`);
         console.log(c.dim('📊 = Standard model'));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -135,7 +135,7 @@ export function registerModelsCommand(program: Command): void {
         }
         printModelDetails(model);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -201,7 +201,7 @@ function registerModelMappingCommand(
           ]
         ));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

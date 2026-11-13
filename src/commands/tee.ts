@@ -10,7 +10,7 @@ import {
   fetchTeeSignature,
 } from '../lib/api.js';
 import {
-  formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -231,7 +231,7 @@ export function registerTeeCommand(program: Command): void {
         console.log(c.dim(`\n${ATTESTATION_SCOPE_NOTE}`));
         console.log('');
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -291,7 +291,7 @@ export function registerTeeCommand(program: Command): void {
         console.log('');
         process.exit(policy.passed ? 0 : 1);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -455,7 +455,7 @@ export function registerTeeCommand(program: Command): void {
           process.exit(1);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

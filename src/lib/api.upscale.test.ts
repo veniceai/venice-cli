@@ -112,7 +112,7 @@ test('upscaleImage rejects chunked responses that exceed the download limit', as
   try {
     await assert.rejects(
       () => upscaleImage(imagePath),
-      /Upscaled image response exceeded the limit of 50\.0 MB/
+      /Upscaled image response exceeded the limit of 80\.0 MB/
     );
     assert.equal(bodyCancelled, true);
   } finally {

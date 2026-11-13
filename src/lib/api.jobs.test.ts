@@ -194,7 +194,7 @@ test('music status fails when its JSON body stalls or grows too large', { timeou
 test('queue responses need a queue_id and fall back to the requested model', async () => {
   const queues = [
     { endpoint: '/video/queue', queue: () => queueVideoGeneration('a cat', { model: 'test-video-model' }) },
-    { endpoint: '/audio/queue', queue: () => queueAudioGeneration('a song', { model: 'test-audio-model' }) },
+    { endpoint: '/audio/queue', queue: () => queueAudioGeneration('a song', { model: 'test-audio-model', lyrics: { kind: 'none' } }) },
   ];
 
   for (const { endpoint, queue } of queues) {
