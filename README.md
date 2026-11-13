@@ -91,7 +91,7 @@ Coding agents such as Claude Code, Codex, Cursor and OpenCode can drive the CLI 
 What an agent can rely on:
 
 - A successful command prints one JSON object on stdout with the saved file's path, size and type. Video and music results also include the model, the queue ID and the quoted price (`quote_usd`).
-- A failed command exits non-zero. With `-f json`, its error is one line of JSON on stderr with the message, the API's status and code, and `credits_refunded`, `suggested_prompt` or `recommended_model` when Venice sends them.
+- A failed command exits non-zero. With `-f json`, its error is one line of JSON on stderr with the message, the API's status and code, and `credits_refunded`, `suggested_prompt` or `recommended_model` when Venice sends them. Usage errors, such as an unknown or missing option, are reported before the command runs and stay plain text.
 - `--max-usd` refuses a video or music job before anything is charged when its quote is higher or can't be fetched.
 - A result from a deprecated model includes a `warnings` field that names the replacement.
 - `venice video models -f json` and `venice music models --format json` list each model's constraints and options, which the CLI also checks before it sends a job.
