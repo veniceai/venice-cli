@@ -190,6 +190,16 @@ test('video generate rejects inputs the catalog says the model cannot take', { t
   assert.equal(allowed.status, 0, allowed.stderr);
 });
 
+test("video models -f json includes each model's catalog constraints", { timeout: 20_000 }, async () => {
+  const constraints = { aspect_ratios: ['16:9'], durations: ['5s'], resolutions: ['720p'], audio: true };
+  const run = await runCli(['video', 'models', '-f', 'json'], withCatalog(constraints));
+
+  assert.equal(run.status, 0, run.stderr);
+  const printed = JSON.parse(run.stdout);
+  assert.equal(printed.source, 'api');
+  assert.deepEqual(printed.models[0].constraints, constraints);
+});
+
 test('video generate --max-usd refuses a job above the cap, or one it cannot quote, before queueing', { timeout: 30_000 }, async () => {
   const quotedAt = (quote: number): FakeApi => (request) =>
     request.path === '/video/quote' ? { quote } : queueOnly(request);
