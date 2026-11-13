@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { collectOptionValue } from '../lib/chat-attachments.js';
 import { parseSpendCap, quoteWithinCap } from '../lib/spend-cap.js';
+import { warningsField } from '../lib/warnings.js';
 import {
   TASK_TYPES,
   hasPerReferenceAudio,
@@ -379,7 +380,7 @@ async function generateAndSaveVideo(
 
   if (classifyVideoStatus(status.status) !== 'completed') {
     if (format === 'json') {
-      console.log(formatJson({ ...status, queue_id: queued.queue_id, model: queued.model }));
+      console.log(formatJson({ ...status, queue_id: queued.queue_id, model: queued.model, ...warningsField() }));
     } else {
       console.error(formatError(status.error || `Video generation ended with status "${status.status}".`));
     }
@@ -416,6 +417,7 @@ async function generateAndSaveVideo(
       ...(request.resolution ? { resolution: request.resolution } : {}),
       quote_usd: quote ?? null,
       ...cleanupFields(cleanup),
+      ...warningsField(),
     }));
     return;
   }
@@ -523,7 +525,7 @@ export function registerVideoCommands(program: Command): void {
         const result = await queueVideoGeneration(prompt, request);
 
         if (format === 'json') {
-          console.log(formatJson(quote === undefined ? result : { ...result, quote_usd: quote }));
+          console.log(formatJson({ ...result, ...(quote === undefined ? {} : { quote_usd: quote }), ...warningsField() }));
         } else {
           console.log(formatSuccess('Video generation queued!'));
           console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(result.queue_id))}`);

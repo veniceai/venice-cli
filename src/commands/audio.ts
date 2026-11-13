@@ -22,6 +22,7 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { warningsField } from '../lib/warnings.js';
 import { parseDecimalOption } from '../lib/options.js';
 import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
@@ -86,6 +87,7 @@ export function registerAudioCommands(program: Command): void {
             content_type: result.contentType,
             model: options.model,
             voice,
+            ...warningsField(),
           }));
         } else {
           console.log(formatSuccess(`Saved audio to ${outputPath}`));

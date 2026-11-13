@@ -36,6 +36,7 @@ import {
   detectOutputFormat,
   terminalSafe,
 } from '../lib/output.js';
+import { warningsField } from '../lib/warnings.js';
 
 interface ImageCommandOptions {
   model?: string;
@@ -315,7 +316,7 @@ export function registerImageCommand(program: Command): void {
           images.length > 1 ? index + 1 : undefined
         ));
         if (format === 'json') {
-          console.log(formatJson({ images: saved }));
+          console.log(formatJson({ images: saved, ...warningsField() }));
           return;
         }
         for (const image of saved) {
@@ -491,7 +492,7 @@ export function registerImageCommand(program: Command): void {
 
         const saved = saveImage(result.bytes, outputMode.path, 'upscaled', undefined, 'Upscaled image');
         if (format === 'json') {
-          console.log(formatJson({ images: [saved] }));
+          console.log(formatJson({ images: [saved], ...warningsField() }));
           return;
         }
 
@@ -542,7 +543,7 @@ function writeImageResult(
 
   const saved = saveImage(imageData, mode.path, defaultStem, requested, label);
   if (format === 'json') {
-    console.log(formatJson({ image: saved }));
+    console.log(formatJson({ image: saved, ...warningsField() }));
     return;
   }
   console.log(formatSuccess(`Saved ${label} to ${saved.output}`));

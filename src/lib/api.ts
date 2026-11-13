@@ -41,6 +41,7 @@ import {
 } from './media.js';
 import { checkMp4Header } from './mp4.js';
 import { videoInputsBody, type TaskType, type VideoInputs } from './video-inputs.js';
+import { modelOfRequestBody, noteResponseWarnings } from './warnings.js';
 
 // Never allow production environment variables to redirect bearer credentials.
 const VENICE_API =
@@ -415,6 +416,7 @@ export async function apiRequest<T>(
         signal: controller.signal,
         redirect: 'error',
       });
+      noteResponseWarnings(response.headers, modelOfRequestBody(body));
       responded = true;
 
       if (!response.ok) {
@@ -1279,6 +1281,7 @@ export async function upscaleImage(
       signal: controller.signal,
       redirect: 'error',
     });
+    noteResponseWarnings(response.headers, modelOfRequestBody(body));
 
     if (!response.ok) {
       throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
@@ -1360,6 +1363,7 @@ export async function textToSpeech(
       signal: controller.signal,
       redirect: 'error',
     });
+    noteResponseWarnings(response.headers, modelOfRequestBody(body));
 
     if (!response.ok) {
       throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
@@ -1566,6 +1570,7 @@ export async function transcribe(
     const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
       ...requestInit,
     });
+    noteResponseWarnings(res.headers, options.model || 'nvidia/parakeet-tdt-0.6b-v3');
 
     if (!res.ok) {
       throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
@@ -2028,6 +2033,7 @@ async function retrieveVideoResponse(
         signal: controller.signal,
         redirect: 'error',
       });
+      noteResponseWarnings(response.headers, model);
 
       if (!response.ok) {
         throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
