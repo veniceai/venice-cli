@@ -22,6 +22,7 @@ import {
   downloadToFile,
   assertFileSizeWithinLimit,
   fileToDataUrl,
+  formatBytes,
   mimeTypeFromPath,
   MAX_VIDEO_DOWNLOAD_BYTES,
   MAX_VIDEO_REFERENCE_IMAGE_BYTES,
@@ -45,8 +46,9 @@ import {
   terminalSafe,
 } from '../lib/output.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
+import { outputTarget, saveToTarget, type OutputTarget } from '../lib/safe-write.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
-import type { Model } from '../types/index.js';
+import type { Model, OutputFormat } from '../types/index.js';
 
 export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: string }> = [
   { id: 'wan-2.6-text-to-video', name: 'Wan 2.6 T2V', type: 'text-to-video' },
@@ -85,6 +87,76 @@ export function videoModelKind(id: string): string {
   if (normalized.includes('image-to-video') || normalized.includes('i2v')) return 'image-to-video';
   if (normalized.includes('text-to-video') || normalized.includes('t2v')) return 'text-to-video';
   return 'video';
+}
+
+type NonEmpty<T> = readonly [T, ...T[]];
+
+export type VideoConstraints = {
+  aspectRatios?: NonEmpty<string>;
+  durations?: NonEmpty<string>;
+  resolutions?: NonEmpty<string>;
+};
+
+function listedValues(value: unknown): NonEmpty<string> | undefined {
+  if (!Array.isArray(value) || !value.every((item): item is string => typeof item === 'string')) return undefined;
+  const [first, ...rest] = value;
+  return first === undefined ? undefined : [first, ...rest];
+}
+
+/** What the live catalog lists for a model, or undefined when the catalog can't be read or doesn't list it. */
+export async function fetchVideoConstraints(model: string): Promise<VideoConstraints | undefined> {
+  let models: Model[];
+  try {
+    models = await listModels({ type: 'video', showSpinner: false });
+  } catch {
+    return undefined;
+  }
+  const spec = models.find((entry) => entry.id === model)?.model_spec as { constraints?: unknown } | undefined;
+  if (!spec?.constraints || typeof spec.constraints !== 'object') return undefined;
+  const constraints = spec.constraints as Record<string, unknown>;
+  return {
+    aspectRatios: listedValues(constraints.aspect_ratios),
+    durations: listedValues(constraints.durations),
+    resolutions: listedValues(constraints.resolutions),
+  };
+}
+
+/**
+ * A model that lists auto or adaptive first fits the ratio to its inputs, so that stays the default.
+ * Otherwise 16:9 is preferred over a first listed ratio such as 21:9.
+ */
+function defaultAspectRatio(listed: NonEmpty<string>): string {
+  const [first] = listed;
+  if (first === 'auto' || first === 'adaptive') return first;
+  return listed.includes('16:9') ? '16:9' : first;
+}
+
+/**
+ * Fills in a listed aspect ratio (see defaultAspectRatio) and the first listed duration when none is given,
+ * and rejects values the model doesn't list, so a request the API would refuse fails before anything is
+ * queued. Resolution is only checked, because the API has its own default.
+ */
+export function applyVideoConstraints(
+  model: string,
+  options: { aspectRatio?: string; duration?: string; resolution?: string },
+  constraints: VideoConstraints | undefined
+): { aspectRatio?: string; duration?: string; resolution?: string } {
+  const pick = (
+    flag: string,
+    value: string | undefined,
+    listed: NonEmpty<string> | undefined,
+    byDefault?: (listed: NonEmpty<string>) => string
+  ) => {
+    if (!listed) return value;
+    if (value === undefined) return byDefault?.(listed);
+    if (listed.includes(value)) return value;
+    throw new Error(`Invalid ${flag} "${value}" for ${model}. Use one of: ${listed.join(', ')}`);
+  };
+  return {
+    aspectRatio: pick('--aspect-ratio', options.aspectRatio, constraints?.aspectRatios, defaultAspectRatio),
+    duration: pick('--duration', options.duration, constraints?.durations, (listed) => listed[0]),
+    resolution: pick('--resolution', options.resolution, constraints?.resolutions),
+  };
 }
 
 export const classifyVideoStatus = classifyJobStatus;
@@ -147,6 +219,157 @@ function printQueuedDownloadUrl(queued: QueuedJob): void {
   console.log(`${c.dim('Download with:')} ${shellCommand`venice video retrieve ${apiId(queued.queue_id)} -m ${apiId(queued.model)} --url ${downloadUrl}`}`);
 }
 
+/** Saves a completed job's video from /video/retrieve, or from the queue's download_url when retrieve has none. */
+async function saveCompletedVideo(
+  queued: QueuedJob,
+  outputPath: string
+): Promise<{ bytesWritten: number; contentType: string }> {
+  const result = await retrieveVideo(queued.queue_id, queued.model, {
+    outputPath,
+    maxBytes: MAX_VIDEO_DOWNLOAD_BYTES,
+  });
+  if (result.kind === 'video') {
+    return { bytesWritten: result.bytesWritten, contentType: result.contentType };
+  }
+  const downloadUrl = videoUrlFromStatus(result.status) ?? queued.download_url;
+  if (!downloadUrl) {
+    throw new Error(result.status.error || `Venice reports the job as ${result.status.status} but returned no video.`);
+  }
+  return downloadVideoFromUrl(downloadUrl, outputPath);
+}
+
+function retrieveCommand(queued: QueuedJob): string {
+  const { queue_id: queueId, model, download_url: downloadUrl } = queued;
+  return downloadUrl !== undefined && isPasteableHttpsUrl(downloadUrl)
+    ? shellCommand`venice video retrieve ${apiId(queueId)} -m ${apiId(model)} --url ${downloadUrl}`
+    : shellCommand`venice video retrieve ${apiId(queueId)} -m ${apiId(model)}`;
+}
+
+type GenerateMode =
+  | { kind: 'queue' }
+  | { kind: 'wait'; output: OutputTarget; timeoutSeconds: number; afterSave: 'keep' | 'delete' };
+
+type Cleanup = { kind: 'kept' } | { kind: 'deleted' } | { kind: 'failed'; error: string };
+
+/** Reads the flags into one mode, so options that only mean something with --wait can't reach a queue-only run. */
+function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?: string; complete?: boolean }): GenerateMode {
+  if (options.wait) {
+    return {
+      kind: 'wait',
+      output: outputTarget(options.output, 'output.mp4'),
+      timeoutSeconds: parseDecimalOption(
+        options.timeout ?? String(DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS),
+        '--timeout',
+        { min: 0, exclusiveMin: true, max: MAX_JOB_WAIT_TIMEOUT_SECONDS }
+      ),
+      afterSave: options.complete ? 'delete' : 'keep',
+    };
+  }
+  const waitOnly = Object.entries({
+    '--output': options.output,
+    '--timeout': options.timeout,
+    '--complete': options.complete,
+  }).filter(([, value]) => value !== undefined).map(([flag]) => flag);
+  if (waitOnly.length > 0) {
+    throw new Error(`${waitOnly.join(', ')} ${waitOnly.length === 1 ? 'needs' : 'need'} --wait.`);
+  }
+  return { kind: 'queue' };
+}
+
+async function generateAndSaveVideo(
+  prompt: string,
+  request: { model: string; duration?: string; aspectRatio?: string; imageUrl?: string },
+  mode: Extract<GenerateMode, { kind: 'wait' }>,
+  format: OutputFormat
+): Promise<void> {
+  const c = getChalk();
+  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+  // A failed quote never blocks the job: the queue request reports any real problem with it.
+  const quote = await quoteVideoGeneration({
+    model: request.model,
+    duration: request.duration,
+    aspectRatio: request.aspectRatio,
+  }).then((result) => result.quote, () => undefined);
+
+  const queued = await queueVideoGeneration(prompt, request);
+  if (format !== 'json') {
+    console.log(formatSuccess('Video generation queued!'));
+    console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(queued.queue_id))}`);
+    console.log(`${c.dim('Model:')} ${terminalSafe(queued.model)}`);
+    if (quote !== undefined) console.log(`${c.dim('Price:')} ${c.cyan(`$${quote}`)}`);
+  }
+
+  let status: VideoStatusResult;
+  try {
+    status = await waitForVideoStatus(
+      () => getVideoStatus(queued.queue_id, queued.model),
+      mode.timeoutSeconds * 1000,
+      jobPollIntervalMs(),
+      format === 'json' ? undefined : current => {
+        console.log(`Status: ${terminalSafe(current.status)} - waiting...`);
+      }
+    );
+  } catch (error) {
+    throw new Error(
+      `${message(error)}\nThe job is still on Venice. Keep waiting with: ` +
+      shellCommand`venice video status ${apiId(queued.queue_id)} -m ${apiId(queued.model)} --wait`
+    );
+  }
+
+  if (classifyVideoStatus(status.status) !== 'completed') {
+    if (format === 'json') {
+      console.log(formatJson({ ...status, queue_id: queued.queue_id, model: queued.model }));
+    } else {
+      console.error(formatError(status.error || `Video generation ended with status "${status.status}".`));
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  let outputPath: string;
+  let saved: { bytesWritten: number; contentType: string };
+  try {
+    ({ outputPath, saved } = await saveToTarget(mode.output, (filePath) => saveCompletedVideo(queued, filePath)));
+  } catch (error) {
+    throw new Error(`${message(error)}\nThe video is still on Venice. Download it with: ${retrieveCommand(queued)}`);
+  }
+
+  // The video is saved, so a failed cleanup is reported rather than raised as an error that invites a paid retry.
+  const cleanup: Cleanup = mode.afterSave === 'keep'
+    ? { kind: 'kept' }
+    : await completeSavedVideo(queued.queue_id, queued.model, outputPath).then(
+      (): Cleanup => ({ kind: 'deleted' }),
+      (error: unknown): Cleanup => ({ kind: 'failed', error: message(error) })
+    );
+
+  if (format === 'json') {
+    console.log(formatJson({
+      status: 'completed',
+      queue_id: queued.queue_id,
+      model: queued.model,
+      output: outputPath,
+      size_bytes: saved.bytesWritten,
+      content_type: saved.contentType,
+      ...(request.duration ? { duration: request.duration } : {}),
+      ...(request.aspectRatio ? { aspect_ratio: request.aspectRatio } : {}),
+      quote_usd: quote ?? null,
+      ...(cleanup.kind === 'kept' ? {} : { deleted: cleanup.kind === 'deleted' }),
+      ...(cleanup.kind === 'failed' ? { cleanup_error: cleanup.error } : {}),
+    }));
+    return;
+  }
+
+  console.log(formatSuccess(`Video saved to ${outputPath}`));
+  console.log(`${c.dim('Size:')} ${formatBytes(saved.bytesWritten)}`);
+  if (cleanup.kind === 'deleted') {
+    console.log(`${c.dim('Cleanup:')} media deleted after download`);
+  } else if (cleanup.kind === 'failed') {
+    console.log(c.yellow(`Remote cleanup did not complete: ${terminalSafe(cleanup.error)}`));
+    console.log(c.dim(`Retry with: ${shellCommand`venice video complete ${apiId(queued.queue_id)} -m ${apiId(queued.model)}`}`));
+  }
+}
+
 export function registerVideoCommands(program: Command): void {
   const video = program
     .command('video')
@@ -156,11 +379,18 @@ export function registerVideoCommands(program: Command): void {
   video
     .command('generate <prompt...>')
     .alias('gen')
-    .description('Queue a video generation job')
+    .description('Queue a video generation job, or with --wait, wait for it and save the video')
     .option('-m, --model <model>', 'Model to use', 'wan-2.6-text-to-video')
-    .option('-d, --duration <duration>', 'Video duration (e.g., 5s, 10s)')
-    .option('-a, --aspect-ratio <ratio>', 'Aspect ratio (16:9, 9:16, 1:1)')
+    .option('-d, --duration <duration>', "Video duration (e.g., 5s, 10s; default: the model's first listed duration)")
+    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: 16:9 where the model lists it, unless it lists auto or adaptive first)")
     .option('-i, --image <path>', 'Reference image for image-to-video models')
+    .option('-w, --wait', 'Wait for the video and save it')
+    .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4, or output-1.mp4 and so on if it exists)')
+    .option(
+      '-t, --timeout <seconds>',
+      `With --wait, maximum time to wait in seconds (default: ${DEFAULT_VIDEO_STATUS_TIMEOUT_SECONDS}, at most 86400)`
+    )
+    .option('--complete', 'With --wait, delete the video from Venice after it is saved')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (promptParts: string[], options) => {
       const prompt = promptParts.join(' ');
@@ -189,12 +419,20 @@ export function registerVideoCommands(program: Command): void {
       }
 
       try {
-        const result = await queueVideoGeneration(prompt, {
-          model: options.model,
-          duration: options.duration,
-          aspectRatio: options.aspectRatio,
-          imageUrl,
-        });
+        const mode = parseGenerateMode(options);
+        const { aspectRatio, duration } = applyVideoConstraints(
+          options.model,
+          { aspectRatio: options.aspectRatio, duration: options.duration },
+          await fetchVideoConstraints(options.model)
+        );
+        const request = { model: options.model, duration, aspectRatio, imageUrl };
+
+        if (mode.kind === 'wait') {
+          await generateAndSaveVideo(prompt, request, mode, format);
+          return;
+        }
+
+        const result = await queueVideoGeneration(prompt, request);
 
         if (format === 'json') {
           console.log(formatJson(result));
@@ -215,8 +453,8 @@ export function registerVideoCommands(program: Command): void {
     .command('quote [prompt...]')
     .description('Estimate the price of a video generation job')
     .requiredOption('-m, --model <model>', 'Model to quote')
-    .option('-d, --duration <duration>', 'Video duration (e.g., 5s, 10s)', '5s')
-    .option('-a, --aspect-ratio <ratio>', 'Aspect ratio (16:9, 9:16, 1:1)')
+    .option('-d, --duration <duration>', "Video duration (e.g., 5s, 10s; default: the model's first listed duration)")
+    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: 16:9 where the model lists it, unless it lists auto or adaptive first)")
     .option('-r, --resolution <resolution>', 'Resolution (e.g., 720p, 1080p)')
     .option('--factor <n>', 'Upscale factor for topaz-video-upscale (1, 2, or 4)')
     .option('--audio', 'Include audio in the quote')
@@ -229,12 +467,18 @@ export function registerVideoCommands(program: Command): void {
       const prompt = promptParts.join(' ');
 
       try {
+        const upscaleFactor = options.factor !== undefined ? parseUpscaleFactor(options.factor) : undefined;
+        const listed = applyVideoConstraints(
+          options.model,
+          { aspectRatio: options.aspectRatio, duration: options.duration, resolution: options.resolution },
+          await fetchVideoConstraints(options.model)
+        );
         const result = await quoteVideoGeneration({
           model: options.model,
-          duration: options.duration,
-          aspectRatio: options.aspectRatio,
-          resolution: options.resolution,
-          upscaleFactor: options.factor !== undefined ? parseUpscaleFactor(options.factor) : undefined,
+          duration: listed.duration,
+          aspectRatio: listed.aspectRatio,
+          resolution: listed.resolution,
+          upscaleFactor,
           audio: options.audio,
           videoUrl: options.videoUrl,
         });
@@ -246,8 +490,8 @@ export function registerVideoCommands(program: Command): void {
 
         console.log(formatSuccess('Video quote'));
         console.log(`${c.dim('Model:')} ${options.model}`);
-        console.log(`${c.dim('Duration:')} ${options.duration}`);
-        if (options.aspectRatio) console.log(`${c.dim('Aspect ratio:')} ${options.aspectRatio}`);
+        if (listed.duration) console.log(`${c.dim('Duration:')} ${terminalSafe(listed.duration)}`);
+        if (listed.aspectRatio) console.log(`${c.dim('Aspect ratio:')} ${terminalSafe(listed.aspectRatio)}`);
         if (prompt) console.log(`${c.dim('Prompt:')} ${prompt}`);
         console.log(`${c.dim('Price:')} ${c.cyan(`$${terminalSafe(result.quote)}`)}`);
       } catch (error) {

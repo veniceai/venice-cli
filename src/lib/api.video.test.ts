@@ -108,7 +108,7 @@ test('stream inactivity timeout cancels a stalled body and cleans its temporary 
   }
 });
 
-test('queueVideoGeneration omits aspect_ratio unless the user set it', async () => {
+test('queueVideoGeneration sends aspect_ratio and duration only when they are set', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const bodies: unknown[] = [];
@@ -140,7 +140,6 @@ test('queueVideoGeneration omits aspect_ratio unless the user set it', async () 
     assert.deepEqual(bodies[1], {
       model: 'wan-2.6-text-to-video',
       prompt: 'sunset',
-      duration: '5s',
       aspect_ratio: '16:9',
     });
   } finally {

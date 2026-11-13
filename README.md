@@ -448,11 +448,14 @@ venice transcribe --response-format text interview.wav
 Venice supports AI video generation using state-of-the-art models. Video generation is asynchronous (queue-based).
 
 ```bash
-# Queue a text-to-video generation
+# Generate a video, wait for it and save it, in one command
+venice video generate "A cat playing with a ball in slow motion" --wait -o cat.mp4
+
+# Or queue the job and check on it later
 venice video generate "A cat playing with a ball in slow motion"
 
 # Use a specific model
-venice video generate -m veo3-fast-text-to-video "Cinematic sunset over mountains"
+venice video generate -m veo3.1-fast-text-to-video "Cinematic sunset over mountains"
 
 # Image-to-video with reference image
 venice video generate -m wan-2.6-image-to-video -i photo.jpg "The scene comes alive"
@@ -480,7 +483,7 @@ venice video complete <queue_id> -m wan-2.6-text-to-video
 venice video retrieve <queue_id> -m <model> --url '<download_url>'
 
 # Estimate price before queueing
-venice video quote -m veo3-fast-text-to-video -d 5s -a 16:9 "sunset"
+venice video quote -m veo3.1-fast-text-to-video -d 8s -a 16:9 "sunset"
 
 # Transcribe speech from a public video URL
 venice video transcribe https://example.com/clip.mp4
@@ -495,9 +498,13 @@ venice video models
 
 `venice video models` loads the live catalog from `GET /models?type=video`. If that request fails, the CLI prints a short fallback list and says so.
 
+Without `-d`, `video generate` and `video quote` use the first duration the model lists in `GET /models?type=video`. Without `-a`, they use `16:9` when the model lists it, unless the model lists `auto` or `adaptive` first, which fit the ratio to your inputs. Otherwise they use the model's first listed ratio. Values the model doesn't list are rejected before anything is queued. If the catalog can't be read, the CLI sends only the options you set.
+
+`video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o`. Without `-o` it saves to `output.mp4`, or to `output-1.mp4` and so on when that file exists, so it never replaces an earlier video. With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved.
+
 `video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
 
-Some models return a `download_url` in the queue response and never return the file from `/video/retrieve`. `video generate` and `video upscale --no-wait` print that link, and `-f json` includes it. Venice returns it only once and it expires within 24 hours, so save it and download with `video retrieve --url`.
+Some models return a `download_url` in the queue response and never return the file from `/video/retrieve`. `video generate --wait` downloads from that link when it needs to. Without `--wait`, `video generate` and `video upscale --no-wait` print the link, and `-f json` includes it. Venice returns it only once and it expires within 24 hours, so save it and download with `video retrieve --url`.
 
 Video transcription accepts a public HTTP(S) URL only. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
 
