@@ -43,8 +43,11 @@ import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
   MAX_JOB_WAIT_TIMEOUT_SECONDS,
   classifyJobStatus,
+  cleanupFields,
   jobPollIntervalMs,
+  rejectWaitOnlyFlags,
   waitForJobStatus,
+  type Cleanup,
   type JobStatusPhase,
 } from '../lib/job-status.js';
 import {
@@ -307,8 +310,6 @@ type GenerateMode =
   | { kind: 'queue' }
   | { kind: 'wait'; output: OutputTarget; timeoutSeconds: number; afterSave: 'keep' | 'delete' };
 
-type Cleanup = { kind: 'kept' } | { kind: 'deleted' } | { kind: 'failed'; error: string };
-
 /** Reads the flags into one mode, so options that only mean something with --wait can't reach a queue-only run. */
 function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?: string; complete?: boolean }): GenerateMode {
   if (options.wait) {
@@ -323,14 +324,7 @@ function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?:
       afterSave: options.complete ? 'delete' : 'keep',
     };
   }
-  const waitOnly = Object.entries({
-    '--output': options.output,
-    '--timeout': options.timeout,
-    '--complete': options.complete,
-  }).filter(([, value]) => value !== undefined).map(([flag]) => flag);
-  if (waitOnly.length > 0) {
-    throw new Error(`${waitOnly.join(', ')} ${waitOnly.length === 1 ? 'needs' : 'need'} --wait.`);
-  }
+  rejectWaitOnlyFlags({ '--output': options.output, '--timeout': options.timeout, '--complete': options.complete });
   return { kind: 'queue' };
 }
 
@@ -420,8 +414,7 @@ async function generateAndSaveVideo(
       ...(request.aspectRatio ? { aspect_ratio: request.aspectRatio } : {}),
       ...(request.resolution ? { resolution: request.resolution } : {}),
       quote_usd: quote ?? null,
-      ...(cleanup.kind === 'kept' ? {} : { deleted: cleanup.kind === 'deleted' }),
-      ...(cleanup.kind === 'failed' ? { cleanup_error: cleanup.error } : {}),
+      ...cleanupFields(cleanup),
     }));
     return;
   }
