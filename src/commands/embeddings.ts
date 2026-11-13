@@ -9,6 +9,7 @@ import { writeOutputFile } from '../lib/safe-write.js';
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -85,7 +86,7 @@ export function registerEmbeddingsCommand(program: Command): void {
 
         console.log(c.dim('\nTip: Use --output file.json to save full embeddings'));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

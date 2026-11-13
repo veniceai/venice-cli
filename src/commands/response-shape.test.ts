@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const KEY_ID = 'e28e82dc-9df2-4b47-b726-d0a222ef2ab5';
-const UNEXPECTED = /^Error: Unexpected response from Venice: /m;
+const UNEXPECTED = /^Error: Unexpected response from Venice: |^\{"error":\{"message":"Unexpected response from Venice: /m;
 
 interface CliResult {
   status: number | null;

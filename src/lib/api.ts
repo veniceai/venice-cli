@@ -92,8 +92,25 @@ function truncateErrorMessage(message: string): string {
     : message;
 }
 
+/** Fields some Venice errors carry that tell the caller what to do next. */
+const ERROR_EXTRA_FIELDS = ['credits_refunded', 'suggested_prompt', 'recommended_model'] as const;
+export type ErrorExtras = Partial<Record<(typeof ERROR_EXTRA_FIELDS)[number], string | number | boolean>>;
+
+function errorExtras(json: unknown): ErrorExtras {
+  const extras: ErrorExtras = {};
+  if (!json || typeof json !== 'object') return extras;
+  const record = json as Record<string, unknown>;
+  const nested = record.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : {};
+  for (const field of ERROR_EXTRA_FIELDS) {
+    const value = record[field] ?? nested[field];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') extras[field] = value;
+  }
+  return extras;
+}
+
 export class VeniceApiError extends Error {
   retryAfterMs?: number;
+  extras: ErrorExtras = {};
 
   constructor(
     message: string,
@@ -108,12 +125,14 @@ export class VeniceApiError extends Error {
     let message: unknown;
     let code: unknown;
     let details: unknown;
+    let extras: ErrorExtras = {};
     try {
       const json = JSON.parse(body);
       const error = json?.error;
       message = typeof error === 'string' ? error : error?.message || json?.message;
       code = error?.code;
       details = json?.details;
+      extras = errorExtras(json);
     } catch {
       // Not JSON: the body text is the message.
     }
@@ -127,11 +146,13 @@ export class VeniceApiError extends Error {
       // Details in a shape we cannot read are kept by showing the whole body.
       text = details == null ? message : body.trim();
     }
-    return new VeniceApiError(
+    const apiError = new VeniceApiError(
       truncateErrorMessage(text),
       status,
       typeof code === 'string' ? code : undefined
     );
+    apiError.extras = extras;
+    return apiError;
   }
 
   isRetryable(): boolean {

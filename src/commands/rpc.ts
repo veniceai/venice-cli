@@ -14,6 +14,7 @@ import {
 } from '../lib/api.js';
 import {
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -102,7 +103,7 @@ Examples:
           process.exitCode = 1;
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exitCode = 1;
       }
     });

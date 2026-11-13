@@ -8,7 +8,7 @@ import { getDefaultModel } from '../lib/config.js';
 import { parseIntegerOption } from '../lib/options.js';
 import {
   formatUsage,
-  formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -113,7 +113,7 @@ export function registerSearchCommand(program: Command): void {
           }
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, flags.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
     });

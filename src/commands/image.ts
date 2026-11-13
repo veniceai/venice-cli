@@ -30,6 +30,7 @@ import type {
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -321,7 +322,7 @@ export function registerImageCommand(program: Command): void {
           console.log(formatSuccess(`Saved to ${image.output}`));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -354,7 +355,7 @@ export function registerImageCommand(program: Command): void {
         });
         writeImageResult(result, outputMode, 'edited', imageFormat, format, 'edited image');
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -395,7 +396,7 @@ export function registerImageCommand(program: Command): void {
         );
         writeImageResult(result, outputMode, 'multi_edited', imageFormat, format, 'edited image');
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -413,7 +414,7 @@ export function registerImageCommand(program: Command): void {
         const result = await removeImageBackground(path.resolve(imagePath));
         writeImageResult(result, outputMode, 'cutout', undefined, format, 'cutout');
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -432,7 +433,7 @@ export function registerImageCommand(program: Command): void {
           console.log(terminalSafe(styles.join('\n')));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -459,7 +460,7 @@ export function registerImageCommand(program: Command): void {
         scale = parseIntegerOption(options.scale, '--scale', { allowed: [2, 4] });
         creativity = parseDecimalOption(options.creativity, '--creativity', { min: 0, max: 0.02 });
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
 
@@ -499,7 +500,7 @@ export function registerImageCommand(program: Command): void {
           console.log(`${c.dim('Tip: pass -o to choose the output path')}`);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

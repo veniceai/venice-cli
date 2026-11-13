@@ -15,6 +15,7 @@ import { confirm, promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -203,7 +204,7 @@ export function registerHistoryCommand(program: Command): void {
         writeOutputFile(file, formatJson(conversations), { mode: 0o600 });
         console.log(formatSuccess(`Exported ${conversations.length} conversations to ${file}`));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error);
         process.exit(1);
       }
     });
