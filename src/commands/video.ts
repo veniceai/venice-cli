@@ -490,8 +490,8 @@ export function registerVideoCommands(program: Command): void {
 
         console.log(formatSuccess('Video quote'));
         console.log(`${c.dim('Model:')} ${options.model}`);
-        if (listed.duration) console.log(`${c.dim('Duration:')} ${listed.duration}`);
-        if (listed.aspectRatio) console.log(`${c.dim('Aspect ratio:')} ${listed.aspectRatio}`);
+        if (listed.duration) console.log(`${c.dim('Duration:')} ${terminalSafe(listed.duration)}`);
+        if (listed.aspectRatio) console.log(`${c.dim('Aspect ratio:')} ${terminalSafe(listed.aspectRatio)}`);
         if (prompt) console.log(`${c.dim('Prompt:')} ${prompt}`);
         console.log(`${c.dim('Price:')} ${c.cyan(`$${terminalSafe(result.quote)}`)}`);
       } catch (error) {

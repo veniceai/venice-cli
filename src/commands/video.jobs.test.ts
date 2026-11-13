@@ -782,6 +782,30 @@ test('video generate refuses --output, --timeout and --complete without --wait, 
   }
 }));
 
+test('video quote prints the catalog values it filled in without terminal control sequences', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const hostile = {
+    data: [{
+      id: 'test-model',
+      type: 'video',
+      model_spec: { constraints: { aspect_ratios: ['\u001b]0;spoof\u0007 4:3'], durations: ['\u001b[2J6s'] } },
+    }],
+  };
+  const stub = await startStub({
+    'GET /api/v1/models?type=video': (_request, response) => sendJson(response, hostile),
+    'POST /api/v1/video/quote': (_request, response) => sendJson(response, { quote: 0.42 }),
+  });
+  try {
+    const result = await runCli(['video', 'quote', '-m', 'test-model', '-f', 'pretty'], dir, stub.origin);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Duration: .*6s/);
+    assert.match(result.stdout, /Aspect ratio: .*4:3/);
+    assert.equal(/[\u0007\u001b\u009b]/.test(result.stdout), false, JSON.stringify(result.stdout));
+  } finally {
+    await stub.close();
+  }
+}));
+
 test("video quote prices 16:9 and the model's first listed duration when none is given", { timeout: 20_000 }, () => withScratch(async (dir) => {
   let quoteBody: Record<string, unknown> | undefined;
   const stub = await startStub({
