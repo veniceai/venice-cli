@@ -30,7 +30,8 @@ import { registerBillingCommand } from './commands/billing.js';
 import { registerKeysCommand } from './commands/keys.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
-import { formatError, getChalk, reportError } from './lib/output.js';
+import { formatError, formatJson, formatWarning, getChalk, reportError } from './lib/output.js';
+import { undeliveredWarnings } from './lib/warnings.js';
 import { runInterruptCleanups } from './lib/interrupt.js';
 import { getVersion } from './lib/version.js';
 import type { OutputFormat } from './types/index.js';
@@ -59,6 +60,16 @@ async function main() {
       }
       const options = actionCommand.opts();
       if (options.format === 'json' || options.json === true) errorFormat = 'json';
+    })
+    .hook('postAction', (_thisCommand, actionCommand) => {
+      const pending = undeliveredWarnings();
+      if (pending.length === 0) return;
+      const options = actionCommand.opts();
+      if (options.format === 'json' || options.json === true) {
+        console.error(formatJson({ warnings: pending }, 0));
+      } else {
+        for (const warning of pending) console.error(formatWarning(warning.message));
+      }
     });
 
   // Register all commands

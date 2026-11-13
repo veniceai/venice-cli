@@ -528,6 +528,8 @@ venice video upscale https://example.com/clip.mp4 --factor 4 --no-wait
 venice video models
 ```
 
+When Venice marks a model as deprecated, the CLI says so and names the replacement: in a `warnings` field of the JSON result for `video generate`, `music generate`, the image commands and `tts --json`, and otherwise on stderr after the command.
+
 `venice video models` loads the live catalog from `GET /models?type=video`, and with `-f json` each model includes its constraints: aspect ratios, durations, resolutions and which inputs it takes. If that request fails, the CLI prints a short fallback list and says so.
 
 Without `-d`, `video generate` and `video quote` use the first duration the model lists in `GET /models?type=video`. Without `-a`, they use `16:9` when the model lists it, unless the model lists `auto` or `adaptive` first, which fit the ratio to your inputs. Otherwise they use the model's first listed ratio. Values the model doesn't list are rejected before anything is queued. If the catalog can't be read, the CLI sends only the options you set.

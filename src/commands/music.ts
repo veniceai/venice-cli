@@ -28,6 +28,7 @@ import { MAX_AUDIO_DOWNLOAD_BYTES, formatBytes, writeResponseToFile } from '../l
 import { outputTarget, saveToTarget } from '../lib/safe-write.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { parseSpendCap, quoteWithinCap } from '../lib/spend-cap.js';
+import { warningsField } from '../lib/warnings.js';
 import {
   detectOutputFormat,
   formatError,
@@ -188,7 +189,7 @@ async function generateAndSaveTrack(
 
   if (!('audio' in finished)) {
     if (format === 'json') {
-      console.log(formatJson({ ...finished, queue_id: queued.queue_id, model: queued.model }));
+      console.log(formatJson({ ...finished, queue_id: queued.queue_id, model: queued.model, ...warningsField() }));
     } else {
       printProcessingStatus(finished);
       if (!finished.error) {
@@ -236,6 +237,7 @@ async function generateAndSaveTrack(
       ...(request.durationSeconds !== undefined ? { duration_seconds: request.durationSeconds } : {}),
       quote_usd: quote ?? null,
       ...cleanupFields(cleanup),
+      ...warningsField(),
     }));
     return;
   }
@@ -341,7 +343,7 @@ export function registerMusicCommands(program: Command): void {
         const result = await queueAudioGeneration(prompt, request);
 
         if (format === 'json') {
-          console.log(formatJson(quote === undefined ? result : { ...result, quote_usd: quote }));
+          console.log(formatJson({ ...result, ...(quote === undefined ? {} : { quote_usd: quote }), ...warningsField() }));
           return;
         }
 
