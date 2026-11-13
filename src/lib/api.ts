@@ -2318,11 +2318,17 @@ export async function retrieveVideo(
   });
 }
 
+/** Lyrics come from the user or are written by the model from the prompt, never both. */
+export type Lyrics = { kind: 'none' } | { kind: 'written'; text: string } | { kind: 'optimized' };
+
 export interface AudioGenerationOptions {
   model: string;
+  lyrics: Lyrics;
   durationSeconds?: number;
-  lyricsPrompt?: string;
   forceInstrumental?: boolean;
+  loop?: boolean;
+  voice?: string;
+  speed?: number;
 }
 
 export interface AudioProcessingStatus {
@@ -2348,12 +2354,17 @@ function audioGenerationBody(
   if (options.durationSeconds !== undefined) {
     body.duration_seconds = options.durationSeconds;
   }
-  if (options.lyricsPrompt !== undefined) {
-    body.lyrics_prompt = options.lyricsPrompt;
+  if (options.lyrics.kind === 'written') {
+    body.lyrics_prompt = options.lyrics.text;
+  } else if (options.lyrics.kind === 'optimized') {
+    body.lyrics_optimizer = true;
   }
   if (options.forceInstrumental !== undefined) {
     body.force_instrumental = options.forceInstrumental;
   }
+  if (options.loop) body.loop = true;
+  if (options.voice !== undefined) body.voice = options.voice;
+  if (options.speed !== undefined) body.speed = options.speed;
 
   return body;
 }
