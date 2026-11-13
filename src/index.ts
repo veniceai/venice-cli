@@ -33,7 +33,7 @@ import { registerAugmentCommands } from './commands/augment.js';
 import { formatError, formatJson, formatWarning, getChalk, reportError } from './lib/output.js';
 import { undeliveredWarnings } from './lib/warnings.js';
 import { runInterruptCleanups } from './lib/interrupt.js';
-import { getVersion } from './lib/version.js';
+import { getVersion, parseSkillName } from './lib/version.js';
 import type { OutputFormat } from './types/index.js';
 
 // Known once the command's options are parsed, so the errors a command doesn't
@@ -53,6 +53,7 @@ async function main() {
       `All with Venice's privacy-preserving infrastructure.`
     )
     .option('--no-color', 'Disable colored output')
+    .option('--skill <name>', 'Name the agent skill running this command, sent to Venice as skill/<name> in the User-Agent')
     .hook('preAction', (thisCommand, actionCommand) => {
       // Handle global --no-color flag
       if (thisCommand.opts().color === false) {
@@ -60,6 +61,10 @@ async function main() {
       }
       const options = actionCommand.opts();
       if (options.format === 'json' || options.json === true) errorFormat = 'json';
+      const skill = thisCommand.opts().skill as string | undefined;
+      if (skill !== undefined) {
+        process.env.VENICE_SKILL = parseSkillName(skill, '--skill');
+      }
     })
     .hook('postAction', (_thisCommand, actionCommand) => {
       const pending = undeliveredWarnings();

@@ -1019,7 +1019,7 @@ Venice CLI is designed with privacy in mind:
 - **TEE Attestation**: Check the server's attestation report for consistency before sending data; the Intel TDX quote signature and enclave measurements are not yet verified client-side
 - **No browser tracking**: Terminal interactions don't expose browser metadata
 - **No telemetry**: The CLI sends no analytics or usage data and never checks for updates in the background. It connects only to the Venice API, to attachment URLs you give it, to download links the API returns, and to registry.npmjs.org when you run `venice update --check`
-- **User-Agent**: Requests to the Venice API send `User-Agent: veniceai-cli/<version>`, which names the CLI and its version and nothing about you or your machine. Downloads from attachment URLs and from links the API returns don't send it
+- **User-Agent**: Requests to the Venice API send `User-Agent: veniceai-cli/<version>`, which names the CLI and its version and nothing about you or your machine. When an agent skill names itself with `VENICE_SKILL` or `--skill <name>`, it is added as `skill/<name>`. Downloads from attachment URLs and from links the API returns don't send it
 - **Local configuration**: API key stored locally with restricted permissions
 - **Open source**: The code is public, so you can read exactly what the CLI sends to the API
 - **Privacy-preserving models**: Use `venice models --privacy` to find models with no data retention
@@ -1063,6 +1063,7 @@ venice chat -m <tee-capable-model> "Hello from the command line"
 | Variable | Description |
 |----------|-------------|
 | `VENICE_API_KEY` | API key (overrides config file) |
+| `VENICE_SKILL` | Name of the agent skill running the CLI, added to the User-Agent as `skill/<name>` (same as `--skill`) |
 | `NO_COLOR` | Disable colored output |
 
 ## Requirements
