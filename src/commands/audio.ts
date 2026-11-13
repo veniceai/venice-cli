@@ -38,6 +38,7 @@ export function registerAudioCommands(program: Command): void {
     .option('-s, --speed <speed>', 'Speech speed (0.25-4.0)', '1.0')
     .option('--temperature <temperature>', 'Sampling temperature (0-2)')
     .option('--streaming', 'Request sentence-by-sentence audio streaming')
+    .option('--json', "Print the saved file's path, size and type as JSON (--format is the audio format)")
     .action(async (textParts: string[], options) => {
       let text = textParts.join(' ');
       
@@ -77,7 +78,17 @@ export function registerAudioCommands(program: Command): void {
         } else {
           outputPath = writeBufferToNewFile(audio, defaultSpeechFileName(audioFormat), limits).outputPath;
         }
-        console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        if (options.json) {
+          console.log(formatJson({
+            output: outputPath,
+            size_bytes: audio.length,
+            content_type: result.contentType,
+            model: options.model,
+            voice,
+          }));
+        } else {
+          console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
