@@ -345,6 +345,32 @@ export function formatError(error: Error | string): string {
   return `${c.red('Error:')} ${terminalSafe(message, process.stderr)}`;
 }
 
+type ApiErrorFields = { statusCode?: number; code?: string; extras?: Record<string, unknown> };
+
+const isApiError = (error: unknown): error is Error & ApiErrorFields =>
+  error instanceof Error && error.name === 'VeniceApiError';
+
+/**
+ * Prints a command's error on stderr, leaving stdout for results. In JSON mode it is one line of JSON with
+ * the API's status, code and any next-step fields; otherwise it is text.
+ */
+export function reportError(error: unknown, format?: OutputFormat): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (format !== 'json') {
+    console.error(formatError(message));
+    return;
+  }
+  const api = isApiError(error) ? error : undefined;
+  console.error(formatJson({
+    error: {
+      message,
+      ...(api?.statusCode !== undefined ? { status: api.statusCode } : {}),
+      ...(api?.code ? { code: api.code } : {}),
+      ...api?.extras,
+    },
+  }, 0));
+}
+
 // Success message
 export function formatSuccess(message: string): string {
   const c = getChalk();

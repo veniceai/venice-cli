@@ -26,6 +26,7 @@ import { promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatUsage,
   formatError,
+  reportError,
   formatJson,
   formatWarning,
   getChalk,
@@ -297,7 +298,7 @@ export function registerChatCommand(program: Command): void {
           jsonSchema: options.jsonSchema,
         });
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
 
@@ -317,7 +318,7 @@ export function registerChatCommand(program: Command): void {
       try {
         toolNames = parseToolNames(options.tools);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
 
@@ -342,7 +343,7 @@ export function registerChatCommand(program: Command): void {
       try {
         sampling = parseChatSamplingOptions(options);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
 
@@ -353,7 +354,7 @@ export function registerChatCommand(program: Command): void {
       try {
         assertLocalAttachmentFiles(attachments);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
       const promptUnavailable = options.interactiveTools ? promptUnavailableReason() : undefined;
@@ -370,7 +371,7 @@ export function registerChatCommand(program: Command): void {
         try {
           pipedInput = await readStdin();
         } catch (error) {
-          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          reportError(error, options.format === 'json' ? 'json' : undefined);
           process.exit(1);
         }
       }
@@ -455,7 +456,7 @@ export function registerChatCommand(program: Command): void {
           }
           assertAttachmentCapabilities(modelInfo, attachments);
         } catch (error) {
-          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          reportError(error, format);
           process.exit(1);
         }
       }
@@ -501,7 +502,7 @@ export function registerChatCommand(program: Command): void {
         try {
           await verifyTEEAttestation(model, options.teeVerify, format, quietStatus);
         } catch (error) {
-          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          reportError(error, format);
           process.exit(1);
         }
       }
@@ -546,7 +547,7 @@ export function registerChatCommand(program: Command): void {
         try {
           e2eeContext = await setupE2EE(model, options.teeVerify, format, quietStatus);
         } catch (error) {
-          console.error(formatError(error instanceof Error ? error.message : String(error)));
+          reportError(error, format);
           process.exit(1);
         }
       }
@@ -579,7 +580,7 @@ export function registerChatCommand(program: Command): void {
             : '';
         userContent = await buildUserMessageContent(textContent, attachments);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
       messages.push({ role: 'user', content: userContent });
@@ -654,7 +655,7 @@ export function registerChatCommand(program: Command): void {
           });
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       } finally {
         // Securely clear E2EE private key from memory

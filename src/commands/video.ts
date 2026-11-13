@@ -53,6 +53,7 @@ import {
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -532,7 +533,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(`\n${c.dim('Check status with:')} ${shellCommand`venice video status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -591,7 +592,7 @@ export function registerVideoCommands(program: Command): void {
         if (prompt) console.log(`${c.dim('Prompt:')} ${prompt}`);
         console.log(`${c.dim('Price:')} ${c.cyan(`$${terminalSafe(result.quote)}`)}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -681,7 +682,7 @@ export function registerVideoCommands(program: Command): void {
           printStatus(await getVideoStatus(queueId, options.model));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -776,7 +777,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(`${c.dim('Cleanup:')} media deleted after retrieval`);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -801,7 +802,7 @@ export function registerVideoCommands(program: Command): void {
         }
         process.exitCode = exitCode;
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -825,7 +826,7 @@ export function registerVideoCommands(program: Command): void {
           console.log(`\n${terminalSafe(result.transcript)}`);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -926,7 +927,7 @@ export function registerVideoCommands(program: Command): void {
           }
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

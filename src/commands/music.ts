@@ -31,6 +31,7 @@ import { parseSpendCap, quoteWithinCap } from '../lib/spend-cap.js';
 import {
   detectOutputFormat,
   formatError,
+  reportError,
   formatJson,
   formatSuccess,
   getChalk,
@@ -352,7 +353,7 @@ export function registerMusicCommands(program: Command): void {
           `\n${c.dim('Check status with:')} ${shellCommand`venice music status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`
         );
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -381,7 +382,7 @@ export function registerMusicCommands(program: Command): void {
           console.log(`${c.dim('Model:')} ${options.model}`);
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -456,7 +457,7 @@ export function registerMusicCommands(program: Command): void {
         }
         process.exitCode = exitCode;
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -537,7 +538,7 @@ export function registerMusicCommands(program: Command): void {
           ));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -563,7 +564,7 @@ export function registerMusicCommands(program: Command): void {
         }
         process.exitCode = exitCode;
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -598,7 +599,7 @@ export function registerMusicCommands(program: Command): void {
           }
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

@@ -284,12 +284,9 @@ export async function createApiKey(input: {
   return created as ApiKeyMetadata & { apiKey: string };
 }
 
-// apiRequest reports a 401 as a plain Error without the status code.
 function wasRefused(error: unknown): boolean {
-  if (error instanceof VeniceApiError) {
-    return error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
-  }
-  return error instanceof Error && error.message.startsWith('Authentication failed');
+  return error instanceof VeniceApiError &&
+    error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
 }
 
 export async function deleteApiKey(id: string): Promise<void> {

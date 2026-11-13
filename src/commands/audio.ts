@@ -15,6 +15,7 @@ import { getDefaultVoice } from '../lib/config.js';
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
@@ -90,7 +91,7 @@ export function registerAudioCommands(program: Command): void {
           console.log(formatSuccess(`Saved audio to ${outputPath}`));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.json ? 'json' : undefined);
         process.exit(1);
       }
     });
@@ -119,7 +120,7 @@ export function registerAudioCommands(program: Command): void {
         console.log(`Model: ${terminalSafe(result.model)}`);
         console.log(`Use: ${shellCommand`venice tts -m ${apiId(result.model)} -v ${apiId(result.id)} "Hello"`}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -183,7 +184,7 @@ export function registerAudioCommands(program: Command): void {
           }
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -243,7 +244,7 @@ export function registerAudioCommands(program: Command): void {
 
         console.log(`\n${c.dim('Usage: venice tts -m <model> -v <voice> "Hello world"')}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

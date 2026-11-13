@@ -12,7 +12,7 @@ import {
 import { getDefaultModel } from '../lib/config.js';
 import {
   detectOutputFormat,
-  formatError,
+  reportError,
   formatJson,
   formatWarning,
   terminalSafe,
@@ -97,7 +97,7 @@ export function registerResponsesCommand(program: Command): void {
           console.error(formatWarning('The response contained no text output.'));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.format === 'json' ? 'json' : undefined);
         process.exit(1);
       }
     });
