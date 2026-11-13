@@ -380,6 +380,13 @@ saves `out.webp`.
 Run `venice image --help` for all generation controls, including CFG scale,
 steps, LoRA strength, watermark, safe-mode, and EXIF metadata flags.
 
+With `-f json`, `image`, `image-edit`, `image-multi-edit`, `image-bg-remove`
+and `upscale` save the image to `-o` or a default name and print its path, size
+and type, so a large image never floods an agent's context. Pass `--base64` to
+print the image as base64 JSON instead of saving it; it can't be combined with
+`-o`. Default names use the extension of the format Venice actually returned,
+and images up to 80 MB are kept.
+
 ### Image Upscaling
 
 ```bash
@@ -415,6 +422,9 @@ venice tts -m tts-chatterbox-hd -v vv_... "Hello from a cloned voice"
 
 # From stdin
 echo "Text to speak" | venice tts -o output.mp3
+
+# Print the saved file's path, size and type as JSON (--format is the audio format)
+venice tts --json -o greeting.mp3 "Good morning"
 ```
 
 ### Transcription (Speech-to-Text)

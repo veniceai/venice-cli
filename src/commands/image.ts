@@ -137,6 +137,48 @@ export function parseImageFileFormat(value: string | undefined): ImageFileFormat
   return normalized as ImageFileFormat;
 }
 
+type ImageOutputMode = { kind: 'file'; path: string | undefined } | { kind: 'base64' };
+
+function parseImageOutputMode(options: { output?: string; base64?: boolean }): ImageOutputMode {
+  if (options.base64 && options.output !== undefined) {
+    throw new Error("--base64 prints the image instead of saving it, so it can't be used with -o.");
+  }
+  return options.base64 ? { kind: 'base64' } : { kind: 'file', path: options.output };
+}
+
+const IMAGE_MIME_TYPES: Record<ImageFileFormat, string> = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' };
+
+export function imageFileFormatOf(bytes: Buffer): ImageFileFormat | undefined {
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes.toString('latin1', 1, 4) === 'PNG') return 'png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpeg';
+  if (bytes.length >= 12 && bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP') return 'webp';
+  return undefined;
+}
+
+type SavedImage = { output: string; size_bytes: number; content_type: string };
+
+/**
+ * Writes an image under the requested format's extension or, when none was requested, the extension of the
+ * format Venice returned, so a default name never claims PNG for a WebP or JPEG.
+ */
+function saveImage(
+  bytes: Buffer,
+  outputPath: string | undefined,
+  defaultStem: string,
+  requested: ImageFileFormat | undefined,
+  label: string,
+  number?: number
+): SavedImage {
+  const actual = imageFileFormatOf(bytes);
+  let output = imageOutputPath(outputPath, defaultStem, requested ?? actual);
+  if (number !== undefined) {
+    const extension = path.extname(output);
+    output = path.join(path.dirname(output), `${path.basename(output, extension)}_${number}${extension}`);
+  }
+  writeBufferToFile(bytes, output, { maxBytes: MAX_IMAGE_DOWNLOAD_BYTES, label });
+  return { output, size_bytes: bytes.length, content_type: IMAGE_MIME_TYPES[actual ?? requested ?? 'png'] };
+}
+
 export function imageOutputPath(
   output: string | undefined,
   defaultStem: string,
@@ -247,36 +289,36 @@ export function registerImageCommand(program: Command): void {
     .option('--embed-exif-metadata', 'Embed generation details in EXIF metadata')
     .option('--no-embed-exif-metadata', 'Do not embed generation details in EXIF metadata')
     .option('-n, --count <number>', 'Number of images to generate', '1')
+    .option('--base64', 'Print the images as base64 JSON instead of saving them')
     .option('-f, --format <format>', 'Output format (pretty|json)')
-    .action(async (promptParts: string[], options: ImageCommandOptions) => {
+    .action(async (promptParts: string[], options: ImageCommandOptions & { base64?: boolean }) => {
       const prompt = promptParts.join(' ');
       const format = detectOutputFormat(options.format);
 
       try {
         const generationOptions = parseImageGenerationOptions(options);
+        const outputMode = parseImageOutputMode(options);
         const images = await generateImage(prompt, generationOptions);
 
-        if (format === 'json') {
+        if (outputMode.kind === 'base64') {
           console.log(formatJson({ images: images.map(b64 => ({ b64_json: b64 })) }));
           return;
         }
 
-        for (let i = 0; i < images.length; i++) {
-          const imageData = decodeGeneratedImage(images[i]);
-
-          let outputPath = imageOutputPath(options.output, 'image', generationOptions.format);
-          if (images.length > 1) {
-            const ext = path.extname(outputPath);
-            const base = path.basename(outputPath, ext);
-            const dir = path.dirname(outputPath);
-            outputPath = path.join(dir, `${base}_${i + 1}${ext}`);
-          }
-
-          writeBufferToFile(imageData, outputPath, {
-            maxBytes: MAX_IMAGE_DOWNLOAD_BYTES,
-            label: 'Generated image',
-          });
-          console.log(formatSuccess(`Saved to ${outputPath}`));
+        const saved = images.map((image, index) => saveImage(
+          decodeGeneratedImage(image),
+          outputMode.path,
+          'image',
+          generationOptions.format,
+          'Generated image',
+          images.length > 1 ? index + 1 : undefined
+        ));
+        if (format === 'json') {
+          console.log(formatJson({ images: saved }));
+          return;
+        }
+        for (const image of saved) {
+          console.log(formatSuccess(`Saved to ${image.output}`));
         }
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
@@ -294,10 +336,12 @@ export function registerImageCommand(program: Command): void {
     .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input image')
     .option('--no-safe-mode', 'Disable adult-content blurring')
+    .option('--base64', 'Print the image as base64 JSON instead of saving it')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, promptParts: string[], options) => {
       const format = detectOutputFormat(options.format);
       try {
+        const outputMode = parseImageOutputMode(options);
         const resolution = parseImageResolution(options.resolution);
         const imageFormat = parseImageFileFormat(options.imageFormat);
         const result = await editImage(path.resolve(imagePath), promptParts.join(' '), {
@@ -308,7 +352,7 @@ export function registerImageCommand(program: Command): void {
           enhancePrompt: options.enhancePrompt,
           safeMode: options.safeMode,
         });
-        writeImageResult(result, imageOutputPath(options.output, 'edited', imageFormat), format, 'edited image');
+        writeImageResult(result, outputMode, 'edited', imageFormat, format, 'edited image');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -327,10 +371,12 @@ export function registerImageCommand(program: Command): void {
     .option('--image-format <format>', 'Image file format (png|jpeg|webp)')
     .option('--enhance-prompt', 'Enhance the prompt using the input images')
     .option('--no-safe-mode', 'Disable adult-content blurring')
+    .option('--base64', 'Print the image as base64 JSON instead of saving it')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePaths: string[], options) => {
       const format = detectOutputFormat(options.format);
       try {
+        const outputMode = parseImageOutputMode(options);
         const resolution = parseImageResolution(options.resolution);
         const quality = parseImageQuality(options.quality);
         const imageFormat = parseImageFileFormat(options.imageFormat);
@@ -347,7 +393,7 @@ export function registerImageCommand(program: Command): void {
             safeMode: options.safeMode,
           }
         );
-        writeImageResult(result, imageOutputPath(options.output, 'multi_edited', imageFormat), format, 'edited image');
+        writeImageResult(result, outputMode, 'multi_edited', imageFormat, format, 'edited image');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -358,12 +404,14 @@ export function registerImageCommand(program: Command): void {
     .command('image-bg-remove <image>')
     .description('Remove the background from a local image')
     .option('-o, --output <path>', 'Save result to file')
+    .option('--base64', 'Print the image as base64 JSON instead of saving it')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, options) => {
       const format = detectOutputFormat(options.format);
       try {
+        const outputMode = parseImageOutputMode(options);
         const result = await removeImageBackground(path.resolve(imagePath));
-        writeImageResult(result, options.output || `cutout_${Date.now()}.png`, format, 'cutout');
+        writeImageResult(result, outputMode, 'cutout', undefined, format, 'cutout');
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
@@ -397,6 +445,7 @@ export function registerImageCommand(program: Command): void {
     .option('-s, --scale <factor>', 'Scale factor (2 or 4)', '2')
     .option('--creativity <number>', 'How much detail the upscaler invents (0-0.02)')
     .option('-o, --output <path>', 'Save result to file')
+    .option('--base64', 'Print the image as base64 JSON instead of saving it')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (imagePath: string, options) => {
       const format = detectOutputFormat(options.format);
@@ -404,7 +453,9 @@ export function registerImageCommand(program: Command): void {
 
       let scale: number;
       let creativity: number | undefined;
+      let outputMode: ImageOutputMode;
       try {
+        outputMode = parseImageOutputMode(options);
         scale = parseIntegerOption(options.scale, '--scale', { allowed: [2, 4] });
         creativity = parseDecimalOption(options.creativity, '--creativity', { min: 0, max: 0.02 });
       } catch (error) {
@@ -426,7 +477,7 @@ export function registerImageCommand(program: Command): void {
           creativity,
         });
 
-        if (format === 'json') {
+        if (outputMode.kind === 'base64') {
           console.log(formatJson({
             images: [{
               b64_json: result.bytes.toString('base64'),
@@ -437,13 +488,13 @@ export function registerImageCommand(program: Command): void {
           return;
         }
 
-        const outputPath = options.output || `upscaled_${Date.now()}.png`;
-        writeBufferToFile(result.bytes, outputPath, {
-          maxBytes: MAX_IMAGE_DOWNLOAD_BYTES,
-          label: 'Upscaled image',
-        });
+        const saved = saveImage(result.bytes, outputMode.path, 'upscaled', undefined, 'Upscaled image');
+        if (format === 'json') {
+          console.log(formatJson({ images: [saved] }));
+          return;
+        }
 
-        console.log(formatSuccess(`Saved upscaled image to ${outputPath}`));
+        console.log(formatSuccess(`Saved upscaled image to ${saved.output}`));
         if (!options.output) {
           console.log(`${c.dim('Tip: pass -o to choose the output path')}`);
         }
@@ -476,19 +527,22 @@ export function decodeGeneratedImage(base64: string): Buffer {
 
 function writeImageResult(
   result: ArrayBuffer,
-  outputPath: string,
+  mode: ImageOutputMode,
+  defaultStem: string,
+  requested: ImageFileFormat | undefined,
   format: string,
   label: string
 ): void {
   const imageData = Buffer.from(result);
-  if (format === 'json') {
+  if (mode.kind === 'base64') {
     console.log(formatJson({ image: { b64_json: imageData.toString('base64') } }));
     return;
   }
 
-  writeBufferToFile(imageData, outputPath, {
-    maxBytes: MAX_IMAGE_DOWNLOAD_BYTES,
-    label,
-  });
-  console.log(formatSuccess(`Saved ${label} to ${outputPath}`));
+  const saved = saveImage(imageData, mode.path, defaultStem, requested, label);
+  if (format === 'json') {
+    console.log(formatJson({ image: saved }));
+    return;
+  }
+  console.log(formatSuccess(`Saved ${label} to ${saved.output}`));
 }

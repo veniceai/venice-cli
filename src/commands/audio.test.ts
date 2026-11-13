@@ -111,6 +111,40 @@ test('tts forwards speech controls to the API', async () => {
   }
 });
 
+test('tts --json prints the saved file, its size and type, the model and the voice', async () => {
+  const server = createServer((request, response) => {
+    if (request.url === '/audio/speech') {
+      response.writeHead(200, { 'Content-Type': 'audio/wav' });
+      response.end('test-audio');
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const apiBaseUrl = await listen(server);
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-audio-test-'));
+  const outputPath = join(homeDir, 'speech.wav');
+
+  try {
+    const result = await runCli(
+      ['tts', '--voice', 'af_sky', '--output', outputPath, '--json', 'Hello'],
+      homeDir,
+      apiBaseUrl
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      output: outputPath,
+      size_bytes: 'test-audio'.length,
+      content_type: 'audio/wav',
+      model: 'tts-kokoro',
+      voice: 'af_sky',
+    });
+  } finally {
+    server.close();
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test('tts uses the model default format when no override is provided', async () => {
   let receivedBody: Record<string, unknown> | undefined;
   const server = createServer(async (request, response) => {

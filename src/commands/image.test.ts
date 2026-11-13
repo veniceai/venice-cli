@@ -362,13 +362,13 @@ test('trims resolution and quality and rejects blank values', () => {
   );
 });
 
-test('upscale JSON returns base64 without files while pretty output writes a file', async () => {
+test('upscale JSON saves the file and prints its path, while --base64 prints the image instead', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const originalCwd = process.cwd();
   const tempDir = mkdtempSync(join(tmpdir(), 'venice-upscale-cli-test-'));
   const inputPath = join(tempDir, 'input.png');
-  const ignoredOutputPath = join(tempDir, 'ignored.png');
+  const jsonOutputPath = join(tempDir, 'json.png');
   const prettyOutputPath = join(tempDir, 'pretty.png');
 
   writeFileSync(inputPath, PNG_BYTES);
@@ -385,21 +385,22 @@ test('upscale JSON returns base64 without files while pretty output writes a fil
       '--format',
       'json',
       '--output',
-      ignoredOutputPath,
+      jsonOutputPath,
     ]);
-    const parsed = JSON.parse(jsonOutput.join('\n')) as {
-      images: Array<{ b64_json: string; content_type: string; bytes: number }>;
-    };
+    assert.deepEqual(JSON.parse(jsonOutput.join('\n')), {
+      images: [{ output: jsonOutputPath, size_bytes: PNG_BYTES.length, content_type: 'image/png' }],
+    });
+    assert.equal(readFileSync(jsonOutputPath).equals(PNG_BYTES), true);
 
-    assert.deepEqual(parsed, {
+    const base64Output = await runImageCommand(['upscale', inputPath, '--base64']);
+    assert.deepEqual(JSON.parse(base64Output.join('\n')), {
       images: [{
         b64_json: PNG_BYTES.toString('base64'),
         content_type: 'image/png',
         bytes: PNG_BYTES.length,
       }],
     });
-    assert.equal(existsSync(ignoredOutputPath), false);
-    assert.deepEqual(readdirSync(tempDir), ['input.png']);
+    assert.deepEqual(readdirSync(tempDir).sort(), ['input.png', 'json.png']);
 
     await runImageCommand([
       'upscale',
@@ -422,12 +423,12 @@ test('upscale JSON returns base64 without files while pretty output writes a fil
   }
 });
 
-test('image edit JSON skips file writes and pretty output creates nested directories', async () => {
+test('image edit JSON saves the file and prints its path, and pretty output creates nested directories', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const tempDir = mkdtempSync(join(tmpdir(), 'venice-edit-cli-test-'));
   const inputPath = join(tempDir, 'input.png');
-  const ignoredOutputPath = join(tempDir, 'ignored', 'result.png');
+  const jsonOutputPath = join(tempDir, 'json', 'result.png');
   const nestedOutputPath = join(tempDir, 'nested', 'images', 'result.png');
 
   writeFileSync(inputPath, PNG_BYTES);
@@ -445,12 +446,12 @@ test('image edit JSON skips file writes and pretty output creates nested directo
       '--format',
       'json',
       '--output',
-      ignoredOutputPath,
+      jsonOutputPath,
     ]);
     assert.deepEqual(JSON.parse(jsonOutput.join('\n')), {
-      image: { b64_json: PNG_BYTES.toString('base64') },
+      image: { output: jsonOutputPath, size_bytes: PNG_BYTES.length, content_type: 'image/png' },
     });
-    assert.equal(existsSync(ignoredOutputPath), false);
+    assert.equal(readFileSync(jsonOutputPath).equals(PNG_BYTES), true);
 
     await runImageCommand([
       'image-edit',
@@ -472,11 +473,11 @@ test('image edit JSON skips file writes and pretty output creates nested directo
   }
 });
 
-test('image generate JSON skips file writes and pretty output creates nested directories', async () => {
+test('image generate JSON saves the file and pretty output creates nested directories', async () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.VENICE_API_KEY;
   const tempDir = mkdtempSync(join(tmpdir(), 'venice-generate-cli-test-'));
-  const ignoredOutputPath = join(tempDir, 'ignored', 'out.png');
+  const jsonOutputPath = join(tempDir, 'json', 'out.png');
   const nestedOutputPath = join(tempDir, 'nested', 'out.png');
 
   process.env.VENICE_API_KEY = 'test-key';
@@ -484,8 +485,11 @@ test('image generate JSON skips file writes and pretty output creates nested dir
     Response.json({ id: 'image-id', images: [PNG_BYTES.toString('base64')] });
 
   try {
-    await runImageCommand(['image', 'a red cube', '--format', 'json', '--output', ignoredOutputPath]);
-    assert.equal(existsSync(ignoredOutputPath), false);
+    const jsonOutput = await runImageCommand(['image', 'a red cube', '--format', 'json', '--output', jsonOutputPath]);
+    assert.deepEqual(JSON.parse(jsonOutput.join('\n')), {
+      images: [{ output: jsonOutputPath, size_bytes: PNG_BYTES.length, content_type: 'image/png' }],
+    });
+    assert.equal(readFileSync(jsonOutputPath).equals(PNG_BYTES), true);
 
     await runImageCommand(['image', 'a red cube', '--output', nestedOutputPath]);
     assert.equal(readFileSync(nestedOutputPath).equals(PNG_BYTES), true);
@@ -602,8 +606,7 @@ test('image generation accepts prompts beginning with editing command words', as
       'edit',
       'the',
       'lighting',
-      '--format',
-      'json',
+      '--base64',
     ]);
 
     assert.equal(requestBody.prompt, 'edit the lighting');
