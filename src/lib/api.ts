@@ -2266,16 +2266,6 @@ export async function completeVideo(
   return parseCompleteResponse(response, '/video/complete');
 }
 
-export async function transcribeVideo(
-  url: string
-): Promise<{ transcript: string; lang?: string }> {
-  return apiRequest('/video/transcriptions', {
-    method: 'POST',
-    body: { url, response_format: 'json' },
-    spinnerText: 'Transcribing video...',
-  });
-}
-
 // Video generation - check status / retrieve result
 export async function getVideoStatus(
   queueId: string,

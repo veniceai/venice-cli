@@ -482,8 +482,9 @@ venice video retrieve <queue_id> -m <model> --url '<download_url>'
 # Estimate price before queueing
 venice video quote -m veo3-fast-text-to-video -d 5s -a 16:9 "sunset"
 
-# Transcribe speech from a public video URL
-venice video transcribe https://example.com/clip.mp4
+# Transcribe a video's speech, from a local file or a public URL
+venice video transcribe interview.mp4
+venice video transcribe https://example.com/clip.webm -f json
 
 # Upscale a local file or public URL (2x or 4x)
 venice video upscale clip.mp4 --factor 2 -o clip_2x.mp4
@@ -499,7 +500,7 @@ venice video models
 
 Some models return a `download_url` in the queue response and never return the file from `/video/retrieve`. `video generate` and `video upscale --no-wait` print that link, and `-f json` includes it. Venice returns it only once and it expires within 24 hours, so save it and download with `video retrieve --url`.
 
-Video transcription accepts a public HTTP(S) URL only. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
+`video transcribe` sends the video to Venice's speech-to-text endpoint, which accepts MP4 and WebM video (and the audio formats `venice transcribe` takes) up to 200 MB, so no ffmpeg is needed. A URL is downloaded to a temporary file first and removed afterwards. Other containers, such as MOV, need converting to MP4 first. It takes the same `-m`, `-l`, `-t` and `--response-format` options as `venice transcribe`. Local MP4, MOV, and WebM files can be upscaled as data URLs within the existing size limit.
 
 ### Music & Sound Effects
 

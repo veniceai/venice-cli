@@ -24,6 +24,61 @@ import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } fro
 import { parseDecimalOption } from '../lib/options.js';
 import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
+import type { OutputFormat } from '../types/index.js';
+
+export type TranscribeOptions = {
+  model: string;
+  language?: string;
+  timestamps?: boolean;
+  responseFormat?: 'json' | 'text';
+};
+
+/** Checks the transcription flags before anything is sent. */
+export function parseTranscribeOptions(options: {
+  model: string;
+  language?: string;
+  timestamps?: boolean;
+  responseFormat?: string;
+}): TranscribeOptions {
+  const { responseFormat } = options;
+  if (responseFormat !== undefined && responseFormat !== 'json' && responseFormat !== 'text') {
+    throw new Error('--response-format must be json or text');
+  }
+  if (responseFormat === 'text' && options.timestamps) {
+    throw new Error('--timestamps needs --response-format json; text transcripts have no timestamps.');
+  }
+  return { model: options.model, language: options.language, timestamps: options.timestamps, responseFormat };
+}
+
+/** Transcribes a local media file and prints the transcript in the requested output format. */
+export async function transcribeAndPrint(
+  filePath: string,
+  options: TranscribeOptions,
+  format: OutputFormat
+): Promise<void> {
+  const c = getChalk();
+  const result = await transcribe(filePath, options);
+  assertTranscription(result);
+
+  if (format === 'json') {
+    console.log(formatJson(result));
+    return;
+  }
+  console.log(terminalSafe(result.text));
+  if (format === 'raw') return;
+  if (options.timestamps && result.timestamps) {
+    console.log(`\n${c.dim('─'.repeat(50))}`);
+    if (result.timestamps.segment) {
+      console.log(c.bold('\nSegments:'));
+      for (const seg of result.timestamps.segment) {
+        console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${terminalSafe(seg.text)}`);
+      }
+    }
+  }
+  if (result.duration) {
+    console.log(`\n${c.dim(`Duration: ${result.duration.toFixed(2)}s`)}`);
+  }
+}
 
 export function registerAudioCommands(program: Command): void {
   // Text to speech
@@ -124,14 +179,11 @@ export function registerAudioCommands(program: Command): void {
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
     .action(async (audioPath: string, options) => {
       const format = detectOutputFormat(options.format);
-      const c = getChalk();
-      const responseFormat = options.responseFormat as 'json' | 'text' | undefined;
-      if (responseFormat !== undefined && responseFormat !== 'json' && responseFormat !== 'text') {
-        console.error(formatError('--response-format must be json or text'));
-        process.exit(1);
-      }
-      if (responseFormat === 'text' && options.timestamps) {
-        console.error(formatError('--timestamps needs --response-format json; text transcripts have no timestamps.'));
+      let transcribeOptions: TranscribeOptions;
+      try {
+        transcribeOptions = parseTranscribeOptions(options);
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
 
@@ -144,33 +196,7 @@ export function registerAudioCommands(program: Command): void {
       }
 
       try {
-        const result = await transcribe(resolvedPath, {
-          model: options.model,
-          language: options.language,
-          timestamps: options.timestamps,
-          responseFormat,
-        });
-        assertTranscription(result);
-
-        if (format === 'json') {
-          console.log(formatJson(result));
-        } else if (format === 'raw') {
-          console.log(terminalSafe(result.text));
-        } else {
-          console.log(terminalSafe(result.text));
-          if (options.timestamps && result.timestamps) {
-            console.log(`\n${c.dim('─'.repeat(50))}`);
-            if (result.timestamps.segment) {
-              console.log(c.bold('\nSegments:'));
-              for (const seg of result.timestamps.segment) {
-                console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${terminalSafe(seg.text)}`);
-              }
-            }
-          }
-          if (result.duration) {
-            console.log(`\n${c.dim(`Duration: ${result.duration.toFixed(2)}s`)}`);
-          }
-        }
+        await transcribeAndPrint(resolvedPath, transcribeOptions, format);
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);

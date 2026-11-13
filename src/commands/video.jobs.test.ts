@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -520,6 +520,71 @@ test('video retrieve --url downloads the queued link and completes only after it
     assert.equal(existsSync(join(dir, 'expired.mp4')), false);
     assert.equal(stub.count('POST /api/v1/video/complete'), 1);
     assert.equal(stub.count('POST /api/v1/video/retrieve'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+async function readText(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('latin1');
+}
+
+test('video transcribe sends a local MP4 or a downloaded WebM to the audio transcription endpoint', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const uploads: string[] = [];
+  const stub = await startStub({
+    'GET /media/talk.webm': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/webm' });
+      response.end('webm-bytes');
+    },
+    'POST /api/v1/audio/transcriptions': async (request, response) => {
+      uploads.push(await readText(request));
+      sendJson(response, { text: 'hello from the clip', duration: 1.5 });
+    },
+  });
+  const tmp = join(dir, 'tmp');
+  mkdirSync(tmp);
+  const clip = join(dir, 'clip.mp4');
+  writeFileSync(clip, mp4Bytes());
+  try {
+    const local = await runCli(['video', 'transcribe', clip, '-f', 'json'], dir, stub.origin);
+    assert.equal(local.status, 0, local.stderr);
+    assert.equal(JSON.parse(local.stdout).text, 'hello from the clip');
+    assert.match(uploads[0] ?? '', /filename="clip\.mp4"[\s\S]*Content-Type: video\/mp4/);
+
+    const remote = await runCli(['video', 'transcribe', `${stub.origin}/media/talk.webm`, '-f', 'raw'], dir, stub.origin, { TMPDIR: tmp });
+    assert.equal(remote.status, 0, remote.stderr);
+    assert.equal(remote.stdout.trim(), 'hello from the clip');
+    assert.match(uploads[1] ?? '', /filename="media\.webm"[\s\S]*Content-Type: video\/webm[\s\S]*webm-bytes/);
+    assert.deepEqual(readdirSync(tmp), []);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video transcribe refuses formats the transcription endpoint does not take, and cleans up a download', { timeout: 30_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'GET /media/talk.mov': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/quicktime' });
+      response.end('mov-bytes');
+    },
+    'POST /api/v1/audio/transcriptions': (_request, response) => sendJson(response, { text: 'unexpected' }),
+  });
+  const tmp = join(dir, 'tmp');
+  mkdirSync(tmp);
+  const mov = join(dir, 'talk.mov');
+  writeFileSync(mov, 'mov-bytes');
+  try {
+    const local = await runCli(['video', 'transcribe', mov], dir, stub.origin);
+    assert.equal(local.status, 1, local.stdout);
+    assert.match(local.stderr, /Venice transcribes MP4 and WebM video[\s\S]*Convert .*talk\.mov to MP4 first/);
+
+    const remote = await runCli(['video', 'transcribe', `${stub.origin}/media/talk.mov`], dir, stub.origin, { TMPDIR: tmp });
+    assert.equal(remote.status, 1, remote.stdout);
+    assert.match(remote.stderr, /Venice can't transcribe video\/quicktime/);
+    assert.deepEqual(readdirSync(tmp), []);
+    assert.equal(stub.count('POST /api/v1/audio/transcriptions'), 0);
   } finally {
     await stub.close();
   }

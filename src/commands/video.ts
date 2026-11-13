@@ -4,14 +4,15 @@
 
 import { Command } from 'commander';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { parseTranscribeOptions, transcribeAndPrint } from './audio.js';
 import {
   queueVideoGeneration,
   getVideoStatus,
   retrieveVideo,
   quoteVideoGeneration,
   completeVideo,
-  transcribeVideo,
   queueVideoUpscale,
   listModels,
   videoUrlFromStatus,
@@ -23,6 +24,7 @@ import {
   assertFileSizeWithinLimit,
   fileToDataUrl,
   mimeTypeFromPath,
+  MAX_TRANSCRIPTION_AUDIO_BYTES,
   MAX_VIDEO_DOWNLOAD_BYTES,
   MAX_VIDEO_REFERENCE_IMAGE_BYTES,
   MAX_VIDEO_UPSCALE_BYTES,
@@ -68,11 +70,55 @@ export function isPublicHttpUrl(value: string): boolean {
   }
 }
 
-export function requirePublicVideoUrl(value: string): string {
-  if (isPublicHttpUrl(value)) return value;
-  throw new Error(
-    'Video transcription requires a public HTTP(S) URL. Local files are not supported by the API.'
-  );
+const TRANSCRIBABLE_EXTENSIONS = ['.mp4', '.webm', '.mp3', '.m4a', '.aac', '.wav', '.wave', '.flac', '.ogg', '.oga'];
+
+// The containers Venice's transcription endpoint accepts, by the type a download reports.
+const TRANSCRIBABLE_CONTENT_TYPES: Record<string, string> = {
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/aac': '.aac',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/wave': '.wav',
+  'audio/flac': '.flac',
+  'audio/ogg': '.ogg',
+  'audio/webm': '.webm',
+};
+
+type TranscriptionSource = { kind: 'file'; path: string } | { kind: 'download'; path: string; dir: string };
+
+/** A local file Venice can transcribe, or a public URL downloaded to a temporary one. */
+async function transcriptionSource(source: string): Promise<TranscriptionSource> {
+  if (!isPublicHttpUrl(source)) {
+    const filePath = path.resolve(source);
+    if (!fs.existsSync(filePath)) throw new Error(`File not found: ${source}`);
+    if (!TRANSCRIBABLE_EXTENSIONS.includes(path.extname(filePath).toLowerCase())) {
+      throw new Error(
+        `Venice transcribes MP4 and WebM video, or WAV, FLAC, M4A, AAC, MP3 and OGG audio. Convert ${source} to MP4 first.`
+      );
+    }
+    return { kind: 'file', path: filePath };
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'venice-transcribe-'));
+  try {
+    const downloaded = path.join(dir, 'media');
+    const { contentType } = await downloadToFile(source, downloaded, {
+      maxBytes: MAX_TRANSCRIPTION_AUDIO_BYTES,
+      expectedContentTypePrefixes: ['video/', 'audio/'],
+    });
+    const extension = TRANSCRIBABLE_CONTENT_TYPES[contentType];
+    if (!extension) {
+      throw new Error(`Venice can't transcribe ${contentType}. Use an MP4 or WebM video, or a supported audio file.`);
+    }
+    fs.renameSync(downloaded, `${downloaded}${extension}`);
+    return { kind: 'download', path: `${downloaded}${extension}`, dir };
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export function parseUpscaleFactor(value: string | number | undefined): number {
@@ -467,26 +513,26 @@ export function registerVideoCommands(program: Command): void {
     });
 
   video
-    .command('transcribe <url>')
-    .description('Transcribe speech from a public video URL')
+    .command('transcribe <video>')
+    .description("Transcribe a video's speech, from a local MP4 or WebM file or a public URL")
+    .option('-m, --model <model>', 'Model: nvidia/parakeet-tdt-0.6b-v3, openai/whisper-large-v3', 'nvidia/parakeet-tdt-0.6b-v3')
+    .option('-l, --language <lang>', 'Spoken language ISO code (e.g., en, es, fr)')
+    .option('-t, --timestamps', 'Include word/segment timestamps in output')
+    .option('--response-format <format>', 'Transcript format requested from the API (json|text)')
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
-    .action(async (url: string, options) => {
+    .action(async (video: string, options) => {
       const format = detectOutputFormat(options.format);
-      const c = getChalk();
+      let source: TranscriptionSource | undefined;
       try {
-        const result = await transcribeVideo(requirePublicVideoUrl(url));
-        if (format === 'json') {
-          console.log(formatJson(result));
-        } else if (format === 'raw') {
-          console.log(terminalSafe(result.transcript));
-        } else {
-          console.log(formatSuccess('Video transcribed'));
-          if (result.lang) console.log(`${c.dim('Language:')} ${terminalSafe(result.lang)}`);
-          console.log(`\n${terminalSafe(result.transcript)}`);
-        }
+        const transcribeOptions = parseTranscribeOptions(options);
+        source = await transcriptionSource(video);
+        await transcribeAndPrint(source.path, transcribeOptions, format);
       } catch (error) {
         console.error(formatError(error instanceof Error ? error.message : String(error)));
-        process.exit(1);
+        // Not process.exit, so the finally block still removes a downloaded copy.
+        process.exitCode = 1;
+      } finally {
+        if (source?.kind === 'download') fs.rmSync(source.dir, { recursive: true, force: true });
       }
     });
 
