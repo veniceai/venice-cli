@@ -62,6 +62,40 @@ To upgrade, run `npm install -g veniceai-cli@latest`.
    venice chat "What is the meaning of life?"
    ```
 
+## Use with coding agents
+
+Coding agents such as Claude Code, Codex, Cursor and OpenCode can drive the CLI directly. Each media job is one command that waits for the result, saves it, and prints JSON.
+
+1. Install the CLI (Node.js 22 or later), or run a pinned version with `npx -y veniceai-cli@<version>`:
+
+   ```bash
+   npm i -g veniceai-cli
+   ```
+
+2. Put your key in the agent's environment. Media commands never prompt, so they run unattended:
+
+   ```bash
+   export VENICE_API_KEY=your-api-key
+   ```
+
+3. Run one command per result, with `--wait -o` for video and music, and an explicit `-f json` (piped output otherwise defaults to `raw`):
+
+   ```bash
+   venice video generate "A lighthouse at dusk" -m veo3.1-fast-text-to-video \
+     --wait -o lighthouse.mp4 --max-usd 2 -f json
+   venice music generate "Calm piano loop" -m elevenlabs-music -d 60 --wait -o piano.mp3 -f json
+   venice image "A product shot on a white background" -o product.png -f json
+   venice tts "Welcome back" -o welcome.mp3 --json
+   ```
+
+What an agent can rely on:
+
+- A successful command prints one JSON object on stdout with the saved file's path, size and type. Video and music results also include the model, the queue ID and the quoted price (`quote_usd`).
+- A failed command exits non-zero. With `-f json`, its error is one line of JSON on stderr with the message, the API's status and code, and `credits_refunded`, `suggested_prompt` or `recommended_model` when Venice sends them. Usage errors, such as an unknown or missing option, are reported before the command runs and stay plain text.
+- `--max-usd` refuses a video or music job before anything is charged when its quote is higher or can't be fetched.
+- A result from a deprecated model includes a `warnings` field that names the replacement.
+- `venice video models -f json` and `venice music models --format json` list each model's constraints and options, which the CLI also checks before it sends a job.
+
 ## Features
 
 - 🤖 **Chat** with state-of-the-art AI models
@@ -961,6 +995,8 @@ that limit is exceeded.
 | `raw` | Plain text, no decoration | Pipes, simple output |
 
 Each command's `--help` lists the formats it supports. An unknown `--format` value is an error. Commands without a separate `markdown` or `raw` form print their `pretty` output for those values.
+
+With `-f json`, stdout carries only results, and an error is one line of JSON on stderr with the message, the API's status and code, and any next-step fields Venice sends (see [Use with coding agents](#use-with-coding-agents)).
 
 When output is piped or redirected and no `--format` is given, the CLI turns off colors and spinners and selects `raw`. Commands that print a single result, such as `chat`, `search`, `transcribe`, and `parse`, then print only that result; most other commands print the same text as `pretty`. Use `-f json` when a script needs to parse the output.
 
