@@ -286,7 +286,6 @@ test('video API helpers send documented requests and support live discovery', as
     assert.deepEqual(requests[3].body, {
       model: 'wan-2.6-text-to-video',
       prompt: 'sunset',
-      duration: '5s',
     });
     assert.deepEqual(requests[4].body, {
       model: 'topaz-video-upscale',

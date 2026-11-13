@@ -552,3 +552,209 @@ test('video upscale falls back to the queued download_url when retrieve returns 
     await stub.close();
   }
 }));
+
+const catalog = {
+  data: [{
+    id: 'test-model',
+    type: 'video',
+    model_spec: {
+      constraints: { aspect_ratios: ['9:16', '16:9'], durations: ['6s', '10s'], resolutions: ['720p'] },
+    },
+  }],
+};
+
+test("video generate --wait uses the model's first listed ratio and duration, saves the video and prints one JSON object", { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const video = mp4Bytes('-generated');
+  const bodies: Record<string, Record<string, unknown>> = {};
+  let retrieves = 0;
+  const stub = await startStub({
+    'GET /api/v1/models?type=video': (_request, response) => sendJson(response, catalog),
+    'POST /api/v1/video/quote': async (request, response) => {
+      bodies.quote = await readJson(request);
+      sendJson(response, { quote: 0.42 });
+    },
+    'POST /api/v1/video/queue': async (request, response) => {
+      bodies.queue = await readJson(request);
+      sendJson(response, { queue_id: 'q1', model: 'test-model' });
+    },
+    'POST /api/v1/video/retrieve': (_request, response) => {
+      if (retrieves++ === 0) {
+        sendJson(response, { status: 'PROCESSING' });
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(video);
+    },
+  });
+  const output = join(dir, 'clip.mp4');
+  try {
+    const result = await runCli(
+      ['video', 'generate', 'a cat', '-m', 'test-model', '--wait', '-o', output, '-f', 'json'],
+      dir,
+      stub.origin,
+      { VENICE_TEST_POLL_INTERVAL_MS: '50' }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output).equals(video), true);
+    assert.deepEqual(bodies.quote, { model: 'test-model', duration: '6s', aspect_ratio: '9:16' });
+    assert.deepEqual(bodies.queue, { model: 'test-model', prompt: 'a cat', duration: '6s', aspect_ratio: '9:16' });
+    assert.deepEqual(JSON.parse(result.stdout), {
+      status: 'completed',
+      queue_id: 'q1',
+      model: 'test-model',
+      output,
+      size_bytes: video.length,
+      content_type: 'video/mp4',
+      duration: '6s',
+      aspect_ratio: '9:16',
+      quote_usd: 0.42,
+    });
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate rejects a ratio or duration the model does not list before quoting or queueing', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'GET /api/v1/models?type=video': (_request, response) => sendJson(response, catalog),
+    'POST /api/v1/video/quote': (_request, response) => sendJson(response, { quote: 1 }),
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1', model: 'test-model' }),
+  });
+  try {
+    const ratio = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '-a', '4:3', '--wait'], dir, stub.origin);
+    assert.equal(ratio.status, 1, ratio.stdout);
+    assert.match(ratio.stderr, /Invalid --aspect-ratio "4:3" for test-model\. Use one of: 9:16, 16:9/);
+
+    const duration = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '-d', '5s'], dir, stub.origin);
+    assert.equal(duration.status, 1, duration.stdout);
+    assert.match(duration.stderr, /Invalid --duration "5s" for test-model\. Use one of: 6s, 10s/);
+
+    assert.equal(stub.count('POST /api/v1/video/quote'), 0);
+    assert.equal(stub.count('POST /api/v1/video/queue'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate --wait saves from the queue download_url when retrieve has no video, then deletes the remote copy', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const video = mp4Bytes('-queued-link');
+  const output = join(dir, 'linked.mp4');
+  let queueBody: Record<string, unknown> | undefined;
+  const stub = await startStub({
+    'POST /api/v1/video/queue': async (request, response, self) => {
+      queueBody = await readJson(request);
+      sendJson(response, { queue_id: 'q1', model: 'test-model', download_url: `${self.origin}/media/clip.mp4` });
+    },
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, { status: 'COMPLETED' }),
+    'GET /media/clip.mp4': (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'video/mp4' });
+      response.end(video);
+    },
+    'POST /api/v1/video/complete': (_request, response) => {
+      assert.equal(readFileSync(output).equals(video), true);
+      sendJson(response, { success: true });
+    },
+  });
+  try {
+    const result = await runCli(
+      ['video', 'generate', 'a cat', '-m', 'test-model', '--wait', '-o', output, '--complete', '-f', 'json'],
+      dir,
+      stub.origin
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(queueBody, { model: 'test-model', prompt: 'a cat' });
+    assert.equal(stub.count('GET /media/clip.mp4'), 1);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 1);
+    const printed = JSON.parse(result.stdout);
+    assert.equal(printed.output, output);
+    assert.equal(printed.quote_usd, null);
+    assert.equal(printed.deleted, true);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test("video generate --wait exits 1 with Venice's error when the job fails, and keeps nothing", { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const output = join(dir, 'failed.mp4');
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1', model: 'test-model' }),
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, { status: 'FAILED', error: 'content policy' }),
+    'POST /api/v1/video/complete': (_request, response) => sendJson(response, { success: true }),
+  });
+  const args = ['video', 'generate', 'a cat', '-m', 'test-model', '--wait', '-o', output, '--complete'];
+  try {
+    const json = await runCli([...args, '-f', 'json'], dir, stub.origin);
+    assert.equal(json.status, 1, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), { status: 'FAILED', error: 'content policy', queue_id: 'q1', model: 'test-model' });
+
+    const pretty = await runCli([...args, '-f', 'pretty'], dir, stub.origin);
+    assert.equal(pretty.status, 1);
+    assert.match(pretty.stderr, /Error: content policy/);
+
+    assert.equal(existsSync(output), false);
+    assert.equal(stub.count('POST /api/v1/video/complete'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate --wait says how to keep waiting when the timeout expires', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1', model: 'test-model' }),
+    'POST /api/v1/video/retrieve': (_request, response) => sendJson(response, { status: 'PROCESSING' }),
+  });
+  try {
+    const result = await runCli(
+      ['video', 'generate', 'a cat', '-m', 'test-model', '--wait', '--timeout', '0.3'],
+      dir,
+      stub.origin,
+      { VENICE_TEST_POLL_INTERVAL_MS: '50' }
+    );
+
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /Timed out waiting for video generation[\s\S]*venice video status q1 -m test-model --wait/);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test('video generate refuses --output, --timeout and --complete without --wait, before queueing', { timeout: 20_000 }, () => withScratch(async (dir) => {
+  const stub = await startStub({
+    'POST /api/v1/video/queue': (_request, response) => sendJson(response, { queue_id: 'q1', model: 'test-model' }),
+  });
+  try {
+    const one = await runCli(['video', 'generate', 'a cat', '-o', 'clip.mp4'], dir, stub.origin);
+    assert.equal(one.status, 1, one.stdout);
+    assert.match(one.stderr, /--output needs --wait\./);
+
+    const several = await runCli(['video', 'generate', 'a cat', '--complete', '-t', '60'], dir, stub.origin);
+    assert.equal(several.status, 1, several.stdout);
+    assert.match(several.stderr, /--timeout, --complete need --wait\./);
+
+    assert.equal(stub.count('POST /api/v1/video/queue'), 0);
+  } finally {
+    await stub.close();
+  }
+}));
+
+test("video quote prices the model's first listed ratio and duration when none is given", { timeout: 20_000 }, () => withScratch(async (dir) => {
+  let quoteBody: Record<string, unknown> | undefined;
+  const stub = await startStub({
+    'GET /api/v1/models?type=video': (_request, response) => sendJson(response, catalog),
+    'POST /api/v1/video/quote': async (request, response) => {
+      quoteBody = await readJson(request);
+      sendJson(response, { quote: 0.42 });
+    },
+  });
+  try {
+    const result = await runCli(['video', 'quote', '-m', 'test-model', '-f', 'json'], dir, stub.origin);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(quoteBody, { model: 'test-model', duration: '6s', aspect_ratio: '9:16' });
+    assert.equal(JSON.parse(result.stdout).quote, 0.42);
+  } finally {
+    await stub.close();
+  }
+}));

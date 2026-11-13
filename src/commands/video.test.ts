@@ -11,12 +11,14 @@ import type { VideoStatusResult } from '../lib/api.js';
 import { childEnv } from '../lib/test-env.js';
 import {
   FALLBACK_VIDEO_MODELS,
+  applyVideoConstraints,
   classifyVideoStatus,
   isPublicHttpUrl,
   parseUpscaleFactor,
   requirePublicVideoUrl,
   videoModelKind,
   waitForVideoStatus,
+  type VideoConstraints,
 } from './video.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -482,4 +484,38 @@ test('video models preserves an empty successful live catalog', async () => {
     });
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+test('applyVideoConstraints fills in listed defaults and rejects values the model does not list', () => {
+  const constraints: VideoConstraints = { aspectRatios: ['16:9', '9:16'], durations: ['6s', '10s'], resolutions: ['720p', '1080p'] };
+
+  assert.deepEqual(applyVideoConstraints('m', {}, constraints), {
+    aspectRatio: '16:9',
+    duration: '6s',
+    resolution: undefined,
+  });
+  assert.deepEqual(applyVideoConstraints('m', { aspectRatio: '9:16', duration: '10s', resolution: '1080p' }, constraints), {
+    aspectRatio: '9:16',
+    duration: '10s',
+    resolution: '1080p',
+  });
+  assert.throws(
+    () => applyVideoConstraints('m', { aspectRatio: '4:3' }, constraints),
+    /Invalid --aspect-ratio "4:3" for m\. Use one of: 16:9, 9:16/
+  );
+  assert.throws(() => applyVideoConstraints('m', { duration: '5s' }, constraints), /Invalid --duration "5s" for m\. Use one of: 6s, 10s/);
+  assert.throws(() => applyVideoConstraints('m', { resolution: '4k' }, constraints), /Invalid --resolution "4k" for m\. Use one of: 720p, 1080p/);
+});
+
+test('applyVideoConstraints sends only what the user set when the model lists nothing', () => {
+  assert.deepEqual(applyVideoConstraints('m', { aspectRatio: '4:3' }, undefined), {
+    aspectRatio: '4:3',
+    duration: undefined,
+    resolution: undefined,
+  });
+  assert.deepEqual(applyVideoConstraints('m', { duration: '5s' }, { aspectRatios: undefined, durations: ['5s'] }), {
+    aspectRatio: undefined,
+    duration: '5s',
+    resolution: undefined,
+  });
 });

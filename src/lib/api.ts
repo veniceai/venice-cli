@@ -2178,8 +2178,10 @@ export async function queueVideoGeneration(
   const body: Record<string, unknown> = {
     model: options.model || 'wan-2.6-text-to-video',
     prompt,
-    duration: options.duration || '5s',
   };
+  if (options.duration) {
+    body.duration = options.duration;
+  }
   if (options.aspectRatio) {
     body.aspect_ratio = options.aspectRatio;
   }
@@ -2227,7 +2229,7 @@ export async function queueVideoUpscale(
 
 export async function quoteVideoGeneration(options: {
   model: string;
-  duration: string;
+  duration?: string;
   aspectRatio?: string;
   resolution?: string;
   upscaleFactor?: number;
@@ -2236,8 +2238,8 @@ export async function quoteVideoGeneration(options: {
 }): Promise<{ quote: number }> {
   const body: Record<string, unknown> = {
     model: options.model,
-    duration: options.duration,
   };
+  if (options.duration) body.duration = options.duration;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
   if (options.resolution) body.resolution = options.resolution;
   if (options.upscaleFactor !== undefined) body.upscale_factor = options.upscaleFactor;
