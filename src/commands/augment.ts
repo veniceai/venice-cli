@@ -10,7 +10,7 @@ import { parseDocument, scrapeWebPage } from '../lib/api.js';
 import { downloadToFile, MAX_DOCUMENT_PARSE_BYTES } from '../lib/media.js';
 import {
   detectOutputFormat,
-  formatError,
+  reportError,
   formatJson,
   formatSuccess,
   getChalk,
@@ -58,7 +58,7 @@ export function registerAugmentCommands(program: Command): void {
           console.log(getChalk().dim(`\nTokens: ${terminalSafe(result.tokens)}`));
         }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -86,7 +86,7 @@ export function registerAugmentCommands(program: Command): void {
 
         console.log(terminalSafe(output));
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

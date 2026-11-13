@@ -23,11 +23,11 @@ export interface CliRun {
 }
 
 class Reply {
-  constructor(readonly status: number, readonly body: unknown) {}
+  constructor(readonly status: number, readonly body: unknown, readonly headers: Record<string, string>) {}
 }
 
-export function reply(status: number, body: unknown): Reply {
-  return new Reply(status, body);
+export function reply(status: number, body: unknown, headers: Record<string, string> = {}): Reply {
+  return new Reply(status, body, headers);
 }
 
 /** Answers a request with a 200 JSON body, a reply(), or undefined for a 404. */
@@ -55,10 +55,10 @@ export async function runCli(
       };
       requests.push(recorded);
       const answer = api(recorded);
-      const { status, body } = answer instanceof Reply
+      const { status, body, headers } = answer instanceof Reply
         ? answer
-        : { status: answer === undefined ? 404 : 200, body: answer };
-      response.writeHead(status, { 'Content-Type': 'application/json' });
+        : { status: answer === undefined ? 404 : 200, body: answer, headers: {} };
+      response.writeHead(status, { 'Content-Type': 'application/json', ...headers });
       response.end(JSON.stringify(body ?? { error: 'not found' }));
     });
   });

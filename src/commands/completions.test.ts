@@ -354,7 +354,7 @@ test('fish completion completes option values and files only where they are expe
     'show',
     'clip.wav venice.fish',
     '',
-    '-f -h --format --help',
+    '-f -h -l -m -t --format --help --language --model --response-format --timestamps',
   ]);
 });
 

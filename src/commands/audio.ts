@@ -15,15 +15,72 @@ import { getDefaultVoice } from '../lib/config.js';
 import {
   formatSuccess,
   formatError,
+  reportError,
   formatJson,
   getChalk,
   detectOutputFormat,
   terminalSafe,
 } from '../lib/output.js';
 import { MAX_AUDIO_DOWNLOAD_BYTES, writeBufferToFile, writeBufferToNewFile } from '../lib/media.js';
+import { warningsField } from '../lib/warnings.js';
 import { parseDecimalOption } from '../lib/options.js';
 import { assertClonedVoice, assertTranscription, assertTtsModels } from '../lib/response-checks.js';
 import { apiId, shellCommand } from '../lib/shell-quote.js';
+import type { OutputFormat } from '../types/index.js';
+
+export type TranscribeOptions = {
+  model: string;
+  language?: string;
+  timestamps?: boolean;
+  responseFormat?: 'json' | 'text';
+};
+
+/** Checks the transcription flags before anything is sent. */
+export function parseTranscribeOptions(options: {
+  model: string;
+  language?: string;
+  timestamps?: boolean;
+  responseFormat?: string;
+}): TranscribeOptions {
+  const { responseFormat } = options;
+  if (responseFormat !== undefined && responseFormat !== 'json' && responseFormat !== 'text') {
+    throw new Error('--response-format must be json or text');
+  }
+  if (responseFormat === 'text' && options.timestamps) {
+    throw new Error('--timestamps needs --response-format json; text transcripts have no timestamps.');
+  }
+  return { model: options.model, language: options.language, timestamps: options.timestamps, responseFormat };
+}
+
+/** Transcribes a local media file and prints the transcript in the requested output format. */
+export async function transcribeAndPrint(
+  filePath: string,
+  options: TranscribeOptions,
+  format: OutputFormat
+): Promise<void> {
+  const c = getChalk();
+  const result = await transcribe(filePath, options);
+  assertTranscription(result);
+
+  if (format === 'json') {
+    console.log(formatJson(result));
+    return;
+  }
+  console.log(terminalSafe(result.text));
+  if (format === 'raw') return;
+  if (options.timestamps && result.timestamps) {
+    console.log(`\n${c.dim('─'.repeat(50))}`);
+    if (result.timestamps.segment) {
+      console.log(c.bold('\nSegments:'));
+      for (const seg of result.timestamps.segment) {
+        console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${terminalSafe(seg.text)}`);
+      }
+    }
+  }
+  if (result.duration) {
+    console.log(`\n${c.dim(`Duration: ${result.duration.toFixed(2)}s`)}`);
+  }
+}
 
 export function registerAudioCommands(program: Command): void {
   // Text to speech
@@ -38,6 +95,7 @@ export function registerAudioCommands(program: Command): void {
     .option('-s, --speed <speed>', 'Speech speed (0.25-4.0)', '1.0')
     .option('--temperature <temperature>', 'Sampling temperature (0-2)')
     .option('--streaming', 'Request sentence-by-sentence audio streaming')
+    .option('--json', "Print the saved file's path, size and type as JSON (--format is the audio format)")
     .action(async (textParts: string[], options) => {
       let text = textParts.join(' ');
       
@@ -77,9 +135,20 @@ export function registerAudioCommands(program: Command): void {
         } else {
           outputPath = writeBufferToNewFile(audio, defaultSpeechFileName(audioFormat), limits).outputPath;
         }
-        console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        if (options.json) {
+          console.log(formatJson({
+            output: outputPath,
+            size_bytes: audio.length,
+            content_type: result.contentType,
+            model: options.model,
+            voice,
+            ...warningsField(),
+          }));
+        } else {
+          console.log(formatSuccess(`Saved audio to ${outputPath}`));
+        }
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, options.json ? 'json' : undefined);
         process.exit(1);
       }
     });
@@ -108,7 +177,7 @@ export function registerAudioCommands(program: Command): void {
         console.log(`Model: ${terminalSafe(result.model)}`);
         console.log(`Use: ${shellCommand`venice tts -m ${apiId(result.model)} -v ${apiId(result.id)} "Hello"`}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -124,14 +193,11 @@ export function registerAudioCommands(program: Command): void {
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
     .action(async (audioPath: string, options) => {
       const format = detectOutputFormat(options.format);
-      const c = getChalk();
-      const responseFormat = options.responseFormat as 'json' | 'text' | undefined;
-      if (responseFormat !== undefined && responseFormat !== 'json' && responseFormat !== 'text') {
-        console.error(formatError('--response-format must be json or text'));
-        process.exit(1);
-      }
-      if (responseFormat === 'text' && options.timestamps) {
-        console.error(formatError('--timestamps needs --response-format json; text transcripts have no timestamps.'));
+      let transcribeOptions: TranscribeOptions;
+      try {
+        transcribeOptions = parseTranscribeOptions(options);
+      } catch (error) {
+        console.error(formatError(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
 
@@ -144,35 +210,9 @@ export function registerAudioCommands(program: Command): void {
       }
 
       try {
-        const result = await transcribe(resolvedPath, {
-          model: options.model,
-          language: options.language,
-          timestamps: options.timestamps,
-          responseFormat,
-        });
-        assertTranscription(result);
-
-        if (format === 'json') {
-          console.log(formatJson(result));
-        } else if (format === 'raw') {
-          console.log(terminalSafe(result.text));
-        } else {
-          console.log(terminalSafe(result.text));
-          if (options.timestamps && result.timestamps) {
-            console.log(`\n${c.dim('─'.repeat(50))}`);
-            if (result.timestamps.segment) {
-              console.log(c.bold('\nSegments:'));
-              for (const seg of result.timestamps.segment) {
-                console.log(`${c.dim(`[${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`)} ${terminalSafe(seg.text)}`);
-              }
-            }
-          }
-          if (result.duration) {
-            console.log(`\n${c.dim(`Duration: ${result.duration.toFixed(2)}s`)}`);
-          }
-        }
+        await transcribeAndPrint(resolvedPath, transcribeOptions, format);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });
@@ -232,7 +272,7 @@ export function registerAudioCommands(program: Command): void {
 
         console.log(`\n${c.dim('Usage: venice tts -m <model> -v <voice> "Hello world"')}`);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
     });

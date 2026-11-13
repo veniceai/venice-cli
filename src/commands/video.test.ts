@@ -11,12 +11,13 @@ import type { VideoStatusResult } from '../lib/api.js';
 import { childEnv } from '../lib/test-env.js';
 import {
   FALLBACK_VIDEO_MODELS,
+  applyVideoConstraints,
   classifyVideoStatus,
   isPublicHttpUrl,
   parseUpscaleFactor,
-  requirePublicVideoUrl,
   videoModelKind,
   waitForVideoStatus,
+  type VideoConstraints,
 } from './video.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
@@ -32,8 +33,6 @@ function mp4Bytes(tail = ''): Buffer {
 test('video URL and upscale helpers validate supported inputs', () => {
   assert.equal(isPublicHttpUrl('https://example.com/clip.mp4'), true);
   assert.equal(isPublicHttpUrl('file:///tmp/clip.mp4'), false);
-  assert.equal(requirePublicVideoUrl('http://example.com/clip.mp4'), 'http://example.com/clip.mp4');
-  assert.throws(() => requirePublicVideoUrl('clip.mp4'), /public HTTP\(S\) URL/);
   assert.equal(parseUpscaleFactor(undefined), 2);
   assert.equal(parseUpscaleFactor(4), 4);
   assert.throws(() => parseUpscaleFactor('3'), /1, 2, or 4/);
@@ -482,4 +481,48 @@ test('video models preserves an empty successful live catalog', async () => {
     });
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+test('applyVideoConstraints fills in listed defaults and rejects values the model does not list', () => {
+  const constraints: VideoConstraints = { aspectRatios: ['16:9', '9:16'], durations: ['6s', '10s'], resolutions: ['720p', '1080p'] };
+
+  assert.deepEqual(applyVideoConstraints('m', {}, constraints), {
+    aspectRatio: '16:9',
+    duration: '6s',
+    resolution: undefined,
+  });
+  assert.deepEqual(applyVideoConstraints('m', { aspectRatio: '9:16', duration: '10s', resolution: '1080p' }, constraints), {
+    aspectRatio: '9:16',
+    duration: '10s',
+    resolution: '1080p',
+  });
+  assert.throws(
+    () => applyVideoConstraints('m', { aspectRatio: '4:3' }, constraints),
+    /Invalid --aspect-ratio "4:3" for m\. Use one of: 16:9, 9:16/
+  );
+  assert.throws(() => applyVideoConstraints('m', { duration: '5s' }, constraints), /Invalid --duration "5s" for m\. Use one of: 6s, 10s/);
+  assert.throws(() => applyVideoConstraints('m', { resolution: '4k' }, constraints), /Invalid --resolution "4k" for m\. Use one of: 720p, 1080p/);
+});
+
+test('applyVideoConstraints prefers 16:9 unless the model lists auto or adaptive first', () => {
+  const ratioFor = (aspectRatios: VideoConstraints['aspectRatios']) =>
+    applyVideoConstraints('m', {}, { aspectRatios }).aspectRatio;
+
+  assert.equal(ratioFor(['21:9', '16:9', '9:16']), '16:9');
+  assert.equal(ratioFor(['auto', '16:9']), 'auto');
+  assert.equal(ratioFor(['adaptive', '16:9']), 'adaptive');
+  assert.equal(ratioFor(['9:16', '1:1']), '9:16');
+});
+
+test('applyVideoConstraints sends only what the user set when the model lists nothing', () => {
+  assert.deepEqual(applyVideoConstraints('m', { aspectRatio: '4:3' }, undefined), {
+    aspectRatio: '4:3',
+    duration: undefined,
+    resolution: undefined,
+  });
+  assert.deepEqual(applyVideoConstraints('m', { duration: '5s' }, { aspectRatios: undefined, durations: ['5s'] }), {
+    aspectRatio: undefined,
+    duration: '5s',
+    resolution: undefined,
+  });
 });

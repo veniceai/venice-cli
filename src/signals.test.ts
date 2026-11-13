@@ -29,10 +29,11 @@ function hasPartialFile(workDir: string, outputName: string): boolean {
 }
 
 async function interruptCli(options: {
-  args: string[];
+  args: string[] | ((origin: string) => string[]);
   signal: NodeJS.Signals;
   respond: (request: IncomingMessage, response: ServerResponse) => void;
   ready: (requests: string[], workDir: string) => boolean;
+  env?: NodeJS.ProcessEnv;
 }): Promise<InterruptedRun> {
   const requests: string[] = [];
   const server = createServer((request, response) => {
@@ -43,17 +44,20 @@ async function interruptCli(options: {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   const workDir = mkdtempSync(join(tmpdir(), 'venice-signals-'));
+  const origin = `http://127.0.0.1:${port}`;
+  const args = typeof options.args === 'function' ? options.args(origin) : options.args;
 
   try {
-    const child = spawn(process.execPath, [cliPath, ...options.args], {
+    const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: workDir,
       env: {
         ...process.env,
         HOME: workDir,
         NODE_ENV: 'test',
         NO_COLOR: '1',
-        VENICE_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
+        VENICE_API_BASE_URL: `${origin}/api/v1`,
         VENICE_API_KEY: 'test-key',
+        ...options.env,
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
@@ -134,6 +138,29 @@ test('an interrupted download exits non-zero and leaves no partial file behind',
   assert.deepEqual(music.files, []);
   assert.equal(video.status, 143, video.stderr);
   assert.deepEqual(video.files, []);
+});
+
+test('an interrupted video transcribe removes the copy it was downloading', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'venice-signals-tmp-'));
+  const downloading = () => readdirSync(temp).some((name) =>
+    name.startsWith('venice-transcribe-') && readdirSync(join(temp, name)).length > 0);
+  try {
+    const result = await interruptCli({
+      args: (origin) => ['video', 'transcribe', `${origin}/media/clip.mp4`],
+      signal: 'SIGINT',
+      env: { TMPDIR: temp },
+      respond: (_request, response) => {
+        response.writeHead(200, { 'Content-Type': 'video/mp4' });
+        response.write(Buffer.alloc(4096, 1));
+      },
+      ready: downloading,
+    });
+
+    assert.equal(result.status, 130, result.stderr);
+    assert.deepEqual(readdirSync(temp), []);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 test('an interrupted keys create removes its secret file and says the key may exist', async () => {

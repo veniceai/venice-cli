@@ -276,6 +276,28 @@ export function writeAndCommit(file: OutputFile, data: string | Uint8Array): voi
 }
 
 /**
+ * Creates an empty file at `preferredPath`, or at `name-1.ext`, `name-2.ext`, …
+ * when that path is taken, and returns its path. Writing to the returned path
+ * replaces only this placeholder, never an existing file or link.
+ */
+export function reserveNewFile(preferredPath: string, options: WriteOptions = {}): string {
+  const extension = path.extname(preferredPath);
+  const stem = preferredPath.slice(0, preferredPath.length - extension.length);
+
+  for (let attempt = 0; attempt < MAX_UNIQUE_NAME_ATTEMPTS; attempt++) {
+    const candidate = attempt === 0 ? preferredPath : `${stem}-${attempt}${extension}`;
+    try {
+      fs.closeSync(fs.openSync(candidate, 'wx', options.mode ?? 0o666));
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+
+  throw new Error(`Could not find an unused file name for ${preferredPath}`);
+}
+
+/**
  * Writes `data` to `preferredPath`, or to `name-1.ext`, `name-2.ext`, … when
  * that path is taken, without ever replacing an existing file or link.
  * Returns the path written.
@@ -285,28 +307,52 @@ export function writeNewFile(
   data: string | Uint8Array,
   options: WriteOptions = {}
 ): string {
-  const extension = path.extname(preferredPath);
-  const stem = preferredPath.slice(0, preferredPath.length - extension.length);
-
-  for (let attempt = 0; attempt < MAX_UNIQUE_NAME_ATTEMPTS; attempt++) {
-    const candidate = attempt === 0 ? preferredPath : `${stem}-${attempt}${extension}`;
-    let placeholder: number;
-    try {
-      placeholder = fs.openSync(candidate, 'wx', options.mode ?? 0o666);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
-      throw error;
-    }
-    fs.closeSync(placeholder);
-
-    try {
-      writeFileAtomic(candidate, data, options);
-    } catch (error) {
-      fs.rmSync(candidate, { force: true });
-      throw error;
-    }
-    return candidate;
+  const candidate = reserveNewFile(preferredPath, options);
+  try {
+    writeFileAtomic(candidate, data, options);
+  } catch (error) {
+    fs.rmSync(candidate, { force: true });
+    throw error;
   }
+  return candidate;
+}
 
-  throw new Error(`Could not find an unused file name for ${preferredPath}`);
+/** A path the user chose, which a save may replace, or a default name that never replaces an existing file. */
+export type OutputTarget = { kind: 'chosen'; path: string } | { kind: 'default'; preferredPath: string };
+
+export function outputTarget(chosen: string | undefined, preferredPath: string): OutputTarget {
+  return chosen === undefined ? { kind: 'default', preferredPath } : { kind: 'chosen', path: chosen };
+}
+
+/**
+ * Runs `save` with the target's path. A default target gets a name no existing
+ * file has, through reserveNewFile, and the placeholder is removed again when
+ * the save fails or is interrupted before writing to it.
+ */
+export async function saveToTarget<T>(
+  target: OutputTarget,
+  save: (filePath: string) => Promise<T>
+): Promise<{ outputPath: string; saved: T }> {
+  if (target.kind === 'chosen') {
+    return { outputPath: target.path, saved: await save(target.path) };
+  }
+  const outputPath = reserveNewFile(target.preferredPath);
+  const removePlaceholder = () => removeIfEmpty(outputPath);
+  const stopInterruptCleanup = onInterrupt(removePlaceholder);
+  try {
+    return { outputPath, saved: await save(outputPath) };
+  } catch (error) {
+    removePlaceholder();
+    throw error;
+  } finally {
+    stopInterruptCleanup();
+  }
+}
+
+function removeIfEmpty(filePath: string): void {
+  try {
+    if (fs.lstatSync(filePath).size === 0) fs.rmSync(filePath, { force: true });
+  } catch {
+    // Nothing to remove.
+  }
 }

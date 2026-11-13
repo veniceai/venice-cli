@@ -30,9 +30,15 @@ import { registerBillingCommand } from './commands/billing.js';
 import { registerKeysCommand } from './commands/keys.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
-import { formatError, getChalk } from './lib/output.js';
+import { formatError, formatJson, formatWarning, getChalk, reportError } from './lib/output.js';
+import { undeliveredWarnings } from './lib/warnings.js';
 import { runInterruptCleanups } from './lib/interrupt.js';
 import { getVersion, parseSkillName } from './lib/version.js';
+import type { OutputFormat } from './types/index.js';
+
+// Known once the command's options are parsed, so the errors a command doesn't
+// catch itself follow its output format too.
+let errorFormat: OutputFormat | undefined;
 
 async function main() {
   const program = new Command();
@@ -48,14 +54,26 @@ async function main() {
     )
     .option('--no-color', 'Disable colored output')
     .option('--skill <name>', 'Name the agent skill running this command, sent to Venice as skill/<name> in the User-Agent')
-    .hook('preAction', (thisCommand) => {
+    .hook('preAction', (thisCommand, actionCommand) => {
       // Handle global --no-color flag
       if (thisCommand.opts().color === false) {
         process.env.NO_COLOR = '1';
       }
+      const options = actionCommand.opts();
+      if (options.format === 'json' || options.json === true) errorFormat = 'json';
       const skill = thisCommand.opts().skill as string | undefined;
       if (skill !== undefined) {
         process.env.VENICE_SKILL = parseSkillName(skill, '--skill');
+      }
+    })
+    .hook('postAction', (_thisCommand, actionCommand) => {
+      const pending = undeliveredWarnings();
+      if (pending.length === 0) return;
+      const options = actionCommand.opts();
+      if (options.format === 'json' || options.json === true) {
+        console.error(formatJson({ warnings: pending }, 0));
+      } else {
+        for (const warning of pending) console.error(formatWarning(warning.message));
       }
     });
 
@@ -106,14 +124,14 @@ async function main() {
     }
 
     // Log other errors
-    console.error(formatError(error.message || String(error)));
+    reportError(error, errorFormat);
     process.exit(1);
   }
 }
 
 // Handle unhandled rejections
-process.on('unhandledRejection', (reason: any) => {
-  console.error(formatError(reason?.message || String(reason)));
+process.on('unhandledRejection', (reason: unknown) => {
+  reportError(reason, errorFormat);
   process.exit(1);
 });
 

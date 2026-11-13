@@ -13,7 +13,9 @@ import {
 
 const MB = 1024 * 1024;
 
-export const MAX_IMAGE_DOWNLOAD_BYTES = 50 * MB;
+// The largest images Venice returns are 4096x4096, and an RGBA PNG at that size can reach about 64 MiB. Four of
+// them base64-encoded in one generation response must still fit in a single JavaScript string.
+export const MAX_IMAGE_DOWNLOAD_BYTES = 80 * MB;
 export const MAX_IMAGE_EDIT_BYTES = 25 * MB;
 export const MAX_AUDIO_DOWNLOAD_BYTES = 500 * MB;
 export const MAX_VIDEO_DOWNLOAD_BYTES = 1024 * MB;
@@ -27,6 +29,8 @@ export const MAX_CHAT_AUDIO_BYTES = 25 * MB;
 export const MAX_CHAT_VIDEO_BYTES = 50 * MB;
 export const MAX_DOCUMENT_PARSE_BYTES = 25 * MB;
 export const MAX_VIDEO_UPSCALE_BYTES = 200 * MB;
+export const MAX_VIDEO_INPUT_AUDIO_BYTES = 15 * MB;
+export const MAX_REFERENCE_VIDEO_BYTES = 50 * MB;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120000;
 const DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS = 120000;
 

@@ -40,6 +40,8 @@ import {
   streamResponseToFile,
 } from './media.js';
 import { checkMp4Header } from './mp4.js';
+import { videoInputsBody, type TaskType, type VideoInputs } from './video-inputs.js';
+import { modelOfRequestBody, noteResponseWarnings } from './warnings.js';
 
 // Never allow production environment variables to redirect bearer credentials.
 const VENICE_API =
@@ -91,8 +93,25 @@ function truncateErrorMessage(message: string): string {
     : message;
 }
 
+/** Fields some Venice errors carry that tell the caller what to do next. */
+const ERROR_EXTRA_FIELDS = ['credits_refunded', 'suggested_prompt', 'recommended_model'] as const;
+export type ErrorExtras = Partial<Record<(typeof ERROR_EXTRA_FIELDS)[number], string | number | boolean>>;
+
+function errorExtras(json: unknown): ErrorExtras {
+  const extras: ErrorExtras = {};
+  if (!json || typeof json !== 'object') return extras;
+  const record = json as Record<string, unknown>;
+  const nested = record.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : {};
+  for (const field of ERROR_EXTRA_FIELDS) {
+    const value = record[field] ?? nested[field];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') extras[field] = value;
+  }
+  return extras;
+}
+
 export class VeniceApiError extends Error {
   retryAfterMs?: number;
+  extras: ErrorExtras = {};
 
   constructor(
     message: string,
@@ -107,12 +126,14 @@ export class VeniceApiError extends Error {
     let message: unknown;
     let code: unknown;
     let details: unknown;
+    let extras: ErrorExtras = {};
     try {
       const json = JSON.parse(body);
       const error = json?.error;
       message = typeof error === 'string' ? error : error?.message || json?.message;
       code = error?.code;
       details = json?.details;
+      extras = errorExtras(json);
     } catch {
       // Not JSON: the body text is the message.
     }
@@ -126,11 +147,13 @@ export class VeniceApiError extends Error {
       // Details in a shape we cannot read are kept by showing the whole body.
       text = details == null ? message : body.trim();
     }
-    return new VeniceApiError(
+    const apiError = new VeniceApiError(
       truncateErrorMessage(text),
       status,
       typeof code === 'string' ? code : undefined
     );
+    apiError.extras = extras;
+    return apiError;
   }
 
   isRetryable(): boolean {
@@ -393,6 +416,7 @@ export async function apiRequest<T>(
         signal: controller.signal,
         redirect: 'error',
       });
+      noteResponseWarnings(response.headers, modelOfRequestBody(body));
       responded = true;
 
       if (!response.ok) {
@@ -460,9 +484,11 @@ export async function apiRequest<T>(
       if (error instanceof VeniceApiError) {
         if (error.isAuthError()) {
           if (spinner) stopSpinner(false, 'Authentication failed');
-          throw new Error(
+          throw new VeniceApiError(
             'Authentication failed. Please check your API key.\n' +
-            'Update with: venice config set api_key'
+            'Update with: venice config set api_key',
+            401,
+            error.code
           );
         }
 
@@ -1255,6 +1281,7 @@ export async function upscaleImage(
       signal: controller.signal,
       redirect: 'error',
     });
+    noteResponseWarnings(response.headers, modelOfRequestBody(body));
 
     if (!response.ok) {
       throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
@@ -1336,6 +1363,7 @@ export async function textToSpeech(
       signal: controller.signal,
       redirect: 'error',
     });
+    noteResponseWarnings(response.headers, modelOfRequestBody(body));
 
     if (!response.ok) {
       throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
@@ -1542,6 +1570,7 @@ export async function transcribe(
     const res = await fetch(`${VENICE_API}/audio/transcriptions`, {
       ...requestInit,
     });
+    noteResponseWarnings(res.headers, options.model || 'nvidia/parakeet-tdt-0.6b-v3');
 
     if (!res.ok) {
       throw VeniceApiError.fromResponse(res.status, await readErrorBody(res));
@@ -2004,6 +2033,7 @@ async function retrieveVideoResponse(
         signal: controller.signal,
         redirect: 'error',
       });
+      noteResponseWarnings(response.headers, model);
 
       if (!response.ok) {
         throw VeniceApiError.fromResponse(response.status, await readErrorBody(response));
@@ -2172,20 +2202,24 @@ export async function queueVideoGeneration(
     model?: string;
     duration?: string;
     aspectRatio?: string;
-    imageUrl?: string;
+    resolution?: string;
+    audio?: boolean;
+    negativePrompt?: string;
+    taskType?: TaskType;
+    inputs?: VideoInputs;
   } = {}
 ): Promise<QueuedJob> {
   const body: Record<string, unknown> = {
     model: options.model || 'wan-2.6-text-to-video',
     prompt,
-    duration: options.duration || '5s',
+    ...(options.inputs ? videoInputsBody(options.inputs) : {}),
   };
-  if (options.aspectRatio) {
-    body.aspect_ratio = options.aspectRatio;
-  }
-  if (options.imageUrl) {
-    body.image_url = options.imageUrl;
-  }
+  if (options.duration) body.duration = options.duration;
+  if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
+  if (options.resolution) body.resolution = options.resolution;
+  if (options.audio !== undefined) body.audio = options.audio;
+  if (options.negativePrompt) body.negative_prompt = options.negativePrompt;
+  if (options.taskType) body.omni_reference_task_type = options.taskType;
 
   const response = await apiRequest<unknown>('/video/queue', {
     method: 'POST',
@@ -2227,22 +2261,26 @@ export async function queueVideoUpscale(
 
 export async function quoteVideoGeneration(options: {
   model: string;
-  duration: string;
+  duration?: string;
   aspectRatio?: string;
   resolution?: string;
   upscaleFactor?: number;
   audio?: boolean;
   videoUrl?: string;
+  imageUrl?: string;
+  referenceVideoSeconds?: number;
 }): Promise<{ quote: number }> {
   const body: Record<string, unknown> = {
     model: options.model,
-    duration: options.duration,
   };
+  if (options.duration) body.duration = options.duration;
   if (options.aspectRatio) body.aspect_ratio = options.aspectRatio;
   if (options.resolution) body.resolution = options.resolution;
   if (options.upscaleFactor !== undefined) body.upscale_factor = options.upscaleFactor;
   if (options.audio !== undefined) body.audio = options.audio;
   if (options.videoUrl) body.video_url = options.videoUrl;
+  if (options.imageUrl) body.image_url = options.imageUrl;
+  if (options.referenceVideoSeconds !== undefined) body.reference_video_total_duration = options.referenceVideoSeconds;
 
   const response = await apiRequest<unknown>('/video/quote', {
     method: 'POST',
@@ -2264,16 +2302,6 @@ export async function completeVideo(
     spinnerText: 'Cleaning up video...',
   });
   return parseCompleteResponse(response, '/video/complete');
-}
-
-export async function transcribeVideo(
-  url: string
-): Promise<{ transcript: string; lang?: string }> {
-  return apiRequest('/video/transcriptions', {
-    method: 'POST',
-    body: { url, response_format: 'json' },
-    spinnerText: 'Transcribing video...',
-  });
 }
 
 // Video generation - check status / retrieve result
@@ -2309,11 +2337,17 @@ export async function retrieveVideo(
   });
 }
 
+/** Lyrics come from the user or are written by the model from the prompt, never both. */
+export type Lyrics = { kind: 'none' } | { kind: 'written'; text: string } | { kind: 'optimized' };
+
 export interface AudioGenerationOptions {
   model: string;
+  lyrics: Lyrics;
   durationSeconds?: number;
-  lyricsPrompt?: string;
   forceInstrumental?: boolean;
+  loop?: boolean;
+  voice?: string;
+  speed?: number;
 }
 
 export interface AudioProcessingStatus {
@@ -2339,12 +2373,17 @@ function audioGenerationBody(
   if (options.durationSeconds !== undefined) {
     body.duration_seconds = options.durationSeconds;
   }
-  if (options.lyricsPrompt !== undefined) {
-    body.lyrics_prompt = options.lyricsPrompt;
+  if (options.lyrics.kind === 'written') {
+    body.lyrics_prompt = options.lyrics.text;
+  } else if (options.lyrics.kind === 'optimized') {
+    body.lyrics_optimizer = true;
   }
   if (options.forceInstrumental !== undefined) {
     body.force_instrumental = options.forceInstrumental;
   }
+  if (options.loop) body.loop = true;
+  if (options.voice !== undefined) body.voice = options.voice;
+  if (options.speed !== undefined) body.speed = options.speed;
 
   return body;
 }

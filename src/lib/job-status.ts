@@ -58,6 +58,23 @@ function onDeadline(deadline: number, callback: () => void): () => void {
   return () => clearTimeout(timeoutId);
 }
 
+/** What happened to the remote copy of a job's output after it was saved. */
+export type Cleanup = { kind: 'kept' } | { kind: 'deleted' } | { kind: 'failed'; error: string };
+
+/** The JSON fields for a cleanup. A copy kept on purpose adds none. */
+export function cleanupFields(cleanup: Cleanup): Record<string, unknown> {
+  if (cleanup.kind === 'kept') return {};
+  return cleanup.kind === 'deleted' ? { deleted: true } : { deleted: false, cleanup_error: cleanup.error };
+}
+
+/** Throws when flags that only mean something with --wait were given without it. */
+export function rejectWaitOnlyFlags(flags: Record<string, unknown>): void {
+  const given = Object.entries(flags).filter(([, value]) => value !== undefined).map(([flag]) => flag);
+  if (given.length > 0) {
+    throw new Error(`${given.join(', ')} ${given.length === 1 ? 'needs' : 'need'} --wait.`);
+  }
+}
+
 export async function waitForJobStatus<T extends { status: string }>(
   fetchStatus: () => Promise<T>,
   options: {

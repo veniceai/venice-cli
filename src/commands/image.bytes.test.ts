@@ -54,7 +54,7 @@ test('generated images are size-checked before decoding and must be images', () 
   // Decoding these would give zero bytes that fail the image check; the size
   // check must reject them first.
   const oversized = 'A'.repeat(Math.ceil(((MAX_IMAGE_DOWNLOAD_BYTES + 1) * 4) / 3) + 4);
-  assert.throws(() => decodeGeneratedImage(oversized), /Generated image is too large \(50\.0 MB\)/);
+  assert.throws(() => decodeGeneratedImage(oversized), /Generated image is too large \(80\.0 MB\)/);
 });
 
 test('image generation does not save a response that is not an image', async () => {
