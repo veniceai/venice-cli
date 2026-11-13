@@ -65,8 +65,7 @@ export { isPublicHttpUrl };
 export const FALLBACK_VIDEO_MODELS: Array<{ id: string; name: string; type: string }> = [
   { id: 'wan-2.6-text-to-video', name: 'Wan 2.6 T2V', type: 'text-to-video' },
   { id: 'wan-2.6-image-to-video', name: 'Wan 2.6 I2V', type: 'image-to-video' },
-  { id: 'veo3-fast-text-to-video', name: 'Veo3 Fast T2V', type: 'text-to-video' },
-  { id: 'sora2-text-to-video', name: 'Sora2 T2V', type: 'text-to-video' },
+  { id: 'veo3.1-fast-text-to-video', name: 'Veo 3.1 Fast T2V', type: 'text-to-video' },
   { id: 'kling-v3-pro-text-to-video', name: 'Kling V3 Pro T2V', type: 'text-to-video' },
   { id: 'topaz-video-upscale', name: 'Topaz Video Upscale', type: 'upscale' },
 ];
@@ -947,32 +946,33 @@ export function registerVideoCommands(program: Command): void {
     .action(async (options) => {
       const format = detectOutputFormat(options.format);
       const c = getChalk();
-      let models: Array<{ id: string; name?: string; type: string; description?: string }>;
-      let usedFallback = false;
-
+      let catalog:
+        | { source: 'api'; models: Array<{ id: string; name?: string; type: string; description?: string; constraints?: unknown }> }
+        | { source: 'fallback'; models: typeof FALLBACK_VIDEO_MODELS };
       try {
         const live = await listModels({ type: 'video', showSpinner: false });
-        models = live.map((model: Model) => ({
-          id: model.id,
-          name: model.model_spec?.description,
-          type: videoModelKind(model.id),
-          description: model.model_spec?.description,
-        }));
+        catalog = {
+          source: 'api',
+          models: live.map((model: Model) => ({
+            id: model.id,
+            name: model.model_spec?.description,
+            type: videoModelKind(model.id),
+            description: model.model_spec?.description,
+            constraints: (model.model_spec as { constraints?: unknown } | undefined)?.constraints,
+          })),
+        };
       } catch {
-        usedFallback = true;
-        models = FALLBACK_VIDEO_MODELS;
+        catalog = { source: 'fallback', models: FALLBACK_VIDEO_MODELS };
       }
+      const { models } = catalog;
 
       if (format === 'json') {
-        console.log(formatJson({
-          models,
-          source: usedFallback ? 'fallback' : 'api',
-        }));
+        console.log(formatJson({ models, source: catalog.source }));
         return;
       }
 
       console.log(c.bold('Available Video Models\n'));
-      if (usedFallback) {
+      if (catalog.source === 'fallback') {
         console.log(c.yellow('Live catalog unavailable; showing fallback models.\n'));
       } else if (models.length === 0) {
         console.log('No video models were returned by the live API.');
