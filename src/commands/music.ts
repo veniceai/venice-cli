@@ -76,6 +76,7 @@ function parseMusicMode(options: { wait?: boolean; output?: string; timeout?: st
 
 type MusicSpec = {
   pricing: 'per-character' | 'other';
+  lyrics: 'unsupported' | 'optional' | 'required';
   lyricsOptimizer: boolean;
   loop: boolean;
   forceInstrumental: boolean;
@@ -97,6 +98,7 @@ async function fetchMusicSpec(model: string): Promise<MusicSpec | undefined> {
   const { min_speed: minSpeed, max_speed: maxSpeed, voices } = spec;
   return {
     pricing: pricing && 'per_thousand_characters' in pricing ? 'per-character' : 'other',
+    lyrics: spec.supports_lyrics !== true ? 'unsupported' : spec.lyrics_required === true ? 'required' : 'optional',
     lyricsOptimizer: spec.supports_lyrics_optimizer === true,
     loop: spec.supports_loop === true,
     forceInstrumental: spec.supports_force_instrumental === true,
@@ -113,6 +115,14 @@ async function fetchMusicSpec(model: string): Promise<MusicSpec | undefined> {
 /** Rejects options the catalog says the model doesn't support, before anything is quoted or queued. */
 function checkMusicOptions(model: string, request: AudioRequest, spec: MusicSpec | undefined): void {
   if (!spec) return;
+  if (request.lyrics.kind === 'written' && spec.lyrics === 'unsupported') {
+    throw new Error(`${model} doesn't take lyrics (--lyrics).`);
+  }
+  if (request.lyrics.kind === 'none' && spec.lyrics === 'required') {
+    throw new Error(spec.lyricsOptimizer
+      ? `${model} needs lyrics: pass them with --lyrics, or let it write them with --lyrics-optimizer.`
+      : `${model} needs lyrics: pass them with --lyrics.`);
+  }
   if (request.lyrics.kind === 'optimized' && !spec.lyricsOptimizer) {
     throw new Error(`${model} can't write lyrics from the prompt (--lyrics-optimizer).`);
   }

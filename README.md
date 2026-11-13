@@ -552,7 +552,7 @@ venice music generate -m elevenlabs-music -d 60 --instrumental \
   "Lofi beat on a rainy night"
 
 # Generate a song using lyrics from a file
-venice music generate -m elevenlabs-music --lyrics lyrics.txt \
+venice music generate -m minimax-music-v26 --lyrics lyrics.txt \
   "A folk song about the sea"
 
 # Let the model write the lyrics, loop a sound effect, or pick a voice and speed
@@ -587,9 +587,10 @@ the same way `video generate --wait` does. `--max-usd` refuses the job before an
 quote is higher or can't be fetched. For models priced per character, the quote
 counts the prompt's characters.
 
-`--lyrics-optimizer`, `--loop`, `--instrumental`, `--voice` and `--speed` are
-checked against the model's entry in `venice music models --format json` before
-anything is queued. `--voice` takes a name from the model's list, or a custom
+`--lyrics`, `--lyrics-optimizer`, `--loop`, `--instrumental`, `--voice` and
+`--speed` are checked against the model's entry in `venice music models --format
+json` before anything is queued, and a model that needs lyrics is refused
+without them. `--voice` takes a name from the model's list, or a custom
 voice ID (such as an ElevenLabs voice ID) where the model accepts one.
 `--lyrics-optimizer` writes the lyrics from the prompt, so it can't be combined
 with `--lyrics`.

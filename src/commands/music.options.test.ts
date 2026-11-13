@@ -42,6 +42,24 @@ test('music generate sends the lyrics optimizer, loop, voice and speed the model
   });
 });
 
+test('music generate sends lyrics from a file to a model that needs them', { timeout: 20_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-music-lyrics-'));
+  const lyrics = join(dir, 'lyrics.txt');
+  writeFileSync(lyrics, 'la la la');
+  try {
+    const run = await runCli(
+      ['music', 'generate', 'a song', '-m', 'test-music', '--lyrics', lyrics, '-f', 'json'],
+      withSpec({ supports_lyrics: true, lyrics_required: true })
+    );
+
+    assert.equal(run.status, 0, run.stderr);
+    const queued = run.requests.find((request) => request.path === '/audio/queue');
+    assert.equal(JSON.parse(queued?.body ?? '{}').lyrics_prompt, 'la la la');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('music generate accepts a custom voice ID only where the model takes one', { timeout: 20_000 }, async () => {
   const custom = await runCli(
     ['music', 'generate', 'hello', '-m', 'test-music', '--voice', 'pNInz6obpgDQGcFmaJgB'],
@@ -61,6 +79,13 @@ test('music generate rejects options the model does not support before queueing'
   const unsupported = { voices: [] };
   const cases: Array<[Record<string, unknown>, string[], RegExp]> = [
     [capable, ['--lyrics-optimizer', '--lyrics', lyrics], /--lyrics-optimizer writes the lyrics from the prompt, so it can't be used with --lyrics/],
+    [unsupported, ['--lyrics', lyrics], /test-music doesn't take lyrics \(--lyrics\)/],
+    [{ supports_lyrics: true, lyrics_required: true }, [], /test-music needs lyrics: pass them with --lyrics\.$/m],
+    [
+      { supports_lyrics: true, lyrics_required: true, supports_lyrics_optimizer: true },
+      [],
+      /test-music needs lyrics: pass them with --lyrics, or let it write them with --lyrics-optimizer\./,
+    ],
     [unsupported, ['--lyrics-optimizer'], /test-music can't write lyrics from the prompt/],
     [unsupported, ['--loop'], /test-music can't render a seamless loop/],
     [unsupported, ['--instrumental'], /test-music has no instrumental mode/],
