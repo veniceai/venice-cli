@@ -190,6 +190,25 @@ test('video generate rejects inputs the catalog says the model cannot take', { t
   assert.equal(allowed.status, 0, allowed.stderr);
 });
 
+test('video generate --max-usd refuses a job above the cap, or one it cannot quote, before queueing', { timeout: 30_000 }, async () => {
+  const quotedAt = (quote: number): FakeApi => (request) =>
+    request.path === '/video/quote' ? { quote } : queueOnly(request);
+
+  const over = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '--max-usd', '1'], quotedAt(2.5));
+  assert.equal(over.status, 1, over.stdout);
+  assert.match(over.stderr, /quoted at \$2\.5, above --max-usd 1, so nothing was queued/);
+  assert.equal(sent(over.requests, '/video/queue'), undefined);
+
+  const unquoted = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '--max-usd', '1', '--wait'], queueOnly);
+  assert.equal(unquoted.status, 1, unquoted.stdout);
+  assert.match(unquoted.stderr, /Couldn't get a price to check against --max-usd, so nothing was queued/);
+  assert.equal(sent(unquoted.requests, '/video/queue'), undefined);
+
+  const within = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '--max-usd', '3', '-f', 'json'], quotedAt(2.5));
+  assert.equal(within.status, 0, within.stderr);
+  assert.deepEqual(JSON.parse(within.stdout), { queue_id: 'q1', model: 'test-model', quote_usd: 2.5 });
+});
+
 test('quotes include the resolution, audio and the length of local reference videos', { timeout: 30_000 }, () => withScratch(async (file) => {
   const clips = [file('a.mp4', mp4WithSeconds(3)), file('b.mov', mp4WithSeconds(4.5))];
 

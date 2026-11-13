@@ -451,6 +451,9 @@ Venice supports AI video generation using state-of-the-art models. Video generat
 # Generate a video, wait for it and save it, in one command
 venice video generate "A cat playing with a ball in slow motion" --wait -o cat.mp4
 
+# Refuse the job, before anything is charged, if it would cost more than $2
+venice video generate "A cat playing with a ball in slow motion" --wait -o cat.mp4 --max-usd 2
+
 # Or queue the job and check on it later
 venice video generate "A cat playing with a ball in slow motion"
 
@@ -521,7 +524,7 @@ Without `-d`, `video generate` and `video quote` use the first duration the mode
 
 Every media flag takes a local file, which is sent inline, or a public http(s) URL. Local images must be PNG, JPEG or WebP (up to 20 MB), source videos MP4, MOV or WebM (200 MB), reference videos MP4 or MOV (50 MB), and audio WAV or MP3 (15 MB). `--image-reference`, `--video-reference`, `--element` and `--camera-trajectory` take JSON, inline or as the path of a JSON file, and the files or URLs inside follow the same rules. Before anything is queued, the CLI refuses combinations Venice rejects: reference audio needs a reference image or video, a camera trajectory needs `-i`, and it says when the model can't take a source video, an audio input, a voice per reference, or a change to its audio. With `--wait` the quote includes the length of local reference videos, and `video quote --reference-video` does the same.
 
-`video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o`. Without `-o` it saves to `output.mp4`, or to `output-1.mp4` and so on when that file exists, so it never replaces an earlier video. With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved.
+`video generate --wait` quotes the job, queues it, waits for it and saves the video to `-o`. Without `-o` it saves to `output.mp4`, or to `output-1.mp4` and so on when that file exists, so it never replaces an earlier video. With `-f json` it prints one object with the file path, size, model, queue ID and quoted price (`quote_usd`). It exits 1 with Venice's error when the job fails. When the wait times out or the download fails, the error says how to carry on with `video status` or `video retrieve`. `--timeout` works as it does for `video status`, and `--complete` deletes the video from Venice once it's saved. `--max-usd` quotes the job first, with or without `--wait`, and refuses it before anything is charged when the quote is higher or can't be fetched.
 
 `video status --wait` exits 1 when the job fails, ends in a status the CLI does not recognise, or is still running when the timeout expires. `video retrieve` exits 2 while the job is still processing, so a script can retry later, and 1 when no video will come.
 
