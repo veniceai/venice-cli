@@ -122,25 +122,40 @@ export async function fetchVideoConstraints(model: string): Promise<VideoConstra
 }
 
 /**
- * Uses the model's first listed aspect ratio and duration when none is given, and rejects values the model
- * doesn't list, so a request the API would refuse fails before anything is queued. Resolution is only checked,
- * because the API has its own default.
+ * A model that lists auto or adaptive first fits the ratio to its inputs, so that stays the default.
+ * Otherwise 16:9 is preferred over a first listed ratio such as 21:9.
+ */
+function defaultAspectRatio(listed: NonEmpty<string>): string {
+  const [first] = listed;
+  if (first === 'auto' || first === 'adaptive') return first;
+  return listed.includes('16:9') ? '16:9' : first;
+}
+
+/**
+ * Fills in a listed aspect ratio (see defaultAspectRatio) and the first listed duration when none is given,
+ * and rejects values the model doesn't list, so a request the API would refuse fails before anything is
+ * queued. Resolution is only checked, because the API has its own default.
  */
 export function applyVideoConstraints(
   model: string,
   options: { aspectRatio?: string; duration?: string; resolution?: string },
   constraints: VideoConstraints | undefined
 ): { aspectRatio?: string; duration?: string; resolution?: string } {
-  const pick = (flag: string, value: string | undefined, listed: NonEmpty<string> | undefined, useFirst: boolean) => {
+  const pick = (
+    flag: string,
+    value: string | undefined,
+    listed: NonEmpty<string> | undefined,
+    byDefault?: (listed: NonEmpty<string>) => string
+  ) => {
     if (!listed) return value;
-    if (value === undefined) return useFirst ? listed[0] : undefined;
+    if (value === undefined) return byDefault?.(listed);
     if (listed.includes(value)) return value;
     throw new Error(`Invalid ${flag} "${value}" for ${model}. Use one of: ${listed.join(', ')}`);
   };
   return {
-    aspectRatio: pick('--aspect-ratio', options.aspectRatio, constraints?.aspectRatios, true),
-    duration: pick('--duration', options.duration, constraints?.durations, true),
-    resolution: pick('--resolution', options.resolution, constraints?.resolutions, false),
+    aspectRatio: pick('--aspect-ratio', options.aspectRatio, constraints?.aspectRatios, defaultAspectRatio),
+    duration: pick('--duration', options.duration, constraints?.durations, (listed) => listed[0]),
+    resolution: pick('--resolution', options.resolution, constraints?.resolutions),
   };
 }
 
@@ -367,7 +382,7 @@ export function registerVideoCommands(program: Command): void {
     .description('Queue a video generation job, or with --wait, wait for it and save the video')
     .option('-m, --model <model>', 'Model to use', 'wan-2.6-text-to-video')
     .option('-d, --duration <duration>', "Video duration (e.g., 5s, 10s; default: the model's first listed duration)")
-    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: the model's first listed ratio)")
+    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: 16:9 where the model lists it, unless it lists auto or adaptive first)")
     .option('-i, --image <path>', 'Reference image for image-to-video models')
     .option('-w, --wait', 'Wait for the video and save it')
     .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4, or output-1.mp4 and so on if it exists)')
@@ -439,7 +454,7 @@ export function registerVideoCommands(program: Command): void {
     .description('Estimate the price of a video generation job')
     .requiredOption('-m, --model <model>', 'Model to quote')
     .option('-d, --duration <duration>', "Video duration (e.g., 5s, 10s; default: the model's first listed duration)")
-    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: the model's first listed ratio)")
+    .option('-a, --aspect-ratio <ratio>', "Aspect ratio (e.g., 16:9; default: 16:9 where the model lists it, unless it lists auto or adaptive first)")
     .option('-r, --resolution <resolution>', 'Resolution (e.g., 720p, 1080p)')
     .option('--factor <n>', 'Upscale factor for topaz-video-upscale (1, 2, or 4)')
     .option('--audio', 'Include audio in the quote')

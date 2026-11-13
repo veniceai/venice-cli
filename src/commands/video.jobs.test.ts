@@ -558,12 +558,12 @@ const catalog = {
     id: 'test-model',
     type: 'video',
     model_spec: {
-      constraints: { aspect_ratios: ['9:16', '16:9'], durations: ['6s', '10s'], resolutions: ['720p'] },
+      constraints: { aspect_ratios: ['21:9', '16:9'], durations: ['6s', '10s'], resolutions: ['720p'] },
     },
   }],
 };
 
-test("video generate --wait uses the model's first listed ratio and duration, saves the video and prints one JSON object", { timeout: 20_000 }, () => withScratch(async (dir) => {
+test("video generate --wait fills in 16:9 and the model's first listed duration, saves the video and prints one JSON object", { timeout: 20_000 }, () => withScratch(async (dir) => {
   const video = mp4Bytes('-generated');
   const bodies: Record<string, Record<string, unknown>> = {};
   let retrieves = 0;
@@ -597,8 +597,8 @@ test("video generate --wait uses the model's first listed ratio and duration, sa
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(output).equals(video), true);
-    assert.deepEqual(bodies.quote, { model: 'test-model', duration: '6s', aspect_ratio: '9:16' });
-    assert.deepEqual(bodies.queue, { model: 'test-model', prompt: 'a cat', duration: '6s', aspect_ratio: '9:16' });
+    assert.deepEqual(bodies.quote, { model: 'test-model', duration: '6s', aspect_ratio: '16:9' });
+    assert.deepEqual(bodies.queue, { model: 'test-model', prompt: 'a cat', duration: '6s', aspect_ratio: '16:9' });
     assert.deepEqual(JSON.parse(result.stdout), {
       status: 'completed',
       queue_id: 'q1',
@@ -607,7 +607,7 @@ test("video generate --wait uses the model's first listed ratio and duration, sa
       size_bytes: video.length,
       content_type: 'video/mp4',
       duration: '6s',
-      aspect_ratio: '9:16',
+      aspect_ratio: '16:9',
       quote_usd: 0.42,
     });
   } finally {
@@ -667,7 +667,7 @@ test('video generate rejects a ratio or duration the model does not list before 
   try {
     const ratio = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '-a', '4:3', '--wait'], dir, stub.origin);
     assert.equal(ratio.status, 1, ratio.stdout);
-    assert.match(ratio.stderr, /Invalid --aspect-ratio "4:3" for test-model\. Use one of: 9:16, 16:9/);
+    assert.match(ratio.stderr, /Invalid --aspect-ratio "4:3" for test-model\. Use one of: 21:9, 16:9/);
 
     const duration = await runCli(['video', 'generate', 'a cat', '-m', 'test-model', '-d', '5s'], dir, stub.origin);
     assert.equal(duration.status, 1, duration.stdout);
@@ -782,7 +782,7 @@ test('video generate refuses --output, --timeout and --complete without --wait, 
   }
 }));
 
-test("video quote prices the model's first listed ratio and duration when none is given", { timeout: 20_000 }, () => withScratch(async (dir) => {
+test("video quote prices 16:9 and the model's first listed duration when none is given", { timeout: 20_000 }, () => withScratch(async (dir) => {
   let quoteBody: Record<string, unknown> | undefined;
   const stub = await startStub({
     'GET /api/v1/models?type=video': (_request, response) => sendJson(response, catalog),
@@ -795,7 +795,7 @@ test("video quote prices the model's first listed ratio and duration when none i
     const result = await runCli(['video', 'quote', '-m', 'test-model', '-f', 'json'], dir, stub.origin);
 
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(quoteBody, { model: 'test-model', duration: '6s', aspect_ratio: '9:16' });
+    assert.deepEqual(quoteBody, { model: 'test-model', duration: '6s', aspect_ratio: '16:9' });
     assert.equal(JSON.parse(result.stdout).quote, 0.42);
   } finally {
     await stub.close();

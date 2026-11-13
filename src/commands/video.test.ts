@@ -507,6 +507,16 @@ test('applyVideoConstraints fills in listed defaults and rejects values the mode
   assert.throws(() => applyVideoConstraints('m', { resolution: '4k' }, constraints), /Invalid --resolution "4k" for m\. Use one of: 720p, 1080p/);
 });
 
+test('applyVideoConstraints prefers 16:9 unless the model lists auto or adaptive first', () => {
+  const ratioFor = (aspectRatios: VideoConstraints['aspectRatios']) =>
+    applyVideoConstraints('m', {}, { aspectRatios }).aspectRatio;
+
+  assert.equal(ratioFor(['21:9', '16:9', '9:16']), '16:9');
+  assert.equal(ratioFor(['auto', '16:9']), 'auto');
+  assert.equal(ratioFor(['adaptive', '16:9']), 'adaptive');
+  assert.equal(ratioFor(['9:16', '1:1']), '9:16');
+});
+
 test('applyVideoConstraints sends only what the user set when the model lists nothing', () => {
   assert.deepEqual(applyVideoConstraints('m', { aspectRatio: '4:3' }, undefined), {
     aspectRatio: '4:3',
