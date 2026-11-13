@@ -73,6 +73,7 @@ test('malformed numeric options are rejected before any request is sent', async 
     [['tts', '--temperature', '', 'hello'], /--temperature must be a number between 0 and 2 \(got ""\)/],
     [['tts', '-s', ' 3 ', 'hello'], /--speed must be/],
     [['music', 'generate', '-d', '0x10', 'p'], /--duration must be a positive integer/],
+    [['music', 'generate', '--speed', 'fast', 'p'], /--speed must be a number greater than 0/],
     [['music', 'quote', '--character-count', '1e3'], /--character-count must be/],
     [['video', 'upscale', 'https://media.example/v.mp4', '--factor', '2.9', '--no-wait'], /--factor must be 1, 2, or 4/],
     [['video', 'quote', '-m', 'topaz-video-upscale', '--factor', ''], /--factor must be/],

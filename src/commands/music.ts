@@ -12,6 +12,7 @@ import {
   quoteAudioGeneration,
   retrieveGeneratedAudio,
   type AudioProcessingStatus,
+  type Lyrics,
 } from '../lib/api.js';
 import {
   DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -73,7 +74,14 @@ function parseMusicMode(options: { wait?: boolean; output?: string; timeout?: st
   };
 }
 
-type MusicSpec = { pricing: 'per-character' | 'other' };
+type MusicSpec = {
+  pricing: 'per-character' | 'other';
+  lyricsOptimizer: boolean;
+  loop: boolean;
+  forceInstrumental: boolean;
+  speed?: { min: number; max: number };
+  voices: { listed: string[]; custom: boolean };
+};
 
 /** What the live catalog says about a music model, or undefined when it can't be read or doesn't list the model. */
 async function fetchMusicSpec(model: string): Promise<MusicSpec | undefined> {
@@ -86,7 +94,41 @@ async function fetchMusicSpec(model: string): Promise<MusicSpec | undefined> {
   const spec = models.find((entry) => entry.id === model)?.model_spec as Record<string, unknown> | undefined;
   if (!spec) return undefined;
   const pricing = spec.pricing as Record<string, unknown> | undefined;
-  return { pricing: pricing && 'per_thousand_characters' in pricing ? 'per-character' : 'other' };
+  const { min_speed: minSpeed, max_speed: maxSpeed, voices } = spec;
+  return {
+    pricing: pricing && 'per_thousand_characters' in pricing ? 'per-character' : 'other',
+    lyricsOptimizer: spec.supports_lyrics_optimizer === true,
+    loop: spec.supports_loop === true,
+    forceInstrumental: spec.supports_force_instrumental === true,
+    speed: spec.supports_speed === true && typeof minSpeed === 'number' && typeof maxSpeed === 'number'
+      ? { min: minSpeed, max: maxSpeed }
+      : undefined,
+    voices: {
+      listed: Array.isArray(voices) ? voices.filter((voice): voice is string => typeof voice === 'string') : [],
+      custom: spec.supports_custom_voice_id === true,
+    },
+  };
+}
+
+/** Rejects options the catalog says the model doesn't support, before anything is quoted or queued. */
+function checkMusicOptions(model: string, request: AudioRequest, spec: MusicSpec | undefined): void {
+  if (!spec) return;
+  if (request.lyrics.kind === 'optimized' && !spec.lyricsOptimizer) {
+    throw new Error(`${model} can't write lyrics from the prompt (--lyrics-optimizer).`);
+  }
+  if (request.loop && !spec.loop) throw new Error(`${model} can't render a seamless loop (--loop).`);
+  if (request.forceInstrumental && !spec.forceInstrumental) throw new Error(`${model} has no instrumental mode (--instrumental).`);
+  if (request.speed !== undefined) {
+    if (!spec.speed) throw new Error(`${model} doesn't take a speed (--speed).`);
+    if (request.speed < spec.speed.min || request.speed > spec.speed.max) {
+      throw new Error(`--speed for ${model} must be between ${spec.speed.min} and ${spec.speed.max}.`);
+    }
+  }
+  if (request.voice !== undefined && !spec.voices.custom && !spec.voices.listed.includes(request.voice)) {
+    throw new Error(spec.voices.listed.length > 0
+      ? `Invalid --voice "${request.voice}" for ${model}. Use one of: ${spec.voices.listed.join(', ')}`
+      : `${model} doesn't take a voice (--voice).`);
+  }
 }
 
 type AudioRequest = Parameters<typeof queueAudioGeneration>[1];
@@ -225,6 +267,10 @@ export function registerMusicCommands(program: Command): void {
     .option('-l, --lyrics <path>', 'Read song lyrics from a file')
     .option('-d, --duration <seconds>', 'Output duration in seconds')
     .option('-i, --instrumental', 'Force instrumental output (supported models only)')
+    .option('--lyrics-optimizer', 'Let the model write the lyrics from the prompt (supported models only)')
+    .option('--loop', 'Render a clip whose end joins its start without a seam (supported models only)')
+    .option('--voice <voice>', "A voice from the model's list, or a custom voice ID where the model takes one")
+    .option('--speed <multiplier>', 'Speed multiplier, within the range the model allows')
     .option('--max-usd <amount>', 'Quote the job first, and refuse it before anything is charged if it costs more than this many US dollars')
     .option('-w, --wait', 'Wait for the track and save it')
     .option('-o, --output <path>', 'With --wait, file to save the track to (default: generated-audio with the extension for its format, numbered if it exists)')
@@ -242,23 +288,31 @@ export function registerMusicCommands(program: Command): void {
         const mode = parseMusicMode(options);
         const cap = parseSpendCap(options.maxUsd as string | undefined);
         const durationSeconds = parseIntegerOption(options.duration, '--duration', { min: 1 });
-        let lyricsPrompt: string | undefined;
+        const speed = parseDecimalOption(options.speed as string | undefined, '--speed', { min: 0, exclusiveMin: true });
+        if (options.lyricsOptimizer && options.lyrics) {
+          throw new Error("--lyrics-optimizer writes the lyrics from the prompt, so it can't be used with --lyrics.");
+        }
+        let lyrics: Lyrics = options.lyricsOptimizer ? { kind: 'optimized' } : { kind: 'none' };
         if (options.lyrics) {
           const lyricsPath = path.resolve(options.lyrics);
           if (!fs.existsSync(lyricsPath)) {
             throw new Error(`Lyrics file not found: ${options.lyrics}`);
           }
-          lyricsPrompt = await fs.promises.readFile(lyricsPath, 'utf8');
+          lyrics = { kind: 'written', text: await fs.promises.readFile(lyricsPath, 'utf8') };
         }
 
         const prompt = promptParts.join(' ');
         const request: AudioRequest = {
           model: options.model,
+          lyrics,
           durationSeconds,
-          lyricsPrompt,
           forceInstrumental: options.instrumental || undefined,
+          loop: options.loop || undefined,
+          voice: options.voice as string | undefined,
+          speed,
         };
-        const spec = cap.kind === 'capped' || mode.kind === 'wait' ? await fetchMusicSpec(options.model) : undefined;
+        const spec = await fetchMusicSpec(options.model);
+        checkMusicOptions(options.model, request, spec);
         const quote = await quoteWithinCap(
           () => quoteAudioGeneration(options.model, {
             durationSeconds,
