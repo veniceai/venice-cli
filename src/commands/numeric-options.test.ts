@@ -79,6 +79,7 @@ test('malformed numeric options are rejected before any request is sent', async 
     [['video', 'status', 'q1', '-m', 'm1', '--wait', '--timeout', '1e309'], /--timeout must be/],
     [['video', 'status', 'q1', '-m', 'm1', '--wait', '--timeout', '86401'], /--timeout must be a number greater than 0 and at most 86400/],
     [['video', 'generate', 'p', '--wait', '--timeout', '86401'], /--timeout must be a number greater than 0 and at most 86400/],
+    [['video', 'generate', 'p', '--max-usd', '0'], /--max-usd must be a number greater than 0/],
     [['music', 'status', 'mq1', '--wait', '--timeout', '0x10'], /--timeout must be a number greater than 0 and at most 86400/],
     [['music', 'status', 'mq1', '--wait', '--timeout', '86401'], /--timeout must be/],
     [['keys', 'create', '-n', 'k', '-o', 'key.txt', '--usd-limit', '0x10'], /--usd-limit must be/],

@@ -6,6 +6,7 @@ import { Command, Option } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import { collectOptionValue } from '../lib/chat-attachments.js';
+import { parseSpendCap, quoteWithinCap } from '../lib/spend-cap.js';
 import {
   TASK_TYPES,
   hasPerReferenceAudio,
@@ -334,17 +335,8 @@ function parseGenerateMode(options: { wait?: boolean; output?: string; timeout?:
   return { kind: 'queue' };
 }
 
-async function generateAndSaveVideo(
-  prompt: string,
-  request: VideoRequest,
-  mode: Extract<GenerateMode, { kind: 'wait' }>,
-  format: OutputFormat
-): Promise<void> {
-  const c = getChalk();
-  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-  // A failed quote never blocks the job: the queue request reports any real problem with it.
-  const quote = await quoteVideoGeneration({
+function quoteVideoRequest(request: VideoRequest): Promise<{ quote: number }> {
+  return quoteVideoGeneration({
     model: request.model,
     duration: request.duration,
     aspectRatio: request.aspectRatio,
@@ -353,7 +345,18 @@ async function generateAndSaveVideo(
     // Billing reads the start image only to size an auto aspect ratio, so the quote does the same.
     imageUrl: request.aspectRatio === 'auto' && request.inputs.start ? mediaUrl(request.inputs.start.image) : undefined,
     referenceVideoSeconds: referenceVideoSeconds(request.inputs),
-  }).then((result) => result.quote, () => undefined);
+  });
+}
+
+async function generateAndSaveVideo(
+  prompt: string,
+  request: VideoRequest,
+  quote: number | undefined,
+  mode: Extract<GenerateMode, { kind: 'wait' }>,
+  format: OutputFormat
+): Promise<void> {
+  const c = getChalk();
+  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
   const queued = await queueVideoGeneration(prompt, request);
   if (format !== 'json') {
@@ -484,6 +487,7 @@ export function registerVideoCommands(program: Command): void {
     .option('--scene-image <file|url>', 'Scene image for element models (repeatable, up to 4)', collectOptionValue, [])
     .option('--camera-trajectory <json>', 'Camera keyframes as a JSON array or a JSON file; needs -i')
     .addOption(new Option('--task-type <type>', 'Omni-reference task').choices(TASK_TYPES))
+    .option('--max-usd <amount>', 'Quote the job first, and refuse it before anything is charged if it costs more than this many US dollars')
     .option('-w, --wait', 'Wait for the video and save it')
     .option('-o, --output <path>', 'With --wait, file to save the video to (default: output.mp4, or output-1.mp4 and so on if it exists)')
     .option(
@@ -499,6 +503,7 @@ export function registerVideoCommands(program: Command): void {
 
       try {
         const mode = parseGenerateMode(options);
+        const cap = parseSpendCap(options.maxUsd as string | undefined);
         const inputs = await parseVideoInputs(options as VideoInputFlags);
         const constraints = await fetchVideoConstraints(options.model);
         const listed = applyVideoConstraints(
@@ -515,20 +520,22 @@ export function registerVideoCommands(program: Command): void {
           inputs,
         };
         checkVideoInputs(options.model, request, constraints);
+        const quote = await quoteWithinCap(() => quoteVideoRequest(request), cap, { wantPrice: mode.kind === 'wait' });
 
         if (mode.kind === 'wait') {
-          await generateAndSaveVideo(prompt, request, mode, format);
+          await generateAndSaveVideo(prompt, request, quote, mode, format);
           return;
         }
 
         const result = await queueVideoGeneration(prompt, request);
 
         if (format === 'json') {
-          console.log(formatJson(result));
+          console.log(formatJson(quote === undefined ? result : { ...result, quote_usd: quote }));
         } else {
           console.log(formatSuccess('Video generation queued!'));
           console.log(`\n${c.dim('Queue ID:')} ${c.cyan(terminalSafe(result.queue_id))}`);
           console.log(`${c.dim('Model:')} ${terminalSafe(result.model)}`);
+          if (quote !== undefined) console.log(`${c.dim('Price:')} ${c.cyan(`$${quote}`)}`);
           printQueuedDownloadUrl(result);
           console.log(`\n${c.dim('Check status with:')} ${shellCommand`venice video status ${apiId(result.queue_id)} -m ${apiId(result.model)}`}`);
         }
