@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { gcm } from '@noble/ciphers/aes.js'
-import { secp256k1 } from '@noble/curves/secp256k1'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
@@ -9,6 +9,7 @@ import { utf8ToBytes } from '@noble/hashes/utils.js'
 const HKDF_INFO = 'ecdsa_encryption'
 const EPHEMERAL_PUB_LENGTH = 65
 const NONCE_LENGTH = 12
+const SECRET_KEY_SEED_LENGTH = 48
 const AES_GCM_TAG_LENGTH = 16
 const ADDRESS_LENGTH = 20
 const HEX_BYTES_PATTERN = /^(?:[0-9a-fA-F]{2})*$/
@@ -59,10 +60,17 @@ const deriveAesKey = (privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array
 }
 
 /**
+ * Generate a secp256k1 secret key from a node:crypto seed, because noble's
+ * default RNG needs the WebCrypto global.
+ */
+const randomSecretKey = (): Uint8Array =>
+  secp256k1.utils.randomSecretKey(randomBytes(SECRET_KEY_SEED_LENGTH))
+
+/**
  * Generate ephemeral key pair for E2EE using secp256k1 curve.
  */
 export const generateEphemeralKeyPair = (): { privateKey: Uint8Array; publicKeyHex: string } => {
-  const privateKey = secp256k1.utils.randomSecretKey()
+  const privateKey = randomSecretKey()
   const publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKey, false))
   return { privateKey, publicKeyHex }
 }
@@ -76,7 +84,7 @@ export const encryptMessage = (plaintext: string, modelPublicKeyHex: string): st
     throw new Error('Model public key is not a valid uncompressed secp256k1 key')
   }
 
-  const ephemeralPrivateKey = secp256k1.utils.randomSecretKey()
+  const ephemeralPrivateKey = randomSecretKey()
   const ephemeralPublic = secp256k1.getPublicKey(ephemeralPrivateKey, false)
   const aesKey = deriveAesKey(ephemeralPrivateKey, modelPublicKey)
   zeroFill(ephemeralPrivateKey)

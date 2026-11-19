@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { secp256k1 } from '@noble/curves/secp256k1';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey } from '../lib/e2ee.js';
 import { childEnv } from '../lib/test-env.js';
@@ -159,8 +159,11 @@ function signedPayload(): { payload: Record<string, unknown>; signer: string } {
   const messageBytes = new TextEncoder().encode(SIGNED_TEXT);
   const prefix = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${messageBytes.length}`);
   const digest = keccak_256(Buffer.concat([prefix, messageBytes]));
-  const sig = secp256k1.sign(digest, privateKey);
-  const v = 27 + sig.recovery;
+  const sig = secp256k1.Signature.fromBytes(
+    secp256k1.sign(digest, privateKey, { prehash: false, format: 'recovered' }),
+    'recovered'
+  );
+  const v = 27 + sig.recovery!;
   const signature = `0x${Buffer.from(sig.toBytes('compact')).toString('hex')}${v.toString(16)}`;
   const signer = deriveSigningAddressFromKey(Buffer.from(secp256k1.getPublicKey(privateKey, false)).toString('hex'));
   assert.ok(signer);
