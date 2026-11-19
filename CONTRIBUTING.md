@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We want Venice CLI to
 
 ### Prerequisites
 
-- Node.js 22 or later
+- Node.js 22.12 or later
 - npm or yarn
 - A Venice AI API key for testing
 
