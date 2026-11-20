@@ -34,7 +34,7 @@
     "ajv-formats": "^3.0.1",
     "chalk": "^6.0.1",
     "commander": "^12.1.0",
-    "ora": "^9.4.1"
+    "ora": "^10.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
