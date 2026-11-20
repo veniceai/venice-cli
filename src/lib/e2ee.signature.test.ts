@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { secp256k1 } from '@noble/curves/secp256k1';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey, recoverSignerAddress, verifySignature } from './e2ee.js';
 
@@ -28,8 +28,14 @@ function makeSigner() {
     sign(signedText: string) {
       const message = new TextEncoder().encode(signedText);
       const prefix = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${message.length}`);
-      const signature = secp256k1.sign(keccak_256(Buffer.concat([prefix, message])), privateKey);
-      const v = (27 + signature.recovery).toString(16);
+      const signature = secp256k1.Signature.fromBytes(
+        secp256k1.sign(keccak_256(Buffer.concat([prefix, message])), privateKey, {
+          prehash: false,
+          format: 'recovered',
+        }),
+        'recovered'
+      );
+      const v = (27 + signature.recovery!).toString(16);
       return {
         signedText,
         signatureHex: `0x${Buffer.from(signature.toBytes('compact')).toString('hex')}${v}`,

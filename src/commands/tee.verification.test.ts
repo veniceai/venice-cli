@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { secp256k1 } from '@noble/curves/secp256k1';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { deriveSigningAddressFromKey, generateEphemeralKeyPair, recoverSignerAddress } from '../lib/e2ee.js';
 import { buildTdxQuote } from '../lib/test-tdx-quote.js';
@@ -108,8 +108,11 @@ function attestationRoute(change: Record<string, unknown> = {}) {
 function signEip191(text: string, key: KeyPair): string {
   const message = Buffer.from(text, 'utf8');
   const digest = keccak_256(Buffer.concat([Buffer.from(`\x19Ethereum Signed Message:\n${message.length}`), message]));
-  const sig = secp256k1.sign(digest, key.privateKey);
-  const signature = `0x${Buffer.from(sig.toBytes('compact')).toString('hex')}${(27 + sig.recovery).toString(16)}`;
+  const sig = secp256k1.Signature.fromBytes(
+    secp256k1.sign(digest, key.privateKey, { prehash: false, format: 'recovered' }),
+    'recovered'
+  );
+  const signature = `0x${Buffer.from(sig.toBytes('compact')).toString('hex')}${(27 + sig.recovery!).toString(16)}`;
   assert.equal(recoverSignerAddress(text, signature), deriveSigningAddressFromKey(key.publicKeyHex));
   return signature;
 }
