@@ -66,7 +66,7 @@ To upgrade, run `npm install -g veniceai-cli@latest`.
 
 Coding agents such as Claude Code, Codex, Cursor and OpenCode can drive the CLI directly. Each media job is one command that waits for the result, saves it, and prints JSON.
 
-1. Install the CLI (Node.js 22 or later), or run a pinned version with `npx -y veniceai-cli@<version>`:
+1. Install the CLI (Node.js 22.12 or later), or run a pinned version with `npx -y veniceai-cli@<version>`:
 
    ```bash
    npm i -g veniceai-cli
@@ -1068,7 +1068,7 @@ venice chat -m <tee-capable-model> "Hello from the command line"
 
 ## Requirements
 
-- Node.js 22 or later
+- Node.js 22.12 or later
 - A Venice AI API key
 
 ## Development

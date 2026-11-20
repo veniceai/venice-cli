@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Node.js 22 or later is required.**
+- **Node.js 22.12 or later is required.**
+- Commands refuse arguments they don't take instead of ignoring them, so `venice config get default_model output_format` exits with an error rather than printing only `default_model`.
 - With `-f json`, `image`, `image-edit`, `image-multi-edit`, `image-bg-remove` and `upscale` save the image and print its path, size and type instead of base64. Pass `--base64` for the previous output.
 - With `-f json`, errors are one line of JSON on stderr instead of text.
 - `video generate` and `video quote` fill in a ratio and duration the model lists when none is given, instead of no ratio and a fixed `5s`: `16:9` where listed, unless the model lists `auto` or `adaptive` first, and the first listed duration. They reject values the model doesn't list.
