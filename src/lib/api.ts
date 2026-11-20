@@ -28,6 +28,7 @@ import {
   MAX_AUDIO_DOWNLOAD_BYTES,
   MAX_IMAGE_EDIT_BYTES,
   MAX_IMAGE_DOWNLOAD_BYTES,
+  MAX_MULTI_EDIT_IMAGES,
   MAX_UPSCALE_IMAGE_BYTES,
   MAX_TRANSCRIPTION_AUDIO_BYTES,
   MAX_DOCUMENT_PARSE_BYTES,
@@ -1116,14 +1117,17 @@ export async function editImage(
   return response;
 }
 
-// Edit using one to three local image layers
+// Edit using local image layers, the first being the base image
 export async function multiEditImage(
   imagePaths: string[],
   prompt: string,
   options: ImageEditOptions = {}
 ): Promise<ArrayBuffer> {
-  if (imagePaths.length < 1 || imagePaths.length > 3) {
-    throw new Error('Multi-edit requires between 1 and 3 images.');
+  if (imagePaths.length < 1 || imagePaths.length > MAX_MULTI_EDIT_IMAGES) {
+    throw new Error(
+      `Multi-edit takes between 1 and ${MAX_MULTI_EDIT_IMAGES} images; ` +
+      '"venice models show <model>" lists the model\'s own limit as maxInputImages.'
+    );
   }
 
   const body: Record<string, unknown> = {

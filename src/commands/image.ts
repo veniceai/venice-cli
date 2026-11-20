@@ -19,6 +19,7 @@ import {
   formatBytes,
   writeBufferToFile,
   MAX_IMAGE_DOWNLOAD_BYTES,
+  MAX_MULTI_EDIT_IMAGES,
 } from '../lib/media.js';
 import { parseDecimalOption, parseIntegerOption } from '../lib/options.js';
 import { getDefaultImageModel } from '../lib/config.js';
@@ -363,7 +364,7 @@ export function registerImageCommand(program: Command): void {
 
   program
     .command('image-multi-edit <images...>')
-    .description('Edit using one to three local image layers')
+    .description(`Edit using up to ${MAX_MULTI_EDIT_IMAGES} local image layers (the limit varies by model)`)
     .requiredOption('-p, --prompt <prompt>', 'Edit instructions')
     .option('-m, --model <model>', 'Edit model to use')
     .option('-o, --output <path>', 'Save result to file')
