@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Video and music jobs exit non-zero when they fail or are not ready, reject responses of the wrong shape, and save video only with a valid MP4 header.
 - Chat streams follow the SSE spec and fail on errors, truncation and stalls; E2EE output stops at the first bad chunk and requires a finish reason.
 - Every numeric option is parsed by one strict parser, and malformed options are rejected before any request is sent.
+- `image-multi-edit` takes up to 16 images instead of 3, since most edit models accept more. Venice checks each model's own limit, which `venice models show <model>` lists as `maxInputImages`.
 
 ### Security
 

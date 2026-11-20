@@ -17,6 +17,8 @@ const MB = 1024 * 1024;
 // them base64-encoded in one generation response must still fit in a single JavaScript string.
 export const MAX_IMAGE_DOWNLOAD_BYTES = 80 * MB;
 export const MAX_IMAGE_EDIT_BYTES = 25 * MB;
+// The most input images any edit model takes. Venice enforces each model's own maxInputImages.
+export const MAX_MULTI_EDIT_IMAGES = 16;
 export const MAX_AUDIO_DOWNLOAD_BYTES = 500 * MB;
 export const MAX_VIDEO_DOWNLOAD_BYTES = 1024 * MB;
 export const MAX_UPSCALE_IMAGE_BYTES = 25 * MB;
