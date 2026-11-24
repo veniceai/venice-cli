@@ -188,7 +188,7 @@ venice chat -m e2ee-qwen3-6-35b-a3b -q "This is encrypted but looks like normal 
 
 | Option | Description |
 |--------|-------------|
-| `-m, --model <model>` | Model to use (default: kimi-k2-5) |
+| `-m, --model <model>` | Model to use (default: deepseek-v4-1-flash-1017-uncensored) |
 | `-s, --system <prompt>` | System prompt |
 | `-c, --character <slug>` | Character slug from the Venice API catalog |
 | `-t, --tools <tools>` | Comma-separated list of built-in tools; an unknown name is an error |
@@ -261,7 +261,7 @@ venice responses -f json "List 3 colors"
 
 | Option | Description |
 |--------|-------------|
-| `-m, --model <model>` | Model to use (default: kimi-k2-5) |
+| `-m, --model <model>` | Model to use (default: deepseek-v4-1-flash-1017-uncensored) |
 | `--max-output-tokens <n>` | Maximum number of tokens to generate |
 | `--temperature <n>` | Sampling temperature (0-2) |
 | `--top-p <n>` | Nucleus sampling (0-1) |
@@ -784,7 +784,7 @@ venice config set api_key
 printf '%s' "$VENICE_API_KEY" | venice config set api_key --stdin
 
 # Set non-secret values
-venice config set default_model kimi-k2-5
+venice config set default_model deepseek-v4-1-flash-1017-uncensored
 venice config set default_voice af_sky
 
 # Get a value

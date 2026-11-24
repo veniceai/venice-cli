@@ -160,7 +160,7 @@ export function requireApiKey(): string {
 
 export function getDefaultModel(): string {
   const config = loadConfig();
-  return config.default_model || 'kimi-k2-5';
+  return config.default_model || 'deepseek-v4-1-flash-1017-uncensored';
 }
 
 export function getDefaultImageModel(): string {
