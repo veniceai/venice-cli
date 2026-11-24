@@ -647,7 +647,7 @@ function recordChatUsage(usage: unknown, options: ChatCompletionRequestOptions):
   trackUsage({
     ...tokenCounts(usage),
     command: 'chat',
-    model: options.model || 'kimi-k2-5',
+    model: options.model || 'deepseek-v4-1-flash-1017-uncensored',
   });
 }
 
@@ -657,7 +657,7 @@ export function buildChatCompletionBody(
   stream: boolean
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
-    model: options.model || 'kimi-k2-5',
+    model: options.model || 'deepseek-v4-1-flash-1017-uncensored',
     messages,
     stream,
   };

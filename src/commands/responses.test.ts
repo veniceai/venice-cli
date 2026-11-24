@@ -40,7 +40,7 @@ test('responses posts the input with the default model and prints the output tex
   const result = await runCli(['responses', 'Say', 'hello'], responsesApi());
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.requests.map((request) => [request.method, request.path]), [['POST', '/responses']]);
-  assert.deepEqual(sentBody(result.requests), { model: 'kimi-k2-5', input: 'Say hello' });
+  assert.deepEqual(sentBody(result.requests), { model: 'deepseek-v4-1-flash-1017-uncensored', input: 'Say hello' });
   assert.equal(result.stdout, 'Hello world\n');
 });
 
