@@ -78,7 +78,7 @@ Coding agents such as Claude Code, Codex, Cursor and OpenCode can drive the CLI 
    export VENICE_API_KEY=your-api-key
    ```
 
-3. Run one command per result, with `--wait -o` for video and music, and an explicit `-f json` (piped output otherwise defaults to `raw`):
+3. Run one command per result, with `--wait -o` for video and music, and an explicit `-f json` (piped output otherwise defaults to `raw`, or to the `output_format` config key when it is set):
 
    ```bash
    venice video generate "A lighthouse at dusk" -m veo3.1-fast-text-to-video \
@@ -805,7 +805,7 @@ venice config path
 | `default_model` | Default chat model |
 | `default_image_model` | Default image generation model |
 | `default_voice` | Default TTS voice |
-| `output_format` | Default output format |
+| `output_format` | Output format when `-f` is not given, including for piped output: `pretty`, `json`, `markdown` or `raw` |
 | `no_color` | Disable colored output |
 | `show_usage` | Show token usage after requests |
 
@@ -997,9 +997,11 @@ that limit is exceeded.
 
 Each command's `--help` lists the formats it supports. An unknown `--format` value is an error. Commands without a separate `markdown` or `raw` form print their `pretty` output for those values.
 
-With `-f json`, stdout carries only results, and an error is one line of JSON on stderr with the message, the API's status and code, and any next-step fields Venice sends (see [Use with coding agents](#use-with-coding-agents)).
+With `-f json`, or with `output_format` set to `json`, stdout carries only results, and an error is one line of JSON on stderr with the message, the API's status and code, and any next-step fields Venice sends (see [Use with coding agents](#use-with-coding-agents)).
 
 When output is piped or redirected and no `--format` is given, the CLI turns off colors and spinners and selects `raw`. Commands that print a single result, such as `chat`, `search`, `transcribe`, and `parse`, then print only that result; most other commands print the same text as `pretty`. Use `-f json` when a script needs to parse the output.
+
+To change the default, set `output_format`, for example `venice config set output_format json`. It applies whenever `--format` is not given, on a terminal or in a pipe, and an explicit `--format` still wins.
 
 ```bash
 # Explicit format

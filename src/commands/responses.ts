@@ -42,8 +42,8 @@ export function registerResponsesCommand(program: Command): void {
     .option('--image <path>', 'Attach an image file or URL (repeatable)', collectOptionValue, [])
     .option('-f, --format <format>', 'Output format (pretty|json|raw)')
     .action(async (inputParts: string[], options) => {
+      const format = detectOutputFormat(options.format);
       try {
-        const format = detectOutputFormat(options.format);
         const model = String(options.model || getDefaultModel());
         if (modelIdRequiresE2EE(model)) {
           throw new Error(
@@ -97,7 +97,7 @@ export function registerResponsesCommand(program: Command): void {
           console.error(formatWarning('The response contained no text output.'));
         }
       } catch (error) {
-        reportError(error, options.format === 'json' ? 'json' : undefined);
+        reportError(error, format);
         process.exit(1);
       }
     });

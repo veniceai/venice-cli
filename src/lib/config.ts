@@ -8,8 +8,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import type { Message, VeniceConfig } from '../types/index.js';
-import { sanitizeMessagesForHistory } from '../types/index.js';
+import type { Message, OutputFormat, VeniceConfig } from '../types/index.js';
+import { OUTPUT_FORMATS, sanitizeMessagesForHistory } from '../types/index.js';
 import { writeFileAtomic } from './safe-write.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.venice');
@@ -116,6 +116,9 @@ export function getConfigValue(key: keyof VeniceConfig): unknown {
 }
 
 export function setConfigValue(key: keyof VeniceConfig, value: string): void {
+  if (key === 'output_format' && !isOutputFormat(value)) {
+    throw new Error(`Invalid output_format "${value}". Use one of: ${OUTPUT_FORMATS.join(', ')}`);
+  }
   const config = loadConfig();
   
   // Handle boolean conversions
@@ -173,9 +176,13 @@ export function getDefaultVoice(): string {
   return config.default_voice || 'af_sky';
 }
 
-export function getOutputFormat(): string {
-  const config = loadConfig();
-  return config.output_format || 'pretty';
+export function getOutputFormat(): OutputFormat | undefined {
+  const format = loadConfigOrDefaults().output_format;
+  return isOutputFormat(format) ? format : undefined;
+}
+
+function isOutputFormat(value: unknown): value is OutputFormat {
+  return OUTPUT_FORMATS.includes(value as OutputFormat);
 }
 
 export function isColorEnabled(): boolean {
