@@ -10,9 +10,26 @@ import {
   deleteConfigValue,
   getConfigPath,
 } from '../lib/config.js';
-import { formatSuccess, formatError, getChalk, detectOutputFormat } from '../lib/output.js';
+import { formatSuccess, formatInfo, getChalk, detectOutputFormat } from '../lib/output.js';
 import { askHidden, promptOutput, promptUnavailableReason, question } from '../lib/prompt.js';
 import type { VeniceConfig } from '../types/index.js';
+
+const CONFIG_KEYS: ReadonlyArray<keyof VeniceConfig> = [
+  'api_key',
+  'default_model',
+  'default_image_model',
+  'default_voice',
+  'output_format',
+  'no_color',
+  'show_usage',
+];
+
+function parseConfigKey(key: string): keyof VeniceConfig {
+  if (!CONFIG_KEYS.includes(key as keyof VeniceConfig)) {
+    throw new Error(`Invalid config key: ${key}\n\nValid keys: ${CONFIG_KEYS.join(', ')}`);
+  }
+  return key as keyof VeniceConfig;
+}
 
 export function registerConfigCommand(program: Command): void {
   const config = program
@@ -26,17 +43,7 @@ export function registerConfigCommand(program: Command): void {
       console.log(c.bold('Venice CLI Configuration\n'));
       console.log(`${c.dim('Config file:')} ${getConfigPath()}\n`);
 
-      const keys: Array<keyof VeniceConfig> = [
-        'api_key',
-        'default_model',
-        'default_image_model',
-        'default_voice',
-        'output_format',
-        'no_color',
-        'show_usage',
-      ];
-
-      for (const key of keys) {
+      for (const key of CONFIG_KEYS) {
         const value = cfg[key];
         const displayValue = key === 'api_key' && value
           ? maskApiKey(value as string)
@@ -69,17 +76,7 @@ export function registerConfigCommand(program: Command): void {
       console.log(c.bold('Venice CLI Configuration\n'));
       console.log(`${c.dim('Config file:')} ${getConfigPath()}\n`);
 
-      const keys: Array<keyof VeniceConfig> = [
-        'api_key',
-        'default_model',
-        'default_image_model',
-        'default_voice',
-        'output_format',
-        'no_color',
-        'show_usage',
-      ];
-
-      for (const key of keys) {
+      for (const key of CONFIG_KEYS) {
         const value = cfg[key];
         const displayValue = key === 'api_key' && value
           ? maskApiKey(value as string)
@@ -97,22 +94,7 @@ export function registerConfigCommand(program: Command): void {
     .description('Set a configuration value')
     .option('--stdin', 'Read the API key from standard input')
     .action(async (key: string, value: string | undefined, options: { stdin?: boolean }) => {
-      const validKeys: Array<keyof VeniceConfig> = [
-        'api_key',
-        'default_model',
-        'default_image_model',
-        'default_voice',
-        'output_format',
-        'no_color',
-        'show_usage',
-      ];
-
-      if (!validKeys.includes(key as keyof VeniceConfig)) {
-        console.error(formatError(
-          `Invalid config key: ${key}\n\nValid keys: ${validKeys.join(', ')}`
-        ));
-        process.exit(1);
-      }
+      const configKey = parseConfigKey(key);
 
       if (options.stdin && key !== 'api_key') {
         throw new Error('--stdin is only supported for api_key');
@@ -155,7 +137,7 @@ export function registerConfigCommand(program: Command): void {
         throw new Error(`Value for ${key} cannot be empty`);
       }
 
-      setConfigValue(key as keyof VeniceConfig, value);
+      setConfigValue(configKey, value);
       
       const displayValue = key === 'api_key' ? maskApiKey(value) : value;
       console.log(formatSuccess(`Set ${key} = ${displayValue}`));
@@ -166,13 +148,14 @@ export function registerConfigCommand(program: Command): void {
     .command('get <key>')
     .description('Get a configuration value')
     .action((key: string) => {
+      const configKey = parseConfigKey(key);
       const cfg = loadConfig();
-      const value = (cfg as any)[key];
+      const value = cfg[configKey];
       
       if (value === undefined) {
         console.log('(not set)');
       } else if (key === 'api_key') {
-        console.log(maskApiKey(value));
+        console.log(maskApiKey(String(value)));
       } else {
         console.log(value);
       }
@@ -183,8 +166,12 @@ export function registerConfigCommand(program: Command): void {
     .command('unset <key>')
     .description('Remove a configuration value')
     .action((key: string) => {
-      deleteConfigValue(key as keyof VeniceConfig);
-      console.log(formatSuccess(`Removed ${key}`));
+      const configKey = parseConfigKey(key);
+      if (deleteConfigValue(configKey)) {
+        console.log(formatSuccess(`Removed ${key}`));
+      } else {
+        console.log(formatInfo(`${key} was not set`));
+      }
     });
 
   // Show config path

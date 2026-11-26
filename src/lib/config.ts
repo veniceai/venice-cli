@@ -128,10 +128,12 @@ export function setConfigValue(key: keyof VeniceConfig, value: string): void {
   saveConfig(config);
 }
 
-export function deleteConfigValue(key: keyof VeniceConfig): void {
+export function deleteConfigValue(key: keyof VeniceConfig): boolean {
   const config = loadConfig();
+  if (!Object.hasOwn(config, key)) return false;
   delete config[key];
   saveConfig(config);
+  return true;
 }
 
 export function getApiKey(): string | undefined {

@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The default chat model is `deepseek-v4-1-flash-1017-uncensored`, the model behind the API's `default` trait. Venice retired `kimi-k2-5`, so `chat`, `search` and `responses` failed with "Specified model not found" unless `-m` or `default_model` named another model.
+- `config get` and `config unset` reject unknown keys, like `config set`, so a typo such as `config unset api_ke` no longer reports a removal while `api_key` stays in the file. `config unset` also says when a key was not set.
 - Image outputs up to 80 MB are kept, so a large 4096x4096 PNG is no longer discarded after a paid request, and default file names use the format Venice returned.
 - `venice video transcribe` no longer calls a retired endpoint: it sends the video to the audio transcription endpoint.
 - Paid requests are no longer re-sent after ambiguous failures, API responses are read within size and time limits, and redirects from the API are refused.

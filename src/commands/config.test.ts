@@ -183,6 +183,64 @@ test('config show --format json masks api_key', () => {
   }
 });
 
+test('config get and unset reject unknown keys and leave the config file unchanged', () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
+
+  try {
+    const content = JSON.stringify({ api_key: secretKey, default_model: 'kimi-k2-5' }, null, 2);
+    const configFile = writeRawConfig(homeDir, content);
+
+    for (const args of [
+      ['config', 'unset', 'api_ke'],
+      ['config', 'get', 'api_ke'],
+      ['config', 'get', 'constructor'],
+      ['config', 'set', 'api_ke', 'x'],
+    ]) {
+      const result = runCli(args, homeDir);
+      const label = args.join(' ');
+      assert.equal(result.status, 1, label);
+      assert.equal(result.stdout, '', label);
+      assert.match(result.stderr, /^Error: Invalid config key: /, label);
+      assert.match(result.stderr, /Valid keys: api_key, default_model, default_image_model/, label);
+    }
+    assert.equal(readFileSync(configFile, 'utf8'), content);
+
+    const apiKey = runCli(['config', 'get', 'api_key'], homeDir);
+    assert.equal(apiKey.status, 0, apiKey.stderr);
+    assert.equal(apiKey.stdout, 'sk-s...lost\n');
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test('config unset removes a key that is set and says when a key was not set', () => {
+  const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
+
+  try {
+    const configFile = writeRawConfig(
+      homeDir,
+      JSON.stringify({ api_key: secretKey, default_model: 'kimi-k2-5' }, null, 2)
+    );
+
+    const removed = runCli(['config', 'unset', 'default_model'], homeDir);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.match(removed.stdout, /Removed default_model/);
+    assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')), { api_key: secretKey });
+
+    const get = runCli(['config', 'get', 'default_model'], homeDir);
+    assert.equal(get.status, 0, get.stderr);
+    assert.equal(get.stdout, '(not set)\n');
+
+    const again = runCli(['config', 'unset', 'default_model'], homeDir);
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /default_model was not set/);
+    assert.doesNotMatch(again.stdout, /Removed/);
+    assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')), { api_key: secretKey });
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test('config set api_key --stdin saves without printing the key', () => {
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-config-test-'));
   const apiKey = 'sk-stdin-1234567890';
