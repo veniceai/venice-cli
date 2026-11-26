@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 import {
   createResponse,
+  VeniceApiError,
   type ResponsesInputPart,
   type ResponsesRequest,
   type ResponsesResult,
@@ -78,14 +79,20 @@ export function registerResponsesCommand(program: Command): void {
         const response = await createResponse({ model, input, ...settings });
         assertResponsesResult(response);
 
+        if (response.status === 'failed') {
+          const code = response.error?.code;
+          throw new VeniceApiError(
+            `The response failed: ${response.error?.message ?? 'no reason given'}`,
+            undefined,
+            typeof code === 'string' ? code : undefined
+          );
+        }
+
         if (format === 'json') {
           console.log(formatJson(response));
           return;
         }
 
-        if (response.status === 'failed') {
-          throw new Error(`The response failed: ${response.error?.message ?? 'no reason given'}`);
-        }
         const output = responseOutputText(response);
         if (output) {
           console.log(terminalSafe(output));

@@ -152,3 +152,29 @@ test('responses reports failed, incomplete and malformed responses', async () =>
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /Unexpected response from Venice: the response has no output/);
 });
+
+test('responses -f json fails on a failed response and still prints an incomplete one', async () => {
+  const failed = await runCli(['responses', '-f', 'json', 'hi'], responsesApi(responseBody({
+    status: 'failed',
+    output: [],
+    error: { code: 'server_error', message: 'upstream broke' },
+  })));
+  assert.equal(failed.status, 1);
+  assert.equal(failed.stdout, '');
+  assert.deepEqual(JSON.parse(failed.stderr), {
+    error: { message: 'The response failed: upstream broke', code: 'server_error' },
+  });
+
+  const noReason = await runCli(['responses', '-f', 'json', 'hi'], responsesApi(responseBody({
+    status: 'failed',
+    output: [],
+  })));
+  assert.equal(noReason.status, 1);
+  assert.equal(noReason.stdout, '');
+  assert.deepEqual(JSON.parse(noReason.stderr), { error: { message: 'The response failed: no reason given' } });
+
+  const incompleteBody = responseBody({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } });
+  const incomplete = await runCli(['responses', '-f', 'json', 'hi'], responsesApi(incompleteBody));
+  assert.equal(incomplete.status, 0, incomplete.stderr);
+  assert.deepEqual(JSON.parse(incomplete.stdout), incompleteBody);
+});
