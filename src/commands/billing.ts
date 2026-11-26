@@ -18,7 +18,7 @@ import {
   getChalk,
   terminalSafe,
 } from '../lib/output.js';
-import { parseIntegerOption } from '../lib/options.js';
+import { isCalendarDate, parseIntegerOption } from '../lib/options.js';
 
 const CURRENCIES = ['USD', 'DIEM', 'BUNDLED_CREDITS'] as const;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -158,12 +158,6 @@ function parseAnalyticsQuery(
     throw new Error('--start cannot be later than --end.');
   }
   return { startDate: start, endDate: end };
-}
-
-function isCalendarDate(value: string): boolean {
-  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function assertCalendarDate(value: string, option: string): void {

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runCli } from '../lib/test-cli.js';
 
 const cliPath = fileURLToPath(new URL('../index.js', import.meta.url));
 const KEY_ID = 'e28e82dc-9df2-4b47-b726-d0a222ef2ab5';
@@ -172,6 +173,43 @@ test('keys create gives a recovery command when deleting a key without a secret 
   assert.match(result.stderr, new RegExp(`venice keys delete ${KEY_ID} --force`));
   assert.deepEqual(result.methods, ['POST', 'DELETE']);
   assert.equal(result.secretSaved, false);
+});
+
+test('keys create refuses an impossible --expires date before creating a key or a secret file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'venice-keys-expires-'));
+
+  try {
+    for (const expires of ['2026-02-30', '2026-04-31', '2027-02-29', '2026-02-30T00:00:00Z']) {
+      const result = await runCli(
+        ['keys', 'create', '-n', 'ci', '-o', 'key.txt', '--expires', expires],
+        () => undefined,
+        { cwd: dir }
+      );
+
+      assert.equal(result.status, 1, expires);
+      assert.match(result.stderr, /--expires must be a calendar date in YYYY-MM-DD format or an ISO 8601 UTC timestamp/);
+      assert.ok(result.stderr.includes(`(got "${expires}")`), result.stderr);
+      assert.deepEqual(result.requests, [], expires);
+      assert.deepEqual(readdirSync(dir), [], expires);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('keys create sends a real --expires date as given', async () => {
+  for (const expires of ['2026-02-28', '2028-02-29', '2026-02-28T00:00:00Z', '2026-02-28T23:59:59.999Z']) {
+    const result = await runCli(
+      ['keys', 'create', '-n', 'ci', '-o', 'key.txt', '--expires', expires],
+      ({ method, path }) => method === 'POST' && path === '/api_keys'
+        ? { data: { id: KEY_ID, apiKey: SECRET, apiKeyType: 'INFERENCE', description: 'ci', expiresAt: expires } }
+        : undefined
+    );
+
+    assert.equal(result.status, 0, `${expires}: ${result.stderr}`);
+    assert.deepEqual(result.requests.map((request) => [request.method, request.path]), [['POST', '/api_keys']]);
+    assert.equal(JSON.parse(result.requests[0].body).expiresAt, expires);
+  }
 });
 
 test('keys create refuses a response without a valid key ID and does not save its secret', async () => {

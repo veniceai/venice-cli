@@ -36,7 +36,7 @@ import {
   getChalk,
   terminalSafe,
 } from '../lib/output.js';
-import { parseDecimalOption } from '../lib/options.js';
+import { isCalendarDate, parseDecimalOption } from '../lib/options.js';
 import { promptOutput, promptUnavailableReason } from '../lib/prompt.js';
 import {
   assertApiKeyDetails,
@@ -347,8 +347,15 @@ function parseEnum<const T extends readonly string[]>(
 function validateExpiration(value: string): void {
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
   const utcDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
-  if ((!dateOnly.test(value) && !utcDateTime.test(value)) || Number.isNaN(Date.parse(value))) {
-    throw new Error('expires must be YYYY-MM-DD or an ISO 8601 UTC timestamp');
+  if (
+    (!dateOnly.test(value) && !utcDateTime.test(value)) ||
+    !isCalendarDate(value) ||
+    Number.isNaN(Date.parse(value))
+  ) {
+    throw new Error(
+      '--expires must be a calendar date in YYYY-MM-DD format or an ISO 8601 UTC timestamp, ' +
+      `such as 2026-12-31 or 2026-12-31T00:00:00Z (got ${JSON.stringify(value)}).`
+    );
   }
 }
 
