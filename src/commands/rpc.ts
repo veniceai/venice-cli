@@ -13,7 +13,6 @@ import {
   type JsonRpcRequest,
 } from '../lib/api.js';
 import {
-  formatError,
   reportError,
   formatJson,
   getChalk,
@@ -59,23 +58,17 @@ Examples:
 
         if (!network || network === 'networks') {
           if (options.batch) {
-            console.error(formatError('Network is required for --batch. Usage: venice rpc <network> --batch <file>'));
-            process.exitCode = 1;
-            return;
+            throw new Error('Network is required for --batch. Usage: venice rpc <network> --batch <file>');
           }
           if (options.idempotencyKey !== undefined) {
-            console.error(formatError('--idempotency-key applies only to RPC calls, not "venice rpc networks".'));
-            process.exitCode = 1;
-            return;
+            throw new Error('--idempotency-key applies only to RPC calls, not "venice rpc networks".');
           }
           await printNetworks(format);
           return;
         }
 
         if (options.batch && method) {
-          console.error(formatError('Use either a method or --batch, not both.'));
-          process.exitCode = 1;
-          return;
+          throw new Error('Use either a method or --batch, not both.');
         }
 
         let body: JsonRpcRequest | JsonRpcRequest[];
@@ -83,12 +76,12 @@ Examples:
         if (options.batch) {
           body = readBatchFile(options.batch);
         } else if (!method) {
-          console.error(formatError('Missing JSON-RPC method.'));
-          console.error('Usage: venice rpc <network> <method> [params...]');
-          console.error('       venice rpc <network> --batch <file>');
-          console.error('       venice rpc networks');
-          process.exitCode = 1;
-          return;
+          throw new Error(
+            'Missing JSON-RPC method.\n' +
+            'Usage: venice rpc <network> <method> [params...]\n' +
+            '       venice rpc <network> --batch <file>\n' +
+            '       venice rpc networks'
+          );
         } else {
           body = buildJsonRpcRequest(method, params);
         }

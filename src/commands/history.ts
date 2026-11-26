@@ -14,7 +14,6 @@ import { parseIntegerOption } from '../lib/options.js';
 import { confirm, promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatSuccess,
-  formatError,
   reportError,
   formatJson,
   getChalk,
@@ -124,7 +123,7 @@ export function registerHistoryCommand(program: Command): void {
       if (id) {
         conv = conversations.find(c => c.id === id || c.id.startsWith(id));
         if (!conv) {
-          console.error(formatError(`Conversation not found: ${id}`));
+          reportError(`Conversation not found: ${id}`, format);
           process.exit(1);
         }
       } else {

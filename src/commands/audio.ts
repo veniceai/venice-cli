@@ -14,7 +14,6 @@ import {
 import { getDefaultVoice } from '../lib/config.js';
 import {
   formatSuccess,
-  formatError,
   reportError,
   formatJson,
   getChalk,
@@ -105,7 +104,7 @@ export function registerAudioCommands(program: Command): void {
       }
 
       if (!text) {
-        console.error(formatError('No text provided. Usage: venice tts "Your text"'));
+        reportError('No text provided. Usage: venice tts "Your text"', options.json ? 'json' : undefined);
         process.exit(1);
       }
 
@@ -197,7 +196,7 @@ export function registerAudioCommands(program: Command): void {
       try {
         transcribeOptions = parseTranscribeOptions(options);
       } catch (error) {
-        console.error(formatError(error instanceof Error ? error.message : String(error)));
+        reportError(error, format);
         process.exit(1);
       }
 
@@ -205,7 +204,7 @@ export function registerAudioCommands(program: Command): void {
       const resolvedPath = path.resolve(audioPath);
       
       if (!fs.existsSync(resolvedPath)) {
-        console.error(formatError(`File not found: ${audioPath}`));
+        reportError(`File not found: ${audioPath}`, format);
         process.exit(1);
       }
 

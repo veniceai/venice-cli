@@ -25,7 +25,6 @@ import {
 import { promptUnavailableReason } from '../lib/prompt.js';
 import {
   formatUsage,
-  formatError,
   reportError,
   formatJson,
   formatWarning,
@@ -291,6 +290,8 @@ export function registerChatCommand(program: Command): void {
         return;
       }
 
+      const format = detectOutputFormat(options.format);
+
       let responseFormat: ResponseFormat | undefined;
       try {
         responseFormat = resolveResponseFormat({
@@ -298,7 +299,7 @@ export function registerChatCommand(program: Command): void {
           jsonSchema: options.jsonSchema,
         });
       } catch (error) {
-        reportError(error, options.format === 'json' ? 'json' : undefined);
+        reportError(error, format);
         process.exit(1);
       }
 
@@ -306,9 +307,10 @@ export function registerChatCommand(program: Command): void {
       if (options.reasoningEffort) {
         const level = String(options.reasoningEffort).toLowerCase();
         if (!REASONING_EFFORTS.includes(level as ReasoningEffort)) {
-          console.error(formatError(
-            `Invalid --reasoning-effort "${options.reasoningEffort}". Use one of: ${REASONING_EFFORTS.join(', ')}`
-          ));
+          reportError(
+            `Invalid --reasoning-effort "${options.reasoningEffort}". Use one of: ${REASONING_EFFORTS.join(', ')}`,
+            format
+          );
           process.exit(1);
         }
         reasoningEffort = level as ReasoningEffort;
@@ -318,12 +320,12 @@ export function registerChatCommand(program: Command): void {
       try {
         toolNames = parseToolNames(options.tools);
       } catch (error) {
-        reportError(error, options.format === 'json' ? 'json' : undefined);
+        reportError(error, format);
         process.exit(1);
       }
 
       if (options.thinking === false && reasoningEffort && reasoningEffort !== 'none') {
-        console.error(formatError('Cannot combine --no-thinking with --reasoning-effort (except "none").'));
+        reportError('Cannot combine --no-thinking with --reasoning-effort (except "none").', format);
         process.exit(1);
       }
 
@@ -331,9 +333,10 @@ export function registerChatCommand(program: Command): void {
       if (options.promptCacheRetention) {
         const retention = String(options.promptCacheRetention).toLowerCase();
         if (!PROMPT_CACHE_RETENTIONS.includes(retention as PromptCacheRetention)) {
-          console.error(formatError(
-            `Invalid --prompt-cache-retention "${options.promptCacheRetention}". Use one of: ${PROMPT_CACHE_RETENTIONS.join(', ')}`
-          ));
+          reportError(
+            `Invalid --prompt-cache-retention "${options.promptCacheRetention}". Use one of: ${PROMPT_CACHE_RETENTIONS.join(', ')}`,
+            format
+          );
           process.exit(1);
         }
         promptCacheRetention = retention as PromptCacheRetention;
@@ -343,7 +346,7 @@ export function registerChatCommand(program: Command): void {
       try {
         sampling = parseChatSamplingOptions(options);
       } catch (error) {
-        reportError(error, options.format === 'json' ? 'json' : undefined);
+        reportError(error, format);
         process.exit(1);
       }
 
@@ -354,15 +357,16 @@ export function registerChatCommand(program: Command): void {
       try {
         assertLocalAttachmentFiles(attachments);
       } catch (error) {
-        reportError(error, options.format === 'json' ? 'json' : undefined);
+        reportError(error, format);
         process.exit(1);
       }
       const promptUnavailable = options.interactiveTools ? promptUnavailableReason() : undefined;
       if (promptUnavailable) {
-        console.error(formatError(
+        reportError(
           `--interactive-tools asks for approval on the terminal, but ${promptUnavailable}. ` +
-          'Run the command in a terminal, or omit --interactive-tools.'
-        ));
+          'Run the command in a terminal, or omit --interactive-tools.',
+          format
+        );
         process.exit(1);
       }
       let pipedInput = '';
@@ -371,19 +375,18 @@ export function registerChatCommand(program: Command): void {
         try {
           pipedInput = await readStdin();
         } catch (error) {
-          reportError(error, options.format === 'json' ? 'json' : undefined);
+          reportError(error, format);
           process.exit(1);
         }
       }
 
       const userMessage = buildChatUserMessage(prompt, pipedInput);
       if (!userMessage && !hasChatAttachments(attachments)) {
-        console.error(formatError('No prompt provided. Usage: venice chat "Your message"'));
+        reportError('No prompt provided. Usage: venice chat "Your message"', format);
         process.exit(1);
       }
 
       const model = options.model || getDefaultModel();
-      const format = detectOutputFormat(options.format);
       const quietStatus = options.quiet || Boolean(responseFormat) || format === 'json';
 
       if (
@@ -393,10 +396,11 @@ export function registerChatCommand(program: Command): void {
           (options.e2ee !== false && modelIdImpliesPrivateMode(model))
         )
       ) {
-        console.error(formatError(
+        reportError(
           'Multimodal attachments are not supported with E2EE or TEE. ' +
-          'No attachment data was read or sent.'
-        ));
+          'No attachment data was read or sent.',
+          format
+        );
         process.exit(1);
       }
 
@@ -423,7 +427,7 @@ export function registerChatCommand(program: Command): void {
       });
 
       if (privacyDecision.error) {
-        console.error(formatError(privacyDecision.error));
+        reportError(privacyDecision.error, format);
         process.exit(1);
       }
       if (privacyDecision.notice) {
@@ -442,7 +446,7 @@ export function registerChatCommand(program: Command): void {
         xSearchRequested: options.xSearch === true,
       });
       if (capabilityError) {
-        console.error(formatError(capabilityError));
+        reportError(capabilityError, format);
         process.exit(1);
       }
 
@@ -471,7 +475,7 @@ export function registerChatCommand(program: Command): void {
           catalogAvailable: catalog.length > 0,
         });
         if (continueError) {
-          console.error(formatError(continueError));
+          reportError(continueError, format);
           process.exit(1);
         }
       }
@@ -484,10 +488,11 @@ export function registerChatCommand(program: Command): void {
         : restoreCharacterSlug(lastConv);
       const continuedCharacter = useE2EE ? undefined : historyCharacter;
       if (options.character && useE2EE) {
-        console.error(formatError(
+        reportError(
           'Characters are applied server-side and cannot be used with E2EE. ' +
-          'Omit -c/--character or use --no-e2ee.'
-        ));
+          'Omit -c/--character or use --no-e2ee.',
+          format
+        );
         process.exit(1);
       }
       if (useE2EE && historyCharacter && !options.character && format === 'pretty' && !options.quiet) {
@@ -508,14 +513,15 @@ export function registerChatCommand(program: Command): void {
       }
 
       if (useE2EE && responseFormat) {
-        console.error(formatError('Structured output (--json / --json-schema) is not supported with E2EE. E2EE requires streaming.'));
+        reportError('Structured output (--json / --json-schema) is not supported with E2EE. E2EE requires streaming.', format);
         process.exit(1);
       }
       if (useE2EE && options.stream === false) {
-        console.error(formatError(
+        reportError(
           '--no-stream is not supported with E2EE: responses can only be decrypted while streaming. ' +
-          'Remove --no-stream, or use --no-e2ee.'
-        ));
+          'Remove --no-stream, or use --no-e2ee.',
+          format
+        );
         process.exit(1);
       }
       if (
@@ -526,16 +532,18 @@ export function registerChatCommand(program: Command): void {
           reasoningEffort !== undefined
         )
       ) {
-        console.error(formatError(
-          'Prompt caching (--prompt-cache-key / --prompt-cache-retention) and --reasoning-effort are not supported with E2EE.'
-        ));
+        reportError(
+          'Prompt caching (--prompt-cache-key / --prompt-cache-retention) and --reasoning-effort are not supported with E2EE.',
+          format
+        );
         process.exit(1);
       }
       if (useE2EE && sampling.stop) {
-        console.error(formatError(
+        reportError(
           '--stop is not supported with E2EE: stop sequences would be sent unencrypted. ' +
-          'Remove --stop, or use --no-e2ee.'
-        ));
+          'Remove --stop, or use --no-e2ee.',
+          format
+        );
         process.exit(1);
       }
 
