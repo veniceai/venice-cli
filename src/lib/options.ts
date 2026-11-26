@@ -1,5 +1,5 @@
 /**
- * Strict parsers for numeric command-line options. Values must be plain
+ * Strict checks for command-line options. Numeric values must be plain
  * decimal numbers: no hex, exponents, padding, blanks or trailing text.
  */
 
@@ -49,6 +49,16 @@ export function parseDecimalOption(
     throw invalidOption(option, value, 'a number', range);
   }
   return parsed;
+}
+
+/**
+ * Whether the YYYY-MM-DD at the start of value is a real day. Date.parse rolls
+ * impossible days such as Feb 30 into the next month, so it cannot tell.
+ */
+export function isCalendarDate(value: string): boolean {
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function isInRange(value: number, range: NumberOptionRange): boolean {
