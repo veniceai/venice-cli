@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -35,12 +35,13 @@ export type FakeApi = (request: RecordedRequest) => unknown;
 
 /**
  * Runs the built CLI with its API base URL pointed at a local server whose
- * paths are relative to /api/v1. Unanswered requests get a 404.
+ * paths are relative to /api/v1. Unanswered requests get a 404. `config` is
+ * written to ~/.venice/config.json first.
  */
 export async function runCli(
   args: string[],
   api: FakeApi,
-  options: { stdin?: string; cwd?: string } = {}
+  options: { stdin?: string; cwd?: string; config?: Record<string, unknown> } = {}
 ): Promise<CliRun> {
   const requests: RecordedRequest[] = [];
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -67,6 +68,10 @@ export async function runCli(
   const homeDir = mkdtempSync(join(tmpdir(), 'venice-cli-run-'));
 
   try {
+    if (options.config) {
+      mkdirSync(join(homeDir, '.venice'), { mode: 0o700 });
+      writeFileSync(join(homeDir, '.venice', 'config.json'), JSON.stringify(options.config), { mode: 0o600 });
+    }
     const result = await new Promise<Omit<CliRun, 'requests'>>((resolve, reject) => {
       const child = spawn(process.execPath, [cliPath, ...args], {
         cwd: options.cwd ?? homeDir,

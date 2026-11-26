@@ -30,7 +30,7 @@ import { registerBillingCommand } from './commands/billing.js';
 import { registerKeysCommand } from './commands/keys.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerAugmentCommands } from './commands/augment.js';
-import { formatError, formatJson, formatWarning, getChalk, reportError } from './lib/output.js';
+import { chosenOutputFormat, formatError, formatJson, formatWarning, getChalk, reportError } from './lib/output.js';
 import { undeliveredWarnings } from './lib/warnings.js';
 import { runInterruptCleanups } from './lib/interrupt.js';
 import { getVersion, parseSkillName } from './lib/version.js';
@@ -70,7 +70,7 @@ async function main() {
       const pending = undeliveredWarnings();
       if (pending.length === 0) return;
       const options = actionCommand.opts();
-      if (options.format === 'json' || options.json === true) {
+      if (options.format === 'json' || options.json === true || chosenOutputFormat() === 'json') {
         console.error(formatJson({ warnings: pending }, 0));
       } else {
         for (const warning of pending) console.error(formatWarning(warning.message));
@@ -124,14 +124,14 @@ async function main() {
     }
 
     // Log other errors
-    reportError(error, errorFormat);
+    reportError(error, errorFormat ?? chosenOutputFormat());
     process.exit(1);
   }
 }
 
 // Handle unhandled rejections
 process.on('unhandledRejection', (reason: unknown) => {
-  reportError(reason, errorFormat);
+  reportError(reason, errorFormat ?? chosenOutputFormat());
   process.exit(1);
 });
 

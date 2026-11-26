@@ -58,7 +58,7 @@ export function registerConfigCommand(program: Command): void {
   config
     .command('show')
     .description('Show current configuration')
-    .option('--format <format>', 'Output format (pretty|json)', 'pretty')
+    .option('--format <format>', 'Output format (pretty|json)')
     .action((options) => {
       const format = detectOutputFormat(options.format);
       const cfg = loadConfig();

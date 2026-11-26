@@ -34,8 +34,9 @@ export function registerBillingCommand(program: Command): void {
     .description('Show current Venice account balances')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options) => {
+      const format = detectOutputFormat(options.format);
       const balance = await getBillingBalance();
-      if (detectOutputFormat(options.format) === 'json') {
+      if (format === 'json') {
         console.log(formatJson(balance));
         return;
       }
@@ -97,9 +98,10 @@ export function registerBillingCommand(program: Command): void {
     .option('--end <date>', 'Last day, YYYY-MM-DD (with --start, instead of --lookback)')
     .option('-f, --format <format>', 'Output format (pretty|json)')
     .action(async (options, command: Command) => {
+      const format = detectOutputFormat(options.format);
       const query = parseAnalyticsQuery(options, command.getOptionValueSource('lookback') === 'cli');
       const analytics = await getBillingAnalytics(query);
-      console.log(formatOutput(analytics, detectOutputFormat(options.format)));
+      console.log(formatOutput(analytics, format));
     });
 }
 

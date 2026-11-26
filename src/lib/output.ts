@@ -5,9 +5,9 @@
 import { fstatSync } from 'fs';
 import chalk from 'chalk';
 import ora, { Ora } from 'ora';
-import { isColorEnabled, shouldShowUsage } from './config.js';
+import { getOutputFormat, isColorEnabled, shouldShowUsage } from './config.js';
 import { openOutputFile, writeAndCommit } from './safe-write.js';
-import type { OutputFormat } from '../types/index.js';
+import { OUTPUT_FORMATS, type OutputFormat } from '../types/index.js';
 
 // Conditional chalk - returns identity functions when color is disabled
 function createChalk() {
@@ -471,13 +471,21 @@ export function isPiped(): boolean {
   return !process.stdout.isTTY;
 }
 
+let chosenFormat: OutputFormat | undefined;
+
+/**
+ * The format the command's detectOutputFormat call chose, so errors and warnings
+ * printed outside the command follow output_format from the config too.
+ */
+export function chosenOutputFormat(): OutputFormat | undefined {
+  return chosenFormat;
+}
+
 // Detect best output format based on context
 export function detectOutputFormat(explicit?: OutputFormat): OutputFormat {
-  const formats: OutputFormat[] = ['pretty', 'json', 'markdown', 'raw'];
-  if (explicit !== undefined && !formats.includes(explicit)) {
-    throw new Error(`Invalid --format "${explicit}". Use one of: ${formats.join(', ')}`);
+  if (explicit !== undefined && !OUTPUT_FORMATS.includes(explicit)) {
+    throw new Error(`Invalid --format "${explicit}". Use one of: ${OUTPUT_FORMATS.join(', ')}`);
   }
-  if (explicit) return explicit;
-  if (isPiped()) return 'raw';
-  return 'pretty';
+  chosenFormat = explicit || getOutputFormat() || (isPiped() ? 'raw' : 'pretty');
+  return chosenFormat;
 }

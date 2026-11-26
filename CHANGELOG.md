@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `config get` and `config unset` reject unknown keys, like `config set`, so a typo such as `config unset api_ke` no longer reports a removal while `api_key` stays in the file. `config unset` also says when a key was not set.
 - Image outputs up to 80 MB are kept, so a large 4096x4096 PNG is no longer discarded after a paid request, and default file names use the format Venice returned.
 - `venice video transcribe` no longer calls a retired endpoint: it sends the video to the audio transcription endpoint.
+- `output_format` in the config sets the output format when `-f` is not given, including for piped output, instead of being saved and ignored. `config set output_format` accepts only `pretty`, `json`, `markdown` or `raw`.
 - Paid requests are no longer re-sent after ambiguous failures, API responses are read within size and time limits, and redirects from the API are refused.
 - Video and music jobs exit non-zero when they fail or are not ready, reject responses of the wrong shape, and save video only with a valid MP4 header.
 - Chat streams follow the SSE spec and fail on errors, truncation and stalls; E2EE output stops at the first bad chunk and requires a finish reason.
