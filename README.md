@@ -1001,7 +1001,7 @@ With `-f json`, or with `output_format` set to `json`, stdout carries only resul
 
 When output is piped or redirected and no `--format` is given, the CLI turns off colors and spinners and selects `raw`. Commands that print a single result, such as `chat`, `search`, `transcribe`, and `parse`, then print only that result; most other commands print the same text as `pretty`. Use `-f json` when a script needs to parse the output.
 
-To change the default, set `output_format`, for example `venice config set output_format json`. It applies whenever `--format` is not given, on a terminal or in a pipe, and an explicit `--format` still wins.
+To change the default, set `output_format`, for example `venice config set output_format json`. Commands with an output `--format` use it whenever that option is not given, on a terminal or in a pipe, and an explicit `--format` still wins. `tts`, whose `--format` is the audio format, prints JSON only with `--json`.
 
 ```bash
 # Explicit format

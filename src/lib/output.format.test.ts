@@ -89,9 +89,7 @@ test('commands exit 1 on an unknown --format instead of printing pretty output',
       assert.equal(result.status, 1, `${args.join(' ')}: ${result.stdout}`);
       assert.match(result.stderr, INVALID_FORMAT, args.join(' '));
       assert.equal(result.stdout, '', args.join(' '));
-      if (args[0] !== 'billing') {
-        assert.deepEqual(result.requests, [], args.join(' '));
-      }
+      assert.deepEqual(result.requests, [], args.join(' '));
     } finally {
       rmSync(result.homeDir, { recursive: true, force: true });
     }

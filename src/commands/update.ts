@@ -41,8 +41,9 @@ export function registerUpdateCommand(program: Command): void {
         return;
       }
 
+      const format = detectOutputFormat(options.format);
       const result = await checkForUpdate();
-      if (detectOutputFormat(options.format) === 'json') {
+      if (format === 'json') {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
