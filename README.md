@@ -384,7 +384,7 @@ venice image-edit portrait.jpg "Turn this into an illustration" \
 venice image-edit photo.jpg "Make it golden hour" \
   --resolution 2K --image-format jpeg -o golden.jpg
 
-# Edit with up to three layered images
+# Edit with layered images; the first is the base image
 venice image-multi-edit base.jpg overlay.png \
   --prompt "Blend the overlay into the scene" -o composited.png
 
@@ -399,6 +399,11 @@ venice image-bg-remove product.jpg -o cutout.png
 venice image-styles
 venice image-styles --format json
 ```
+
+`image-multi-edit` takes up to 16 images. Each model sets its own limit, which
+`venice models show <model>` lists as `maxInputImages`; without one, the limit
+is 3 (1 when `combineImages` is `no`). Some models charge for each input image
+beyond those their base price includes, listed as `inputImages` under Pricing.
 
 Image sizing is model-specific. Use `--width` and `--height` together for
 pixel-based models, `--aspect-ratio` for ratio-based models, and add

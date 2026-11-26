@@ -150,11 +150,37 @@ test('image edit APIs send resolution, quality and output format when set', asyn
   }
 });
 
-test('multi-edit rejects more than three images before requesting', async () => {
-  await assert.rejects(
-    multiEditImage(['one', 'two', 'three', 'four'], 'Prompt'),
-    /between 1 and 3 images/
-  );
+test('multi-edit sends up to 16 images and rejects more before requesting', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'venice-multi-edit-limit-test-'));
+  const imagePaths = Array.from({ length: 17 }, (_, index) => {
+    const imagePath = join(tempDir, `layer-${index}.png`);
+    writeFileSync(imagePath, `layer ${index}`);
+    return imagePath;
+  });
+
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.VENICE_API_KEY;
+  const sentImageCounts: number[] = [];
+  process.env.VENICE_API_KEY = 'test-key';
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    sentImageCounts.push((JSON.parse(String(init?.body)) as { images: unknown[] }).images.length);
+    return new Response(PNG_BYTES, { headers: { 'Content-Type': 'image/png' } });
+  };
+
+  try {
+    await multiEditImage(imagePaths.slice(0, 16), 'Combine');
+    await assert.rejects(multiEditImage(imagePaths, 'Combine'), /between 1 and 16 images/);
+    await assert.rejects(multiEditImage([], 'Combine'), /between 1 and 16 images/);
+    assert.deepEqual(sentImageCounts, [16]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.VENICE_API_KEY;
+    } else {
+      process.env.VENICE_API_KEY = originalApiKey;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 const binaryImageOptions = {
