@@ -29,7 +29,6 @@ import type {
 } from '../types/index.js';
 import {
   formatSuccess,
-  formatError,
   reportError,
   formatJson,
   getChalk,
@@ -468,7 +467,7 @@ export function registerImageCommand(program: Command): void {
       const resolvedPath = path.resolve(imagePath);
       
       if (!fs.existsSync(resolvedPath)) {
-        console.error(formatError(`File not found: ${imagePath}`));
+        reportError(`File not found: ${imagePath}`, format);
         process.exit(1);
       }
 

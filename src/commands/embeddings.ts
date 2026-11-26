@@ -8,7 +8,6 @@ import { generateEmbeddings } from '../lib/api.js';
 import { writeOutputFile } from '../lib/safe-write.js';
 import {
   formatSuccess,
-  formatError,
   reportError,
   formatJson,
   getChalk,
@@ -31,7 +30,7 @@ export function registerEmbeddingsCommand(program: Command): void {
       const c = getChalk();
       const encodingFormat = options.encodingFormat as 'float' | 'base64' | undefined;
       if (encodingFormat !== undefined && encodingFormat !== 'float' && encodingFormat !== 'base64') {
-        console.error(formatError('--encoding-format must be float or base64'));
+        reportError('--encoding-format must be float or base64', format);
         process.exit(1);
       }
 
@@ -40,7 +39,7 @@ export function registerEmbeddingsCommand(program: Command): void {
       // Read from file if specified
       if (options.file) {
         if (!fs.existsSync(options.file)) {
-          console.error(formatError(`File not found: ${options.file}`));
+          reportError(`File not found: ${options.file}`, format);
           process.exit(1);
         }
         input = fs.readFileSync(options.file, 'utf-8').trim();
@@ -52,7 +51,7 @@ export function registerEmbeddingsCommand(program: Command): void {
       }
 
       if (!input) {
-        console.error(formatError('No text provided. Usage: venice embeddings "Your text"'));
+        reportError('No text provided. Usage: venice embeddings "Your text"', format);
         process.exit(1);
       }
 
